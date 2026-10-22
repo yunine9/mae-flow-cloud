@@ -10,13 +10,21 @@ import kernelFlow from "../../kernel/flow/flow.json";
 
 const errors: string[] = [];
 const realRequests: string[] = [];
+const diagramRequests: string[] = [];
+const nativeFetch = window.fetch.bind(window);
+const diagramSource = '@startuml\ntitle 订单取消前后对比\nparticipant "订单服务" as Order\nparticipant "库存服务" as Stock\nOrder -> Stock: 释放库存（新增）\nStock --> Order: 幂等结果\n@enduml';
 const sourceReads: Array<{ path: string; method: string }> = [];
 const localWrites: Array<{ path: string; method: string; body: string }> = [];
 window.addEventListener("error", event => errors.push(event.message));
 window.addEventListener("unhandledrejection", event => errors.push(String(event.reason)));
-// Any accidental fallback to the original browser transport is a test failure.
+// Only the pure PlantUML renderer may reach the original transport; every task/API fallback remains a test failure.
 window.fetch = async (input, init) => {
   const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+  const url = new URL(input instanceof Request ? input.url : String(input), location.href);
+  if (method === "POST" && url.origin === location.origin && url.pathname === "/diagrams/plantuml") {
+    diagramRequests.push(url.pathname);
+    return nativeFetch(input, init);
+  }
   realRequests.push(`${method} ${String(input)}`);
   throw new Error("The demo reached the original network transport");
 };
@@ -27,6 +35,9 @@ const stepTitles = Object.fromEntries(Object.entries(kernelFlow.steps).map(([id,
 for (const snapshot of [preview.snapshot, ...(preview.relatedSnapshots ?? [])]) {
   snapshot.step_titles = { ...stepTitles };
   snapshot.card_contexts = {};
+  // 通用测试材料在交付报告之前，演示不能因“报告”二字而选错前后对比来源。
+  snapshot.artifacts.unshift({ name: "task-materials/单元测试报告.md", label: "单元测试报告.md",
+    kind: "doc", bytes: 128, modified_at: snapshot.captured_at });
   const mainAnalysis = !snapshot.task.parent_task_id && Boolean(snapshot.task.requirement_graph);
   snapshot.conversation.items.forEach((item, index) => {
     if (item.kind !== "card") return;
@@ -48,12 +59,32 @@ for (const snapshot of [preview.snapshot, ...(preview.relatedSnapshots ?? [])]) 
       ? "" : stepTitles[snapshot.task.waiting.step] ?? snapshot.task.waiting.step;
   }
 }
+// 编码没有独立确认卡时，直接定位原任务最终代码检视，不补造编码卡。
+const codingFixture = preview.relatedSnapshots![0];
+const codingIndex = preview.snapshot.task.progress!.phases.indexOf("写代码");
+const reviewIndex = preview.snapshot.task.progress!.phases.indexOf("检视与验证");
+codingFixture.conversation.items = codingFixture.conversation.items.filter(item => item.id !== `example-card-${codingIndex}`);
+const finalReviewCard = codingFixture.conversation.items.find(item => item.id === `example-card-${reviewIndex}`);
+if (finalReviewCard?.kind === "card") finalReviewCard.step = "cloud_push_confirm";
+// 主任务尚未生成交付报告；不能根据状态或“测试报告”名称展示空的前后对比入口。
+const parentReportIndex = preview.snapshot.artifacts.findIndex(item => item.name === "task-materials/交付报告.md");
+if (parentReportIndex >= 0) preview.snapshot.artifacts.splice(parentReportIndex, 1);
 const sourceBefore = JSON.stringify(preview.snapshot);
 const sourceReader = preview.fetchRead;
 preview.fetchRead = async (input, init) => {
   const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
+  const url = new URL(input instanceof Request ? input.url : String(input), location.href);
   sourceReads.push({ path: input instanceof Request ? input.url : String(input), method });
-  return sourceReader(input, init);
+  if (decodeURIComponent(url.pathname).endsWith("/artifacts/task-materials/单元测试报告.md")) {
+    return Response.json({ kind: "doc", content: "# 单元测试报告\n\n这份材料只有测试明细，不是本次交付的改动前后对比。" });
+  }
+  const response = await sourceReader(input, init);
+  if (decodeURIComponent(url.pathname).endsWith("/artifacts/task-materials/交付报告.md")) {
+    const body = await response.json();
+    return Response.json({ ...body, content: body.content.replace("## 改动点 4+1",
+      `## 改动点 4+1\n\n\`\`\`plantuml\n${diagramSource}\n\`\`\`\n`) });
+  }
+  return response;
 };
 const root = createRoot(document.getElementById("app")!);
 const pause = (ms = 35) => new Promise(resolve => setTimeout(resolve, ms));
@@ -307,6 +338,11 @@ async function run() {
   }
   await until(() => (document.querySelector('[aria-label="选择本阶段展示回复"]') as HTMLSelectElement | null)?.value === "example-turn-decomposition",
     "main task clarification did not select its decomposition confirmation reply");
+  await selectPhase("检视与验证", true);
+  check(!workspaceTab("前后对比") && !document.querySelector(".task-demo-report-highlight"),
+    "a task without the actual delivery report exposed a comparison report entry");
+  await selectPhase("澄清需求", true);
+  await until(() => document.querySelector('[aria-label="需求拆分关系"]'), "missing-report check did not restore parent decomposition");
   const splitCard = preview.snapshot.conversation.items.find(item => item.id === "example-card-decomposition");
   check(splitCard?.kind === "card" && splitCard.step === "", "main-task fixture did not exercise an empty historical step");
   // Fault injection stays inside the test fixture. A failed associated-task load
@@ -316,7 +352,7 @@ async function run() {
   const validSchema = liveChildSnapshot!.schema;
   try {
     liveChildSnapshot!.schema = "invalid-test-snapshot" as TaskDemoSnapshot["schema"];
-    await click("查看子任务", decomposition);
+    await click("查看子任务", document.querySelector<HTMLElement>('[aria-label="需求拆分关系"]')!);
     await until(() => button("重试"), "failed child navigation did not provide a retry action");
     check(document.querySelector("#task-workspace-title")?.textContent?.includes(preview.snapshot.task.title!)
       && document.querySelector('[aria-label="需求拆分关系"]'), "failed navigation removed the current parent task");
@@ -328,10 +364,11 @@ async function run() {
   for (const phase of phases) {
     await selectPhase(phase);
     checkStageDirectory();
-    const originalCard = childSnapshot.conversation.items.find(item => item.kind === "card" && item.id === `example-card-${phases.indexOf(phase)}`);
+    const expectedRoundIndex = phase === "写代码" ? reviewIndex : phases.indexOf(phase);
+    const originalCard = childSnapshot.conversation.items.find(item => item.kind === "card" && item.id === `example-card-${expectedRoundIndex}`);
     check(originalCard?.kind === "card", `${phase} fixture has no original confirmation card`);
     if (originalCard?.kind === "card") {
-      check(Object.values(stepTitles).includes(originalCard.step), `${phase} fixture retained an internal step ID`);
+      check(Object.values(stepTitles).includes(originalCard.step) || originalCard.step === "cloud_push_confirm", `${phase} fixture retained an internal step ID`);
       const expected = childSnapshot.card_contexts?.[originalCard.waiting_id];
       await until(() => document.querySelector(".decision-card .waiting-context")?.textContent?.includes(expected!.context!),
         `${phase} did not restore the real card context from its Chinese step title`);
@@ -339,7 +376,7 @@ async function run() {
         `${phase} replaced the real confirmation question`);
       check(document.querySelector(".decision-card .waiting-context")?.textContent?.includes(expected!.preface!),
         `${phase} dropped the Agent original explanation`);
-      await assertFocusedRound(originalCard.id, `example-turn-${phases.indexOf(phase)}`, phase);
+      await assertFocusedRound(originalCard.id, `example-turn-${expectedRoundIndex}`, phase);
       const stream = document.querySelector<HTMLElement>(".ws-stream")!;
       check(stream.scrollHeight > stream.clientHeight * 4, `${phase}: fixture did not cover long history`);
       // 模拟演示者翻看后续记录，再点击当前阶段也应回到原确认轮次。
@@ -347,12 +384,12 @@ async function run() {
       stream.scrollTop = stream.scrollHeight;
       await pause();
       await selectPhase(phase);
-      await assertFocusedRound(originalCard.id, `example-turn-${phases.indexOf(phase)}`, `${phase} repeated selection`);
+      await assertFocusedRound(originalCard.id, `example-turn-${expectedRoundIndex}`, `${phase} repeated selection`);
       if (phase === "写设计") {
         await click("需要我的");
         await selectPhase(phase);
-        await assertFocusedRound(originalCard.id, `example-turn-${phases.indexOf(phase)}`, `${phase} after filter`);
-        const reply = document.getElementById(`conv-example-turn-${phases.indexOf(phase)}`)!;
+        await assertFocusedRound(originalCard.id, `example-turn-${expectedRoundIndex}`, `${phase} after filter`);
+        const reply = document.getElementById(`conv-example-turn-${expectedRoundIndex}`)!;
         const earlier = reply.previousElementSibling as HTMLElement;
         const previousHeight = earlier.style.minHeight;
         earlier.style.minHeight = "240px";
@@ -407,16 +444,49 @@ async function run() {
       check(button("架构图")?.classList.contains("task-demo-artifact"), "design did not highlight its architecture diagram entry");
     }
     if (phase === "检视与验证") {
+      check(!workspaceTab("前后对比"), "review added a duplicate comparison tab");
+      check(workspaceTab("文档")?.getAttribute("aria-selected") === "true", "review did not retain the existing document tab");
       const report = [...document.querySelectorAll<HTMLButtonElement>(".ws-document-tabs .task-demo-artifact")]
         .find(element => /交付报告/.test(element.textContent ?? ""));
-      check(report, "review did not highlight its delivery report");
+      check(report?.classList.contains("on"), "review did not automatically open the actual delivery report");
+      await until(() => document.querySelector('.ws-doc.task-demo-report-highlight[data-artifact="task-materials/交付报告.md"]')?.textContent?.includes("改动前")
+        && document.querySelector(".ws-doc.task-demo-report-highlight")?.textContent?.includes("改动后"),
+      "review did not automatically frame its real before-and-after report");
+      const reportBody = document.querySelector<HTMLElement>(".ws-doc.task-demo-report-highlight")!;
+      await until(() => {
+        const image = reportBody.querySelector<HTMLImageElement>('.plantuml-viewport img[alt="PlantUML 图"]');
+        return image?.complete && image.naturalWidth > 0 && image.naturalHeight > 0;
+      }, "demo transport prevented the actual PlantUML component from rendering its report diagram");
+      check(!reportBody.querySelector(".plantuml-unsupported") && !reportBody.querySelector(".plantuml-figure.syntax-error"),
+        "report diagram fell back to source or an error instead of the rendered graph");
+      check(!reportBody.querySelector<HTMLDetailsElement>(".plantuml-source")?.open, "report diagram only displayed PlantUML source");
+      check(diagramRequests.length === 1, "PlantUML rendering did not pass through the allowed original transport");
+      await pause(200);
+      const diagram = reportBody.querySelector<HTMLElement>(".plantuml-figure")!;
+      await click("查看大图 ⛶", diagram);
+      try { await until(() => diagram.classList.contains("is-presenting") && diagram.getBoundingClientRect().width >= window.innerWidth - 2,
+        "demo report PlantUML diagram could not open in its full-screen viewer");
+      } catch (error) { throw new Error(`${String(error)} ${JSON.stringify({ connected: diagram.isConnected, className: diagram.className, rect: diagram.getBoundingClientRect().toJSON(), currentClass: reportBody.querySelector(".plantuml-figure")?.className })}`); }
+      await click("退出全屏", diagram);
+      await until(() => !diagram.classList.contains("is-presenting"), "demo report diagram could not return to the document");
+      check(getComputedStyle(reportBody).outlineWidth === "3px", "comparison report body has no visible highlight frame");
+      check(parseFloat(getComputedStyle(reportBody).paddingLeft) >= 12, "comparison frame overlaps report text");
+      check(![...document.querySelectorAll<HTMLElement>(".ws-document-tabs .task-demo-artifact")]
+        .some(element => element.textContent?.includes("单元测试报告")), "review highlighted a generic test report as the comparison report");
+      const otherDocument = [...document.querySelectorAll<HTMLButtonElement>(".ws-document-tabs .ws-tab")]
+        .find(element => element.textContent?.includes("单元测试报告"));
+      check(otherDocument, "existing document list has no other material");
+      otherDocument!.click();
+      await until(() => !document.querySelector(".task-demo-report-highlight"), "document list did not leave the comparison report");
       report!.click();
-      await until(() => document.querySelector(".ws-doc")?.textContent?.includes("改动前")
-        && document.querySelector(".ws-doc")?.textContent?.includes("改动后"),
-      "delivery report did not display its before-and-after comparison");
+      await until(() => document.querySelector('.ws-doc.task-demo-report-highlight[data-artifact="task-materials/交付报告.md"]')
+        && document.querySelector(".ws-doc")?.textContent?.includes("改动前"), "existing report file entry could not reopen the report");
+    } else {
+      check(!workspaceTab("前后对比") && !document.querySelector(".task-demo-report-highlight"),
+        `${phase} retained the review-only comparison highlight`);
     }
     check(!document.querySelector('[aria-label$="阶段执行方案"]'), "demo phase opened the production plan dialog");
-    await until(() => (document.querySelector('[aria-label="选择本阶段展示回复"]') as HTMLSelectElement | null)?.value === `example-turn-${phases.indexOf(phase)}`,
+    await until(() => (document.querySelector('[aria-label="选择本阶段展示回复"]') as HTMLSelectElement | null)?.value === `example-turn-${expectedRoundIndex}`,
       `${phase} did not select the matching example turn`);
   }
 
@@ -562,11 +632,11 @@ async function run() {
   await checkDeliveryKnowledgePanels(childSourceId!);
   await checkProductionDemoFrame(childSourceId!);
   check(errors.length === 0, errors.join("\n"));
-  return { passed: true, historicalCards: true, historicalRoundFocus: true, width: window.innerWidth, phases: phases.length, parentChildRoundTrip: true, navigationRetry: true, materialAlwaysVisible: true, directDocumentAnnotations: true, knowledgeAnalytics: true, productionFrame: true, localWrites: localWrites.length, memoryDecisions: memoryWrites.length, sourceWrites: 0, realRequests: 0 };
+  return { passed: true, historicalCards: true, historicalRoundFocus: true, comparisonReportFocus: true, codingUsesActualFinalReview: true, plantUmlRendered: true, diagramRequests: diagramRequests.length, width: window.innerWidth, phases: phases.length, parentChildRoundTrip: true, navigationRetry: true, materialAlwaysVisible: true, directDocumentAnnotations: true, knowledgeAnalytics: true, productionFrame: true, localWrites: localWrites.length, memoryDecisions: memoryWrites.length, sourceWrites: 0, realRequests: 0 };
 }
 
 run().then(result => { document.getElementById("result")!.textContent = JSON.stringify(result); })
-  .catch(error => { document.getElementById("result")!.textContent = JSON.stringify({ error: String(error), errors, localWrites, sourceReads,
+  .catch(error => { document.getElementById("result")!.textContent = JSON.stringify({ error: String(error), errors, localWrites, sourceReads, diagramRequests,
     material: [...document.querySelectorAll(".ws-doc")].map(element => ({ artifact: element.getAttribute("data-artifact"), loading: element.getAttribute("data-loading"), text: element.textContent?.slice(0, 1600) })),
     buttons: [...document.querySelectorAll("button")].filter(visible).map(element => element.textContent?.trim()).filter(Boolean),
   }); });

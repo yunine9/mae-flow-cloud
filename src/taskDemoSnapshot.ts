@@ -98,6 +98,34 @@ function readStepTitles(root: string | undefined): Record<string, string> | unde
   } catch { return undefined; }
 }
 
+/** 继续修改会归档旧确认记录；演示仍按原时间展示，当前记录优先。 */
+function readDemoWaiting(task: TaskSummary, problems: string[]): WaitingRecord[] {
+  const records = new Map<string, WaitingRecord>();
+  const workspace = realpathSync(task.workspace);
+  const read = (path: string, label: string) => {
+    if (!existsSync(path)) return;
+    try {
+      const source = realpathSync(path);
+      const pathInWorkspace = relative(workspace, source);
+      if (pathInWorkspace === ".." || pathInWorkspace.startsWith(`..${sep}`) || isAbsolute(pathInWorkspace)) {
+        throw new Error("确认记录不在任务目录中");
+      }
+      for (const record of new HumanGate(source).all()) {
+        if (record.task_id === task.id && record.waiting_id) records.set(record.waiting_id, record);
+      }
+    } catch { problems.push(`${label}暂时无法读取，原记录保持不变`); }
+  };
+  for (const archive of new Set((task.delivery_history ?? []).map(history => history.archive))) {
+    if (typeof archive !== "string" || !/^[a-zA-Z0-9-]+$/.test(archive)) {
+      problems.push("历史交付记录编号无效，未读取任务目录以外的确认记录");
+      continue;
+    }
+    read(join(task.workspace, "delivery-history", archive, "waiting.json"), "历史确认记录");
+  }
+  read(join(task.workspace, "waiting.json"), "当前确认记录");
+  return [...records.values()].sort((left, right) => left.created_at.localeCompare(right.created_at));
+}
+
 function readReviews(path: string, taskId: string, problems: string[]): ReviewRequest[] {
   if (!existsSync(path)) return [];
   const records = new Map<string, ReviewRequest>();
@@ -192,7 +220,7 @@ export async function readTaskDemoSnapshot(service: SnapshotSource, id: string):
     capture("Agent 会话", () => service.readDisplayEvents(id), [] as SemanticEvent[]),
     capture("批注", () => new AnnotationStore(join(task.workspace, "annotations.jsonl"), true).snapshot(),
       { items: [] as Annotation[], history: [] as AnnotationOperation[], skipped: 0 }),
-    capture("人工决定", () => new HumanGate(join(task.workspace, "waiting.json")).all(), [] as WaitingRecord[]),
+    capture("人工决定", () => readDemoWaiting(task, problems), [] as WaitingRecord[]),
     capture("检视反馈", () => new FeedbackStore(join(task.workspace, "feedback", "index.jsonl")).list(), [] as FeedbackRecord[]),
     capture("检视邀请", () => readReviews(join(service.options.dataDir, "reviews.jsonl"), id, problems), [] as ReviewRequest[]),
     capture("产出文档", () => listArtifactsAsync(service.artifactRoot(id), {

@@ -3,7 +3,7 @@ import type {
   BusinessModule, DeveloperAssistantView, EarlyStartPreview, MemoryRecord, MemoryUsageRow,
   PushReviewPresentation, ReviewRequest, TaskSummary,
 } from "./api";
-import { taskDemoPhaseSteps, type TaskDemoArchitectureFixture } from "./taskDemoTypes";
+import { taskDemoConversation, taskDemoPhaseCard, taskDemoPhaseSteps, type TaskDemoArchitectureFixture } from "./taskDemoTypes";
 
 export interface TaskDemoSandboxInput {
   task: TaskSummary;
@@ -19,7 +19,7 @@ export interface TaskDemoSandboxInput {
   memoryUsage?: MemoryUsageRow[];
   businessModules?: BusinessModule[];
   architecture?: TaskDemoArchitectureFixture;
-  /** The original, bound fetch. Only allowlisted source reads reach it. */
+  /** The original, bound fetch. Only allowlisted source reads and diagram rendering reach it. */
   fetchRead: typeof fetch;
 }
 
@@ -53,7 +53,7 @@ const error = (message: string, status = 400) => json({ error: message }, status
 const feedback = (text: string) => `演示反馈：${text}。仅更新当前演示副本，没有执行真实 Agent 或通知参与者。`;
 
 /**
- * Browser-only, disposable copy. It has no persistence and no write transport.
+ * Browser-only, disposable copy. It has no persistence or task-write transport.
  * An unsupported operation fails closed instead of returning a pretend success.
  */
 export function createTaskDemoSandbox(input: TaskDemoSandboxInput): TaskDemoSandbox {
@@ -61,7 +61,7 @@ export function createTaskDemoSandbox(input: TaskDemoSandboxInput): TaskDemoSand
   const original = copy(input.task);
   const sourceTaskId = original.id;
   const taskId = `demo-${sourceTaskId}-${Math.random().toString(36).slice(2, 9)}`;
-  const sourceConversation = copy(input.conversation ?? []);
+  const sourceConversation = taskDemoConversation(original, copy(input.conversation ?? []));
   const sourceAnnotations = copy(Array.isArray(input.annotations) ? input.annotations : input.annotations?.items ?? []);
   const sourceArtifacts = copy(input.artifacts ?? []);
   const sourceReviews = copy(input.reviews ?? []);
@@ -215,10 +215,9 @@ export function createTaskDemoSandbox(input: TaskDemoSandboxInput): TaskDemoSand
     const index = phases.indexOf(phase);
     if (index < 0) throw new Error("该阶段不在当前演示的进度条中。");
     const steps = taskDemoPhaseSteps(original, phase, phaseSteps, stepTitles);
-    const card = [...sourceConversation].reverse().find((row): row is Extract<ConversationItem, { kind: "card" }> =>
-      row.kind === "card" && steps.includes(row.step));
-    const sourceWaiting = (original.waiting?.step !== undefined ? steps.includes(original.waiting.step)
-      : original.progress?.current_phase === phase) ? original.waiting : undefined;
+    const card = taskDemoPhaseCard({ task: original, conversation: { items: sourceConversation },
+      phase_steps: phaseSteps, step_titles: stepTitles }, phase);
+    const sourceWaiting = card?.waiting_id === original.waiting?.waiting_id ? original.waiting : undefined;
     // 切换阶段撤下上一张互动副本，真实历史卡和实际回答保持原位。
     conversation = conversation.filter(row => !(row.kind === "card" && row.id.startsWith(`${taskId}-card-`)));
     const step = card?.step ?? sourceWaiting?.step ?? steps[0] ?? "demo_confirmation";
@@ -240,7 +239,7 @@ export function createTaskDemoSandbox(input: TaskDemoSandboxInput): TaskDemoSand
       return getTask();
     }
     const questions = copy(card?.questions ?? sourceWaiting?.question?.questions ?? []);
-    const originalContext = card ? cardContexts[card.waiting_id] : sourceWaiting;
+    const originalContext = (card ? cardContexts[card.waiting_id] : undefined) ?? sourceWaiting;
     task.waiting = { waiting_id: id("waiting"), state_version: sequence, step,
       created_at: card?.ts ?? sourceWaiting?.created_at,
       question: { questions, purpose: card?.purpose ?? sourceWaiting?.question?.purpose ?? "confirmation" },
@@ -315,6 +314,20 @@ export function createTaskDemoSandbox(input: TaskDemoSandboxInput): TaskDemoSand
     finally { reads.delete(controller); signal?.removeEventListener("abort", abort); readPending.delete(key); }
   }
 
+  async function renderDiagram(source: string, signal?: AbortSignal | null): Promise<Response> {
+    const controller = new AbortController(); reads.add(controller);
+    const abort = () => controller.abort();
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) controller.abort();
+    try {
+      const response = await input.fetchRead("/diagrams/plantuml", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ source }), signal: controller.signal, redirect: "error",
+      });
+      return disposed ? error("演示已退出。", 410) : response;
+    } finally { reads.delete(controller); signal?.removeEventListener("abort", abort); }
+  }
+
   async function sandboxFetch(request: Parameters<typeof fetch>[0], init?: RequestInit): Promise<Response> {
     if (disposed) return error("演示已退出，副本已清除。", 410);
     const method = (init?.method ?? (request instanceof Request ? request.method : "GET")).toUpperCase();
@@ -331,6 +344,11 @@ export function createTaskDemoSandbox(input: TaskDemoSandboxInput): TaskDemoSand
       let body: Record<string, unknown>;
       try { body = await bodyOf(request, init); }
       catch { return error("演示请求内容无效。"); }
+      // 出图接口只把文档中的源码转换为 SVG，不修改任务，也不启动 Agent。
+      if (url.pathname === "/diagrams/plantuml" && !url.search && method === "POST") {
+        if (typeof body.source !== "string" || !body.source.trim()) return error("缺少 PlantUML 源码。");
+        return renderDiagram(body.source, init?.signal ?? (request instanceof Request ? request.signal : undefined));
+      }
       const reviewMatch = /^\/reviews\/([^/]+)\/complete$/.exec(url.pathname);
       if (reviewMatch && method === "POST") {
         const review = reviews.find(row => row.id === decodeURIComponent(reviewMatch[1]));

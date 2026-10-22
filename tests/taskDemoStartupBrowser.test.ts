@@ -9,7 +9,7 @@ import { browserResultDump } from "./fixtures/browserResultDump.ts";
 
 const chrome = process.env.MFC_TEST_CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 
-test("正式演示入口读取历史后即打开；缺卡、阶段切换与主子任务导航不等待模型", {
+test("正式演示切换定位最新真实卡与同轮回复；当前卡、归档历史和会话边界不依赖模型", {
   skip: !existsSync(chrome) && "需要真实 Chrome；设置 MFC_TEST_CHROME 后运行",
 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "mfc-task-demo-startup-"));
@@ -30,7 +30,9 @@ test("正式演示入口读取历史后即打开；缺卡、阶段切换与主�
     const assetFiles = new Set(existsSync(assets) ? readdirSync(assets) : []);
     const css = [...assetFiles].filter(file => file.endsWith(".css"))
       .map(file => readFileSync(join(assets, file), "utf8")).join("\n");
-    const html = '<!doctype html><html data-theme="light"><meta charset="utf-8"><style>' + css
+    const layerOrder = readFileSync(resolve("web/src/tailwind.css"), "utf8").match(/^@layer [^;\n]+;/m)?.[0];
+    assert.ok(layerOrder, "production stylesheet has no declared layer order");
+    const html = '<!doctype html><html data-theme="light"><meta charset="utf-8"><style>' + layerOrder + css
       + readFileSync(resolve("web/src/TaskDemo.css"), "utf8")
       + '</style><style>#result{display:none}</style><div class="tw-root" id="app"></div><pre id="result"></pre><script>'
       + built.outputFiles[0].text.replaceAll("</script", "<\\/script") + "</script></html>";
@@ -60,10 +62,13 @@ test("正式演示入口读取历史后即打开；缺卡、阶段切换与主�
     assert.equal(result.formalEntry, true);
     assert.equal(result.phases, 7);
     assert.equal(result.parentChildRoundTrip, true);
-    assert.equal(result.missingCardMaterialVisible, true);
+    assert.equal(result.currentCardOverridesOlderHistory, true);
+    assert.equal(result.latestHistoricalRoundFocused, true);
+    assert.equal(result.currentCardWithoutHistoryFocused, true);
+    assert.equal(result.previousSessionReplyNotBorrowed, true);
     assert.equal(result.generationRequests, 0);
     assert.equal(result.sourceWrites, 0);
-    assert.equal(result.snapshotReads, 2);
+    assert.equal(result.snapshotReads, 4);
     assert.deepEqual(unexpectedRequests, []);
   } finally {
     if (server) { server.closeAllConnections(); await new Promise<void>(done => server!.close(() => done())); }

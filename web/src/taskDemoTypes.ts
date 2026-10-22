@@ -64,6 +64,8 @@ export function taskDemoPhaseSteps(task: TaskSummary, phase: string, phaseSteps?
   const steps = fixedSteps.length ? fixedSteps : phaseSteps?.[phase]
     ?? phaseCatalog.phases.find(row => row.name === phase)?.steps ?? [];
   const matches = new Set(steps.flatMap(step => [step, ...(stepTitles?.[step] ? [stepTitles[step]] : [])]));
+  // build 在 1293ac53 更名；历史确认卡仍保存原题名，仅用于演示读取。
+  if (steps.includes("build")) matches.add("编码实现");
   if (phase === phaseCatalog.placeholders.queued) matches.add("cloud_requirement_analysis_confirm");
   if (phaseCatalog.phases.find(row => row.steps.includes("push"))?.name === phase) {
     for (const step of ["host_push_confirm", "cloud_push_confirm", "cloud_mr_description"]) matches.add(step);
@@ -78,35 +80,65 @@ export function taskDemoPhaseSteps(task: TaskSummary, phase: string, phaseSteps?
   return [...matches];
 }
 
-export function taskDemoPhaseCard(snapshot: TaskDemoSnapshot, phase: string) {
+type DemoCard = Extract<ConversationItem, { kind: "card" }>;
+type DemoCardSource = Pick<TaskDemoSnapshot, "task" | "conversation" | "phase_steps" | "step_titles">;
+
+/** 当前等待记录可能比会话快照更新；把这张真实卡放回它原来的时间位置。 */
+export function taskDemoConversation(task: TaskSummary, source: ConversationItem[]): ConversationItem[] {
+  const items = [...source];
+  const waiting = task.waiting;
+  if (!waiting || items.some(item => item.kind === "card" && item.waiting_id === waiting.waiting_id)) return items;
+  const card: DemoCard = {
+    kind: "card", id: `card-${waiting.waiting_id}`, ts: waiting.created_at ?? "",
+    waiting_id: waiting.waiting_id, step: waiting.step ?? task.progress?.step_id ?? "",
+    purpose: waiting.question?.purpose ?? "confirmation",
+    annotation_ids: [...(waiting.question?.annotation_ids ?? [])],
+    questions: (waiting.question?.questions ?? []).map(question => ({
+      question: question.question, options: [...(question.options ?? [])],
+    })), status: "waiting",
+  };
+  const createdAt = Date.parse(card.ts);
+  const next = Number.isFinite(createdAt) ? items.findIndex(item => Date.parse(item.ts) > createdAt) : -1;
+  items.splice(next < 0 ? items.length : next, 0, card);
+  return items;
+}
+
+export function taskDemoPhaseCard(snapshot: DemoCardSource, phase: string): DemoCard | undefined {
   const steps = taskDemoPhaseSteps(snapshot.task, phase, snapshot.phase_steps, snapshot.step_titles);
-  return [...snapshot.conversation.items].reverse().find((item): item is Extract<ConversationItem, { kind: "card" }> =>
-    item.kind === "card" && steps.includes(item.step));
+  const waiting = snapshot.task.waiting;
+  const waitingMatches = waiting && (waiting.step !== undefined ? steps.includes(waiting.step)
+    : snapshot.task.progress?.current_phase === phase);
+  const history = taskDemoConversation(snapshot.task, snapshot.conversation.items).reverse();
+  const direct = history.find((item): item is DemoCard =>
+    item.kind === "card" && (item.waiting_id === waiting?.waiting_id ? waitingMatches === true : steps.includes(item.step)));
+  if (direct || phaseCatalog.phases.find(row => row.steps.includes("build"))?.name !== phase) return direct;
+  // 编码不要求单独举卡；演示代码成果时定位原任务的最终代码检视，保留卡片原阶段与原文。
+  const reviewSteps = ["delivery_review", "cloud_push_confirm"].flatMap(step =>
+    [step, ...(snapshot.step_titles?.[step] ? [snapshot.step_titles[step]] : [])]);
+  return history.find((item): item is DemoCard => item.kind === "card" && reviewSteps.includes(item.step));
 }
 
 export function hasTaskDemoPhaseCard(snapshot: TaskDemoSnapshot, phase: string): boolean {
-  if (taskDemoPhaseCard(snapshot, phase)) return true;
-  const waiting = snapshot.task.waiting;
-  return Boolean(waiting && (waiting.step !== undefined
-    ? taskDemoPhaseSteps(snapshot.task, phase, snapshot.phase_steps, snapshot.step_titles).includes(waiting.step)
-    : snapshot.task.progress?.current_phase === phase));
+  return !!taskDemoPhaseCard(snapshot, phase);
 }
 
 export function suggestedDemoMessage(snapshot: TaskDemoSnapshot, phase: string): string | undefined {
-  const steps = taskDemoPhaseSteps(snapshot.task, phase, snapshot.phase_steps, snapshot.step_titles);
-  if (!steps.length) return undefined;
-  const items = snapshot.conversation.items;
-  let card = -1;
-  for (let index = items.length - 1; index >= 0; index--) {
+  const card = taskDemoPhaseCard(snapshot, phase);
+  if (!card) return undefined;
+  if (snapshot.supplemental_cards?.[card.id]) return card.id;
+  const items = taskDemoConversation(snapshot.task, snapshot.conversation.items);
+  const cardIndex = items.findIndex(item => item.id === card.id);
+  const candidates: Array<Extract<ConversationItem, { kind: "turn" }>> = [];
+  for (let index = cardIndex - 1; index >= 0; index--) {
     const item = items[index];
-    if (item.kind === "card" && steps.includes(item.step)) { card = index; break; }
+    if (["card", "session", "decision", "steer", "delivery_reset"].includes(item.kind)) break;
+    if (item.kind === "turn" && item.texts.some(text => text.text.trim())) candidates.push(item);
   }
-  if (card < 0) return undefined;
-  if (snapshot.supplemental_cards?.[items[card].id]) return items[card].id;
-  for (let index = card - 1; index >= 0; index--) {
-    const item = items[index];
-    if (item.kind === "card") break;
-    if (item.kind === "turn" && item.texts.length) return item.id;
-  }
-  return items[card].id;
+  const context = snapshot.card_contexts?.[card.waiting_id]
+    ?? (snapshot.task.waiting?.waiting_id === card.waiting_id ? snapshot.task.waiting : undefined);
+  const normalize = (text: string) => text.trim().replace(/\s+/g, " ");
+  const originalTexts = [context?.preface, context?.context].filter((text): text is string => !!text?.trim()).map(normalize);
+  const match = originalTexts.map(original => candidates.find(item =>
+    item.texts.some(text => normalize(text.text).includes(original)))).find(Boolean);
+  return (match ?? candidates[0])?.id ?? card.id;
 }

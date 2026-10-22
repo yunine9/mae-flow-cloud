@@ -132,6 +132,7 @@ type WorkspaceView = "focus" | "materials" | "execution" | "knowledge";
 /** 右栏宽度:人拖过就记住(浏览器本地),没拖过走样式表的默认档。 */
 const SIDE_WIDTH_KEY = "mae-flow:ws-side-w";
 const SIDE_WIDTH_MIN = 360;
+const DEMO_DELIVERY_REPORT = "task-materials/交付报告.md";
 type MaterialView = "source" | "doc" | "chain" | "diff";
 
 const WORKSPACE_VIEW_SHORTCUTS: Partial<Record<string, WorkspaceView>> = {
@@ -640,6 +641,9 @@ export function TaskWorkspace({
     ? "需求拆分" : taskDemoPhaseTitle(phase);
   const demoContent = demo ? getTaskDemoGuideContent(demo.phase) : undefined;
   const demoCompleted = demo?.phase === "已合入";
+  const demoReviewReport = demo?.phase === "检视与验证"
+    ? items?.find(item => item.kind === "doc" && item.name === DEMO_DELIVERY_REPORT) : undefined;
+  const demoReportOpen = Boolean(demoReviewReport && materialView === "doc" && active === demoReviewReport.name);
   const deliveryAnalysisQuery = new URLSearchParams({ deliveryAnalysis: "1", deliveryTask: demo?.sourceTaskId ?? task.id });
   if (demo?.preview) {
     deliveryAnalysisQuery.set("taskDemoPreview", "1");
@@ -819,10 +823,12 @@ export function TaskWorkspace({
     setDemoMessages(current => { const next = { ...current }; delete next[demo.phase]; return next; });
   }, [demo?.phase, demo?.focusKey]);
   useEffect(() => {
-    if (!demo || !items || demoPhaseOpened.current === demo.phase) return;
-    demoPhaseOpened.current = demo.phase;
+    if (!demo || !items) return;
+    const selectionKey = `${demo.phase}:${demo.focusKey ?? 0}:${demoReviewReport?.name ?? ""}`;
+    if (demoPhaseOpened.current === selectionKey) return;
+    demoPhaseOpened.current = selectionKey;
     setStreamFilter("all"); setStreamThread(undefined);
-    const document = items.find(item => item.kind === "doc"
+    const document = demoReviewReport ?? items.find(item => item.kind === "doc"
       && demoContent?.artifactPatterns.some(pattern => pattern.test(item.name)));
     const code = demo.phase === "写代码" ? items.find(item => item.kind === "diff") : undefined;
     setWorkspaceView(demoCompleted && !document ? "knowledge" : "materials");
@@ -830,7 +836,7 @@ export function TaskWorkspace({
     setMaterialView(demoAnalysis ? "chain" : code ? "diff" : document ? "doc" : "source");
     const selected = code ?? document;
     if (selected) { activeRef.current = selected.name; setActive(selected.name); }
-  }, [demo?.phase, items, demoContent, demoAnalysis, demoCompleted]);
+  }, [demo?.phase, demo?.focusKey, items, demoContent, demoAnalysis, demoCompleted, demoReviewReport]);
   useEffect(() => {
     if (!demo) return;
     setNotesPulse(value => value + 1);
@@ -2292,7 +2298,7 @@ export function TaskWorkspace({
           {documentsDownloadError && <div className="utility-note" role="alert">
             打包下载失败：{documentsDownloadError}
           </div>}
-          <div className={`ws-doc${materialView === "diff" ? " is-diff" : materialView === "chain" ? " is-chain" : ""}`}
+          <div className={`ws-doc${materialView === "diff" ? " is-diff" : materialView === "chain" ? " is-chain" : ""}${demoReportOpen ? " task-demo-report-highlight" : ""}`}
             data-artifact={materialView === "source" ? TASK_REQUIREMENT_ARTIFACT
               : materialView === "chain" ? REQUIREMENT_GRAPH_ARTIFACT : active}
             data-loading={materialView !== "source" && loading ? "true" : "false"}>

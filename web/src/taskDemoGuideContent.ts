@@ -97,7 +97,7 @@ const guides: Readonly<Record<string, TaskDemoGuideContent>> = {
   检视与验证: {
     title: "检视与验证",
     ...reviewNarration,
-    artifactPatterns: [/(?:report|交付报告|前后对比|检视|测试|验证)[^/]*\.(?:md|html)$/i],
+    artifactPatterns: [/^task-materials\/交付报告\.md$/],
     caption: {
       document: "看关键改动、已有测试结果和仍需验证的内容。",
       message: "选一条实际检视意见或流水线反馈，说明后续处理。",

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { AddressInfo } from "node:net";
@@ -11,6 +11,7 @@ import { HumanGate } from "../src/humanGate.ts";
 import { PIPELINE_EVIDENCE_GAP_FILE } from "../src/artifacts.ts";
 import { createTaskServer } from "../src/server.ts";
 import { readTaskDemoSnapshot, type TaskDemoSnapshot } from "../src/taskDemoSnapshot.ts";
+import { archiveContinuationRuntime, snapshotContinuation } from "../src/taskContinuation.ts";
 import { TaskService } from "../src/taskService.ts";
 import type { MemoryRecord } from "../src/taskMemory.ts";
 
@@ -167,6 +168,59 @@ test("演示来源快照保留真实材料和会话，读取不修复、不推�
     assert.equal(fromPulse.task.progress?.step_id, sourcePhase.steps[0]);
     assert.deepEqual(contents(root), sourceBefore, "旧阶段也不能触发脉冲重写");
   }
+});
+
+test("继续修改后的演示恢复归档真实卡和上下文，当前记录优先且不读取越界历史", async t => {
+  const root = mkdtempSync(join(tmpdir(), "mfc-demo-archived-cards-"));
+  const service = new TaskService({ dataDir: join(root, "tasks"), provider: "fixture", model: "fixture", modelsJson: {}, maxConcurrent: 0 });
+  t.after(async () => { await service.shutdown(); rmSync(root, { recursive: true, force: true }); });
+  const task = service.create("演示已完成任务的原设计", { account: "owner", requirementAnalysisConfirmation: true });
+  const gate = new HumanGate(join(task.workspace, "waiting.json"));
+  const design = gate.createWaiting({ taskId: task.id, step: "Story 与实施附录生成及一次设计检视",
+    callId: "original-design", questionInput: { questions: [{ question: "是否确认原设计？", options: ["确认"] }] },
+    context: "原设计确认背景", preface: "原 Agent 的设计检视回复" });
+  gate.resolve(design.waiting_id, { stateVersion: 1, decision: "确认", notes: "采用原设计" });
+  const duplicate = gate.createWaiting({ taskId: task.id, step: "本地 Spec 确认", callId: "shared-card",
+    questionInput: { questions: [{ question: "归档版本", options: ["确认"] }] }, context: "归档上下文" });
+  snapshotContinuation(task, undefined, "continued-123");
+  archiveContinuationRuntime(task.workspace, "continued-123", join(task.workspace, "host-operations.json"));
+  const current = new HumanGate(join(task.workspace, "waiting.json"));
+  current.createWaiting({ taskId: task.id, step: "本地 Spec 确认", callId: "shared-card",
+    questionInput: { questions: [{ question: "当前版本", options: ["确认"] }] }, context: "当前上下文" });
+  const foreign = new HumanGate(join(task.workspace, "delivery-history", "continued-123", "waiting.json"));
+  foreign.createWaiting({ taskId: "another-task", step: design.step, callId: "unrelated",
+    questionInput: { questions: [{ question: "其他任务", options: ["确认"] }] } });
+  const outside = join(root, "outside");
+  const outsideGate = new HumanGate(join(outside, "waiting.json"));
+  const secret = outsideGate.createWaiting({ taskId: task.id, step: design.step, callId: "outside",
+    questionInput: { questions: [{ question: "目录外记录", options: ["确认"] }] } });
+  symlinkSync(outside, join(task.workspace, "delivery-history", "linked-archive"));
+  const summary = { ...structuredClone(service.storedTaskSummary(task.id)!),
+    delivery_history: ["continued-123", "../outside", "linked-archive"].map(archive => ({
+      id: archive, archive, started_at: task.created_at, completed_at: task.created_at, delivery: undefined,
+    })),
+  };
+  const event = { eventId: 1, taskId: task.id, sessionId: "main", ts: task.created_at,
+    kind: "assistant_message", payload: { text: design.preface } };
+  writeFileSync(service.eventLogPath(task.id), JSON.stringify(event) + "\n");
+  const before = contents(root);
+  const snapshot = await readTaskDemoSnapshot({
+    options: service.options, storedTaskSummary: () => summary,
+    artifactRoot: id => service.artifactRoot(id), panelFile: (id, name) => service.panelFile(id, name),
+    readDisplayEvents: id => service.readDisplayEvents(id),
+  }, task.id);
+  const cards = snapshot.conversation.items.filter(item => item.kind === "card");
+  assert.equal(cards.find(item => item.waiting_id === design.waiting_id)?.questions[0]?.question, "是否确认原设计？");
+  assert.deepEqual(snapshot.card_contexts?.[design.waiting_id], { context: design.context, preface: design.preface });
+  assert.ok(snapshot.conversation.items.some(item => item.kind === "turn" && item.texts.some(text => text.text === design.preface)));
+  assert.ok(snapshot.conversation.items.some(item => item.kind === "decision" && item.waiting_id === design.waiting_id && item.decision === "确认"));
+  assert.equal(cards.filter(item => item.waiting_id === duplicate.waiting_id).length, 1);
+  assert.equal(cards.find(item => item.waiting_id === duplicate.waiting_id)?.questions[0]?.question, "当前版本");
+  assert.deepEqual(snapshot.card_contexts?.[duplicate.waiting_id], { context: "当前上下文" });
+  assert.ok(!cards.some(item => item.waiting_id === secret.waiting_id || item.waiting_id.startsWith("another-task:")));
+  assert.ok(snapshot.problems.some(problem => problem.includes("编号无效")));
+  assert.ok(snapshot.problems.some(problem => problem.includes("历史确认记录暂时无法读取")));
+  assert.deepEqual(contents(root), before, "归档、当前记录、原对话和目录外文件均不修改");
 });
 
 test("演示来源端点仅允许登录 admin，未启用认证也不提供入口", async t => {

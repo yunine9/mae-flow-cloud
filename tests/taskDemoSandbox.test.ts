@@ -191,7 +191,7 @@ test("决定、插话、邀请和完成检视只影响演示状态，来源 revi
   assert.deepEqual(f.reads, []);
 });
 
-test("全部写方法含未知操作和真实任务路径永不走 fetchRead", async () => {
+test("任务写入含未知操作和真实任务路径永不走 fetchRead", async () => {
   const f = fixture();
   for (const method of ["POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE"]) {
     for (const path of ["/unknown", "/artifacts/story.md", "/events", "/demo-snapshot"]) {
@@ -338,7 +338,7 @@ test("真实架构只读源任务并保留 revision，未知路径和写请求�
   assert.equal(reads.length, 2); sandbox.dispose(); f.sandbox.dispose();
 });
 
-test("DEV 架构样例只从内存读取，更新只更换副本版本且不放开图渲染接口", async () => {
+test("DEV 架构样例只从内存读取，更新只更换副本版本", async () => {
   const f = fixture(); let reads = 0;
   const architecture = { projection: { renderer: "demo", warnings: ["虚构示例"],
     diagrams: [{ id: "demo-overview" as const, title: "订单与库存示例", type: "architecture", view: "logical" as const }] },
@@ -354,7 +354,7 @@ test("DEV 架构样例只从内存读取，更新只更换副本版本且不放�
   const after = await get("/architecture");
   assert.notEqual(after.revision, before.revision);
   assert.equal((await get("/architecture/demo-overview")).revision, after.revision);
-  assert.equal((await sandbox.fetch("/diagrams/plantuml", { method: "POST", body: "{}" })).status, 403);
+  assert.equal((await sandbox.fetch("/diagrams/plantuml", { method: "POST", body: "{}" })).status, 400);
   assert.equal(reads, 0); sandbox.dispose(); f.sandbox.dispose();
 });
 
@@ -381,4 +381,61 @@ test("演示附图解析为本地 blob，重置释放图片，来源附图不请
   await assert.rejects(fetch(url));
   f.sandbox.dispose(); assert.equal(resolveTaskDemoAsset(f.sandbox.taskId, image.path), undefined);
   assert.deepEqual(f.reads, []);
+});
+
+
+test("演示 PlantUML 使用正常出图接口，仅传图源，任务及其他接口仍隔离", async () => {
+  const f = fixture(); const before = structuredClone(f.task);
+  const requests: Array<{ url: string; init?: RequestInit }> = [];
+  const rendered = { svg: '<svg xmlns="http://www.w3.org/2000/svg"><text y="20">原任务图</text></svg>' };
+  const sandbox = createTaskDemoSandbox({ task: f.task, actor: "admin", fetchRead: async (url, init) => {
+    requests.push({ url: String(url), init }); return Response.json(rendered);
+  } });
+  const source = "@startuml\n用户 -> 平台: 查看需求\n@enduml";
+  const body = JSON.stringify({ source, task_id: f.task.id, action: "resume" });
+  assert.deepEqual(await (await sandbox.fetch("/diagrams/plantuml", { method: "POST", body })).json(), rendered);
+  assert.equal(requests[0].url, "/diagrams/plantuml");
+  assert.equal(requests[0].init?.method, "POST");
+  assert.equal(requests[0].init?.redirect, "error");
+  assert.equal(new Headers(requests[0].init?.headers).get("content-type"), "application/json");
+  assert.deepEqual(JSON.parse(String(requests[0].init?.body)), { source });
+  const request = new Request("http://demo.local/diagrams/plantuml", { method: "POST", body });
+  assert.deepEqual(await (await sandbox.fetch(request)).json(), rendered);
+  for (const path of ["/diagrams/plantuml?task=source-task", "/diagrams/plantuml/other", "/tasks/source-task/resume", "https://external.example/diagrams/plantuml"]) {
+    assert.equal((await sandbox.fetch(path, { method: "POST", body })).status, 403, path);
+  }
+  for (const method of ["GET", "PUT", "DELETE"]) {
+    assert.equal((await sandbox.fetch("/diagrams/plantuml", { method, ...(method === "GET" ? {} : { body }) })).status, 403);
+  }
+  for (const invalid of [{}, { source: 123 }, { source: " " }]) {
+    assert.equal((await sandbox.fetch("/diagrams/plantuml", { method: "POST", body: JSON.stringify(invalid) })).status, 400);
+  }
+  assert.equal(requests.length, 2); assert.deepEqual(f.task, before);
+  sandbox.dispose();
+  assert.equal((await sandbox.fetch("/diagrams/plantuml", { method: "POST", body })).status, 410);
+  assert.equal(requests.length, 2); f.sandbox.dispose();
+});
+
+test("退出演示或取消请求会取消尚未完成的 PlantUML 出图请求", async () => {
+  const f = fixture();
+  for (const mode of ["dispose", "signal", "request-signal"] as const) {
+    let started!: () => void;
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    const sandbox = createTaskDemoSandbox({ task: f.task, actor: "admin", fetchRead: async (_url, init) => {
+      started();
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+      });
+    } });
+    const controller = new AbortController();
+    const init = { method: "POST", body: JSON.stringify({ source: "Alice -> Bob: hello" }), signal: controller.signal };
+    const pending = mode === "request-signal"
+      ? sandbox.fetch(new Request("http://demo.local/diagrams/plantuml", init))
+      : sandbox.fetch("/diagrams/plantuml", init);
+    await ready;
+    if (mode === "dispose") sandbox.dispose(); else controller.abort();
+    await assert.rejects(pending, { name: "AbortError" });
+    sandbox.dispose();
+  }
+  f.sandbox.dispose();
 });

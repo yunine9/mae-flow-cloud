@@ -175,8 +175,10 @@ export default function TaskDemoWorkspace({ sourceTaskId, preview }: {
           architecture: input.preview?.architecture,
           fetchRead: (request, init) => {
             const method = (init?.method ?? (request instanceof Request ? request.method : "GET")).toUpperCase();
-            if (method !== "GET" && method !== "HEAD") return Promise.reject(new Error("演示副本不能写入原任务。"));
-            return read(request, { ...init, method, signal: init?.signal
+            const diagram = method === "POST" && request === "/diagrams/plantuml";
+            if (method !== "GET" && method !== "HEAD" && !diagram) return Promise.reject(new Error("演示副本不能写入原任务。"));
+            // 图源来自副本文档，渲染仍使用平台接口；预览资料只负责提供文档内容。
+            return (diagram ? originalFetch : read)(request, { ...init, method, signal: init?.signal
               ? AbortSignal.any([controller.signal, init.signal]) : controller.signal });
           },
         });
