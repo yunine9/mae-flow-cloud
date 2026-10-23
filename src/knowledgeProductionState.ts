@@ -34,15 +34,19 @@ export function currentKnowledgeArchiveBatches(job: DomainKnowledgeJob, current_
     && targets.length === batch.targets.length && targets.every(target => batch.targets.some(old => old.id === target.id
       && old.repository === target.repository && old.branch === target.branch && old.docs_path === target.docs_path)));
 }
-function documentState(job: DomainKnowledgeJob, document: DomainDocument): KnowledgeDocumentState {
+function documentProposalState(job: DomainKnowledgeJob, document: DomainDocument) {
   const pending = [...job.turns].reverse().flatMap(turn => turn.proposals.map(proposal => ({ turn, proposal })))
     .find(({ proposal }) => proposal.document.id === document.id && proposal.status === "pending");
-  const confirmedDeletion = document.deleted && !!document.knowledge_document_id && document.published_document_revision === document.revision;
-  const needsLayout = needsModuleKnowledgeLayout(job) && !confirmedDeletion;
-  const changed = !!pending || document.published_document_revision !== document.revision || needsLayout;
   const name = document.path || document.title;
   const proposal_problem = !pending ? undefined : pending.turn.status !== "done" ? `${name} 的修改尚未完成，完成后才能确认发布。`
     : pending.proposal.base_revision !== document.revision ? `${name} 的正文已变化，请重新修改或放弃这份修改结果后再发布。` : undefined;
+  return { pending, proposal_problem };
+}
+function documentState(job: DomainKnowledgeJob, document: DomainDocument): KnowledgeDocumentState {
+  const { pending, proposal_problem } = documentProposalState(job, document);
+  const confirmedDeletion = document.deleted && !!document.knowledge_document_id && document.published_document_revision === document.revision;
+  const needsLayout = needsModuleKnowledgeLayout(job) && !confirmedDeletion;
+  const changed = !!pending || document.published_document_revision !== document.revision || needsLayout;
   return { id: document.id, changed, published_revision: document.published_document_revision, knowledge_document_id: document.knowledge_document_id,
     status_label: document.deleted ? changed ? "待删除" : "已删除" : needsLayout && !pending && document.published_document_revision === document.revision ? "待整理发布" : changed ? "待审查" : "已入库", proposal_problem };
 }
@@ -84,6 +88,7 @@ function projectDomainCandidates(job: DomainKnowledgeJob): KnowledgeProductionVi
   const capabilities = job.turns.at(-1)?.research?.capabilities ?? [];
   const group = working || archiving ? "running" : failed || anyMerged && !allCurrentMerged ? "attention" : allCurrentMerged || opened || noChanges ? "completed" : "attention";
   const docs = job.documents.map(document => {
+    const { pending, proposal_problem } = documentProposalState(job, document);
     const target = [job.knowledge_target, ...job.repositories].find(target => target.id === document.target_id);
     const publication = job.publications.find(publication => {
       const archived = [job.knowledge_target, ...job.repositories].find(candidate => candidate.id === publication.target_id);
@@ -91,8 +96,8 @@ function projectDomainCandidates(job: DomainKnowledgeJob): KnowledgeProductionVi
     });
     const submitted = publication?.state === "opened" && publication.documents.some(old => old.id === document.id && old.revision === document.revision
       && old.content === document.content && old.path === (document.archive_path ?? document.path) && !!old.deleted === !!document.deleted);
-    return { id: document.id, changed: publication?.mr_state !== "merged" && !submitted, status_label: publication?.mr_state === "merged" ? "已合入"
-      : submitted ? "MR 已提交" : publication?.state === "failed" ? "MR 创建失败" : document.deleted ? "待删除" : "任务文稿", knowledge_document_id: document.knowledge_document_id };
+    return { id: document.id, changed: publication?.mr_state !== "merged" && (!!pending || !submitted), status_label: publication?.mr_state === "merged" ? "已合入"
+      : submitted && !pending ? "MR 已提交" : publication?.state === "failed" ? "MR 创建失败" : document.deleted ? "待删除" : "任务文稿", knowledge_document_id: document.knowledge_document_id, proposal_problem };
   });
   const statePublication = (publication: DomainPublication): KnowledgePublicationState => ({ key: `${publication.target_id}:${publication.branch}`,
     target: [job.knowledge_target, ...job.repositories].find(target => target.id === publication.target_id)?.name ?? publication.target_id,
