@@ -49,7 +49,8 @@ test("真实 Pi 同一回复保存、执行及完成按序排队，保存等待�
   git("-c", "user.name=test", "-c", "user.email=test@example.test", "commit", "--allow-empty", "-qm", "fixture");
   const revision = git("rev-parse", "HEAD");
   const requests: Array<Record<string, any>> = [];
-  const document = { id: "cancel", title: "取消规则", target_id: "domain", path: "domain-docs/cancel.md", layer: "domain",
+  const docsPath = "docs/取消规则";
+  const document = { id: "cancel", title: "取消规则", target_id: "domain", path: `${docsPath}/cancel.md`, layer: "domain",
     content: "# 取消规则\n未结算订单取消时释放库存。", sources: "本次研究范围原话" };
   const step = { id: "check", title: "取消规则核对", instructions: "读取已保存文稿并提交候选，不要重复保存", readonly: true, depends_on: [],
     expected_document_ids: ["cancel"], review: { instructions: "独立读取当前正文，核对未结算适用条件" } };
@@ -88,7 +89,7 @@ test("真实 Pi 同一回复保存、执行及完成按序排队，保存等待�
       source: async () => { sourceEntered = true; await sourceReady; return { root: repo, revision }; },
     }));
     const job = service.create({ title: "取消规则", scope: "未结算订单取消时释放库存", issue_no: "REQ-475", repositories: [],
-      knowledge_target: { name: "知识仓", repository: "https://example.test/knowledge.git", branch: "main" } }, "tester");
+      knowledge_target: { name: "知识仓", repository: "https://example.test/knowledge.git", branch: "main", docs_path: docsPath } }, "tester");
     const detail = () => JSON.stringify({ status: service!.get(job.id).status, requests: requests.length });
     await until(() => sourceEntered, detail);
     // 让真实 Pi 有机会处理同回复中的其余调用；保存仍由 sourceReady 明确阻塞。
@@ -103,6 +104,7 @@ test("真实 Pi 同一回复保存、执行及完成按序排队，保存等待�
     const done = service.get(job.id);
     assert.equal(done.status, "done", done.error);
     assert.equal(done.documents.length, 1); assert.equal(done.documents[0].revision, 1);
+    assert.equal(done.documents[0].path, `${done.knowledge_target.docs_path}/cancel.md`);
     assert.equal(done.turns[0].research?.capabilities[0].state, "researched");
     assert.equal(requests.length, script.length);
     const toolResults = requests.flatMap(request => request.messages ?? []).flatMap((message: any) => Array.isArray(message.content) ? message.content : [])

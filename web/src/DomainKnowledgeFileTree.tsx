@@ -2,7 +2,7 @@ import { useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight, FileText, Folder, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import type { DomainKnowledgeJob, DomainDocument } from "../../src/domainKnowledgeTypes";
-import { domainDocumentHasChanges } from "./domainKnowledgePublication";
+import { domainDocumentHasChanges, domainReviewDocuments } from "./domainKnowledgePublication";
 
 export function DomainKnowledgeFileTree({ job, currentId, currentWorkId, onWorkNavigate, disabled, onNavigate, onSelection, onSelections }: {
   job: DomainKnowledgeJob; currentId?: string; disabled?: boolean;
@@ -37,7 +37,7 @@ export function DomainKnowledgeFileTree({ job, currentId, currentWorkId, onWorkN
         <button className={`flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-2 text-left text-sm ${currentId === doc.id ? "bg-primary/10 text-primary" : "hover:bg-muted"}`} title={`${doc.path} · ${doc.title}`} aria-current={currentId === doc.id ? "page" : undefined} onClick={() => onNavigate(doc.id)}><FileText size={15} className="shrink-0" /><span className="min-w-0 flex-1"><span className="block truncate">{doc.path.split("/").at(-1)}</span><small className={`block text-xs ${domainDocumentHasChanges(job, doc) ? "text-amber-700" : "text-muted-foreground"}`}>{job.production?.documents.find(item => item.id === doc.id)?.status_label}</small></span></button>
       </li>)}</>;
   }
-  const visible = job.documents.filter(doc => !needle || `${targets.find(t => t.id === doc.target_id)?.name} ${doc.path}`.toLocaleLowerCase().includes(needle)).sort((a, b) => a.path.localeCompare(b.path));
+  const visible = domainReviewDocuments(job).filter(doc => !needle || `${targets.find(t => t.id === doc.target_id)?.name} ${doc.path} ${doc.title}`.toLocaleLowerCase().includes(needle)).sort((a, b) => a.path.localeCompare(b.path));
   const workDocuments = (job.work_documents ?? []).filter(document => !needle || document.title.toLocaleLowerCase().includes(needle));
   return <aside className="research-capabilities" aria-label="领域知识文件导航">
     <div className="research-capabilities-header"><strong>文件 <span>{job.documents.length + (job.work_documents?.length ?? 0)}</span></strong>

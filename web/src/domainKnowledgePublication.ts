@@ -21,6 +21,11 @@ export function domainReviewDocument(job: DomainKnowledgeJob, document: DomainDo
   return pending && !domainProposalProblem(job, document) ? { ...document, ...pending.proposal.document } : document;
 }
 
+/** 文件导航、检索和正文使用同一份可检视候选，发布基线仍保留在 job.documents。 */
+export function domainReviewDocuments(job: DomainKnowledgeJob): DomainDocument[] {
+  return job.documents.map(document => domainReviewDocument(job, document));
+}
+
 export function domainPublicationInput(job: DomainKnowledgeJob) {
   const selected = job.documents.filter(document => document.selected && domainDocumentHasChanges(job, document));
   return { document_ids: selected.map(document => document.id), expected_revisions: Object.fromEntries(selected.map(document => [document.id, document.revision])) };

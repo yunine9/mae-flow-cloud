@@ -47,7 +47,7 @@ test("#451 任意 Skill 的中间文稿可即时审阅，多次人工答复沿�
         await call("knowledge_work_result", { status: "paused", summary: "已按意见调整，请再次确认。", document_ids: [], work_document_ids: ["plan"] });
       } else {
         assert.equal(context.human_replies.at(-1).message, "确认调整后的内容，请继续。");
-        await call("knowledge_draft", { action: "save", document: { id: "rules", title: "知识草稿", target_id: "domain", path: "domains/rules.md", layer: "domain", content: "完整知识正文", sources: "用户提供的研究范围" } });
+        await call("knowledge_draft", { action: "save", document: { id: "rules", title: "知识草稿", target_id: "domain", path: `${context.knowledge_target.docs_path}/rules.md`, layer: "domain", content: "完整知识正文", sources: "用户提供的研究范围" } });
         await call("knowledge_work_result", { summary: "本轮完成", document_ids: ["rules"] });
       }
       return { status: "turn_finished" };
@@ -69,7 +69,9 @@ test("#451 任意 Skill 的中间文稿可即时审阅，多次人工答复沿�
     assert.equal(job.status, "paused", job.error);
     assert.equal(job.production?.status_label, "等待你确认");
     assert.equal(job.error, undefined);
-    assert.ok(job.production?.navigation.ready_message);
+    assert.equal(job.production?.next_action.view, "progress", "待确认内容从原研究过程进入");
+    assert.match(job.production?.next_action.href ?? "", new RegExp(`kbTask=${job.id}`));
+    assert.equal(job.production?.review.turns[0].status_label, "等待你的答复");
     const turnId = job.turns[0].id, first = job.turns[0].waiting!;
     assert.deepEqual(first.work_document_ids, ["plan"]);
     assert.throws(() => service.resume(job.id, "expert"), /答复/);
@@ -99,6 +101,7 @@ test("#451 任意 Skill 的中间文稿可即时审阅，多次人工答复沿�
     assert.equal(job.turns[0].waiting, undefined);
     assert.equal(job.turns[0].human_replies?.length, 2);
     assert.equal(job.documents.length, 1);
+    assert.equal(job.documents[0].path, `${job.knowledge_target.docs_path}/rules.md`);
     assert.equal(job.work_documents?.[0].content, content);
     assert.equal(job.documents[0].knowledge_document_id, undefined, "中间确认不会替人发布知识");
   } finally { release(); await service.shutdown(); intercepted.mock.restore(); rmSync(root, { recursive: true, force: true }); }

@@ -226,6 +226,8 @@ for (const mode of ["revise", "update"] as const) test(`${mode} 省略结果文�
   const job = await fixture(async (context, call) => {
     if (context.mode !== "extract") {
       assert.equal(context.mode, mode); assert.equal(context.step, undefined);
+      const original = await call("knowledge_draft", { action: "read", id: "one" });
+      assert.equal(original.content, document("one").content, "修改前完整回读当前正文，随后验证遗漏结果编号仍不能绕过图校验");
       await call("knowledge_draft", { action: "save", document: document("one", diagramMissingEnd) });
       const diagnostic = await call("knowledge_diagram_check", { document_id: "one" });
       assert.equal(diagnostic.document_id, "one"); assert.equal(diagnostic.status, "invalid");

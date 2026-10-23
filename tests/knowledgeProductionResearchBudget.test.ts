@@ -28,7 +28,7 @@ for (const action of ["budget", "human"] as const) {
       abort: async () => { reject?.(new DOMException("This operation was aborted", "AbortError")); }, dispose() {},
     }) as any);
     const service = new DomainKnowledgeExtraction(root, input => {
-      input.save({ id: "rules", title: "订单规则", target_id: "domain", path: "domains/rules.md", layer: "domain", content: "# 已保存的草稿\n订单取消需核对。", sources: "已有研究证据" });
+      input.save({ id: "rules", title: "订单规则", target_id: "domain", path: `${input.job.knowledge_target.docs_path}/rules.md`, layer: "domain", content: "# 已保存的草稿\n订单取消需核对。", sources: "已有研究证据" });
       return runDomainKnowledge(input, { dataDir: root, model, source: async () => { throw new Error("本用例不读取源码"); } });
     });
     const job = service.create({ title: "订单", scope: "取消", issue_no: "REQ-1", repositories: [] }, "alice");
@@ -44,6 +44,7 @@ for (const action of ["budget", "human"] as const) {
         assert.doesNotMatch(service.get(job.id).error ?? "", /研究总预算|48 小时/);
       }
       assert.equal(service.get(job.id).documents[0].content, "# 已保存的草稿\n订单取消需核对。");
+      assert.equal(service.get(job.id).documents[0].path, `${job.knowledge_target.docs_path}/rules.md`);
     } finally {
       const closing = service.shutdown(); reject?.(new Error("fixture cleanup")); t.mock.timers.tick(60_000); await flush(); await closing;
       session.mock.restore(); rmSync(root, { recursive: true, force: true }); t.mock.timers.reset();
