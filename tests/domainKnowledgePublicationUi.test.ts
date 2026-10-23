@@ -95,7 +95,7 @@ test("当前正文已提交 MR 后仍能选择并预览新检视候选，更新�
   assert.equal(current.content, "原稿 a");
 });
 
-test("已发布文稿有新修改时直接预览最新完成结果，失败和冲突仍显示原稿", () => {
+test("已提交 MR 的文稿有新修改时预览最新完成候选，失败和冲突仍显示原稿", () => {
   const job = proposalJob(), document = job.documents[0];
   assert.equal(domainDocumentHasChanges(project(job), document), true);
   assert.equal(domainReviewDocument(project(job), document).content, "修改结果 a");
@@ -117,9 +117,9 @@ test("整批预检先于任何确认写入，后面的文稿冲突时不能提�
   assert.equal(writes.length, 0);
 });
 
-test("一键确认多份修改后用返回的新版本发布，未选文稿保留", async () => {
+test("兼容确认接口按返回的新版本提交多份修改，未选文稿保留", async () => {
   const job = proposalJob();
-  job.documents.push({ ...job.documents[0], id: "unselected", selected: false, revision: 3 });
+  job.documents.push(document("unselected", { content: "未选文稿保持原文", selected: false, revision: 3 }));
   const writes: Array<{ action: string; input: any }> = [];
   let server = structuredClone(job);
   const result = await confirmDomainPublication(project(job), async (action, input: any) => {
@@ -129,18 +129,22 @@ test("一键确认多份修改后用返回的新版本发布，未选文稿保�
       const proposal = server.turns[0].proposals.find(item => item.document.id === doc.id)!;
       Object.assign(doc, proposal.document, { revision: doc.revision + 1 }); proposal.status = "accepted";
     } else {
-      for (const doc of server.documents.filter(item => input.document_ids.includes(item.id))) doc.published_document_revision = doc.revision;
+      // publish 是兼容辅助方法的请求名称；响应按 MR 快照记录提交，不代表正式知识已合入。
+      server.publications = [publication(server.documents.filter(item => input.document_ids.includes(item.id)))];
     }
     return project(structuredClone(server));
   });
   assert.deepEqual(writes.map(write => write.action), ["proposal", "proposal", "publish"]);
   assert.deepEqual(writes.at(-1)?.input, { document_ids: ["a", "b"], expected_revisions: { a: 3, b: 3 } });
   assert.equal(result.documents[0].content, "修改结果 a");
-  assert.equal(result.documents[2].published_document_revision, 2);
+  assert.equal(result.documents[2].revision, 3);
+  assert.equal(result.documents[2].content, "未选文稿保持原文");
+  assert.deepEqual(result.publications[0].documents.map(item => item.id), ["a", "b"]);
+  assert.equal(result.publications[0].mr_state, "opened");
   assert.equal(job.documents[0].content, "原稿 a");
 });
 
-test("确认途中失败保留已确认草稿，不继续发布任何正式知识", async () => {
+test("确认途中失败保留已确认草稿，不继续发出提交请求", async () => {
   const job = proposalJob(), writes: string[] = [];
   await assert.rejects(confirmDomainPublication(project(job), async (action, input: any) => {
     writes.push(action);
