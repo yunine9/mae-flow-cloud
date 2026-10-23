@@ -7,11 +7,13 @@
  */
 import type { IssueCancelReason } from "../api";
 
-/** 中文词表:resolved=问题已处理不会出现在统计页终止行(服务端不
- *  下发),入表只为下拉词表完整、键型对齐。 */
+/** 中文词表:resolved=问题已处理与 wrong_module=业务模块绑错不会
+ *  出现在统计页终止行(服务端不下发),入表只为下拉词表完整、键型
+ *  对齐。 */
 export const CANCEL_REASON_LABELS: Record<IssueCancelReason, string> = {
   resolved: "问题已处理", inaccurate: "分析不准确", slow: "速度太慢",
-  disobedient: "指令不遵从", other: "其他原因",
+  disobedient: "指令不遵从", unclear_plan: "方案未明确",
+  wrong_module: "业务模块绑错", other: "其他原因",
 };
 
 /** 下拉选项:顺序即下拉顺序,与服务端 ISSUE_CANCEL_REASONS 同源同序。 */
@@ -24,7 +26,7 @@ export const CANCEL_REASON_OPTIONS: Array<{
  *  只管呈现色系(已定类红色系、其余琥珀「其他」)——进不进统计的
  *  唯一口径在服务端,这里不复判。词表外未知值按「其他」待遇。 */
 const NEGATIVE_CANCEL_REASONS: ReadonlySet<IssueCancelReason> = new Set([
-  "inaccurate", "slow", "disobedient", "other",
+  "inaccurate", "slow", "disobedient", "unclear_plan", "other",
 ]);
 
 export function isNegativeCancelReason(
