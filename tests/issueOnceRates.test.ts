@@ -130,11 +130,13 @@ test("纯函数:负面原因终止进一次解决率分母记失败;一次定位
     { id: "term-a", cancel_reason: "inaccurate" });
 });
 
-test("纯函数:resolved 取消与无原因取消(历史)维持排除;无单负面终止也不进", () => {
+test("纯函数:resolved 取消、业务模块绑错与无原因取消(历史)维持排除;无单负面终止也不进", () => {
   const summary = issueOnceRates([
     facts({ id: "ok" }),
     facts({ id: "resolved-cancel", status: "canceled",
       cancel_reason: "resolved" }),
+    facts({ id: "wrong-module", status: "canceled",
+      cancel_reason: "wrong_module" }),
     facts({ id: "legacy-cancel", status: "canceled",
       cancel_reason: undefined }),
     facts({ id: "no-ticket", status: "canceled", ticket: undefined,

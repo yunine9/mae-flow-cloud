@@ -1988,7 +1988,7 @@ test("DTS 概览口径标注与页底统计口径文案:分母含主动终止,�
   assert.match(deliveryAnalytics, /分母 = 完成交付会话 \+ 主动终止会话/);
   assert.match(deliveryAnalytics, /自 2026-10-21 口径切换起/);
   assert.doesNotMatch(deliveryAnalytics, /自终止原因收集上线起/);
-  assert.match(deliveryAnalytics, /选「问题已处理」的会话不参与统计/);
+  assert.match(deliveryAnalytics, /选「问题已处理」或「业务模块绑错」的终止不参与统计/);
   // help tooltip 同步:绝对日 + 主动终止记一次失败,两轴分母仍只含完成交付。
   assert.match(deliveryAnalytics,
     /主动终止\(负面原因\)会话\(自 2026-10-21 口径切换起\),主动终止记一次失败/);
@@ -1997,7 +1997,7 @@ test("DTS 概览口径标注与页底统计口径文案:分母含主动终止,�
   assert.match(deliveryAnalytics,
     /分母=完成交付会话\+主动终止\(负面原因\)会话,主动终止记一次失败/);
   assert.match(deliveryAnalytics,
-    /终止时选「问题已处理」的会话与无原因取消\(历史数据\)不参与统计/);
+    /终止时选「问题已处理」或「业务模块绑错」的会话与无原因取消\(历史数据\)不参与统计/);
 });
 
 // ---- DTS 按会话表:负面终止行进表与终止原因列(#543) ----
@@ -2022,9 +2022,11 @@ test("DTS 按会话表终止行语义:一次解决✗照旧、四列 — 占位�
   const table = deliveryAnalytics.slice(
     deliveryAnalytics.indexOf('dim === "session"'),
     deliveryAnalytics.indexOf('details className="delivery-method"'));
-  // 表头末列新增「终止原因」;ADR-0065 列头漏斗改造后会话/特性/发起人
-  // 三列带漏斗组件,列顺序不变,终止原因仍收尾。
-  assert.match(table, /<th>收口时间<\/th><th>终止原因<\/th>/);
+  // 表头末列新增「终止原因」;ADR-0065 三率修订后表头换 SortableTh
+  // (排序+漏斗一体),终止原因列仍收尾。
+  assert.match(table, /<SortableTh label="终止原因" sortKey="terminate"/);
+  assert.ok(table.indexOf('label="收口时间"') < table.indexOf('label="终止原因"'),
+    "终止原因列在收口时间之后收尾");
   // 一次解决列:终止行显式红 ✗(#540 复审——终止行 solved_pass 已缺席,
   // 不再靠假值隐式落 ✗);交付行按 solved_pass ✓/✗。
   assert.match(table,
