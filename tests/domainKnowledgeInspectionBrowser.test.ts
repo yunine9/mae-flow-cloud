@@ -9,7 +9,7 @@ import type { DomainKnowledgeJob } from "../src/domainKnowledgeTypes.ts";
 import { browserResultDump } from "./fixtures/browserResultDump.ts";
 
 const chrome = process.env.MFC_TEST_CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-test("领域检视：跨篇批注、读取失败重试、任务切换隔离、后台慢请求与统一提交", { skip: !existsSync(chrome) && "需要真实 Chrome", timeout: 180_000 }, async () => {
+test("领域检视：跨篇批注、轮次隔离、历史整批重试、读取恢复与统一提交", { skip: !existsSync(chrome) && "需要真实 Chrome", timeout: 180_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "domain-inspection-browser-"));
   try {
     const repository = { id: "source", name: "业务代码仓", repository: "https://example.test/source.git", branch: "main", path: "src", docs_path: "docs" };
@@ -26,6 +26,7 @@ test("领域检视：跨篇批注、读取失败重试、任务切换隔离、�
     if (screenshots) mkdirSync(screenshots, { recursive: true });
     const cases = [1920, 1366].flatMap(width => ["workflow", "recovery"].map(scenario => ({ width, height: width === 1920 ? 1080 : 768, scenario, visual: "" })));
     if (screenshots) for (const visual of ["initial-error", "started-error"]) cases.push({ width: 1920, height: 1080, scenario: "recovery", visual });
+    if (screenshots) cases.push({ width: 1920, height: 1080, scenario: "workflow", visual: "history" });
     for (const { width, height, scenario, visual } of cases) {
       const name = `${scenario}-${visual || "checks"}-${width}`, image = screenshots && visual ? join(resolve(screenshots), `inspection-${visual}-${width}.png`) : undefined;
       const query = new URLSearchParams({ scenario, ...(visual ? { visual } : {}) });
@@ -34,7 +35,7 @@ test("领域检视：跨篇批注、读取失败重试、任务切换隔离、�
       const value = JSON.parse(result); assert.equal(value.error, undefined, `${name}: ${value.error}`); assert.equal(value.passed, true);
       if (visual) { assert.equal(value.visual, visual); assert.ok(image && existsSync(image), `${name}: missing screenshot`); }
       else if (scenario === "recovery") { assert.equal(value.recovery, true); assert.equal(value.requestIsolation, true); }
-      else { assert.equal(value.notes, 5); assert.equal(value.independentFinished, true); }
+      else { assert.equal(value.notes, 5); assert.equal(value.independentFinished, true); assert.equal(value.roundIsolation, true); assert.equal(value.historyRetry, true); }
     }
 
   } finally { stop(); rmSync(dir, { recursive: true, force: true }); }

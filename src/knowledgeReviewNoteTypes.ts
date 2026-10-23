@@ -3,6 +3,7 @@ export interface KnowledgeReviewSubmission {
   working: boolean;
   status_label: string;
   error?: string;
+  retryable?: boolean;
 }
 export interface KnowledgeReviewNotesResult {
   notes: KnowledgeReviewNote[];
@@ -10,6 +11,7 @@ export interface KnowledgeReviewNotesResult {
   turn_id?: string;
 }
 export interface KnowledgeReviewNoteInput {
+  inspection_id?: string;
   document_id: string;
   scope: "line" | "document" | "study";
   line?: number;
@@ -22,6 +24,7 @@ export interface KnowledgeReviewNoteInput {
 }
 export interface KnowledgeReviewNote extends KnowledgeReviewNoteInput {
   id: string;
+  retry_of?: string;
   kind: KnowledgeReviewKind;
   job_id: string;
   document_title: string;

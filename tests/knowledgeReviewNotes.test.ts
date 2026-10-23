@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyKnowledgeReviewNotes, listKnowledgeReviewNotes, resolveKnowledgeReviewNotes, saveKnowledgeReviewNote, type KnowledgeReviewSources } from "../src/knowledgeReviewNotes.ts";
@@ -19,7 +20,7 @@ function fixture() {
   const sources: KnowledgeReviewSources = { dataDir,
     domain: { get: () => structuredClone(domainJob), run: (_id, input, operator) => {
       calls.push({ kind: "domain", input, operator });
-      domainJob.turns.push({ id: "turn-domain", mode: "revise", document_ids: input.document_ids!, message: input.message!, review_note_ids: input.review_note_ids, operator, created_at: new Date().toISOString(), status: "queued", proposals: [] });
+      domainJob.turns.push({ id: domainJob.turns.length ? `turn-domain-${domainJob.turns.length + 1}` : "turn-domain", mode: "revise", document_ids: input.document_ids!, message: input.message!, review_note_ids: input.review_note_ids, operator, created_at: new Date().toISOString(), status: "queued", proposals: [] });
       return structuredClone(domainJob);
     } },
     component: { get: () => structuredClone(componentJob), review: (_id, input, operator) => {
@@ -262,5 +263,153 @@ test("#457 整体意见不绑定某一文档，领域覆盖全部文稿，组件
     assert.equal(failed.notes[0].status, "open");
     assert.equal(failed.submissions[result.turn_id!].working, false);
     assert.equal(failed.submissions[result.turn_id!].error, "来源读取失败");
+  } finally { f.cleanup(); }
+});
+
+test("领域意见按检视轮次提交，省略轮次参数也不能混入另一轮或旧意见", () => {
+  const f = fixture(), inspection = randomUUID(), other = randomUUID();
+  try {
+    for (const [document_id, inspection_id] of [["rules", inspection], ["api", inspection], ["rules", other], ["rules", undefined]]) {
+      saveKnowledgeReviewNote(f.sources, "domain", "dkx-1", { document_id: document_id!, scope: "document", note: "核对规则", inspection_id }, "alice");
+    }
+    const notes = listKnowledgeReviewNotes(f.sources, "domain", "dkx-1").notes;
+    assert.equal(notes[0].inspection_id, inspection);
+    for (const note_ids of [[notes[0].id, notes[2].id], [notes[0].id, notes[3].id]]) {
+      assert.throws(() => applyKnowledgeReviewNotes(f.sources, "domain", "dkx-1", { note_ids }, "alice"), /同一检视轮次/);
+    }
+    assert.throws(() => applyKnowledgeReviewNotes(f.sources, "domain", "dkx-1", { note_ids: [notes[0].id], inspection_id: other }, "alice"), /同一检视轮次/);
+    assert.throws(() => saveKnowledgeReviewNote(f.sources, "domain", "dkx-1", { document_id: "rules", scope: "document", note: "核对", inspection_id: "not-a-uuid" }, "alice"), /轮次编号无效/);
+    assert.equal(f.calls.length, 0);
+    const submitted = applyKnowledgeReviewNotes(f.sources, "domain", "dkx-1", { note_ids: [notes[0].id, notes[1].id], inspection_id: inspection }, "alice");
+    assert.deepEqual(submitted.notes.filter(note => note.status === "submitted").map(note => note.id), [notes[0].id, notes[1].id]);
+    assert.equal(submitted.notes[2].status, "open"); assert.equal(submitted.notes[3].status, "open");
+  } finally { f.cleanup(); }
+});
+
+for (const terminal of ["failed", "cancelled", "discarded"] as const) test(`领域 ${terminal} 批次只显式复制重试，保留原意见与批次历史`, () => {
+  const f = fixture(), inspection = randomUUID();
+  try {
+    saveKnowledgeReviewNote(f.sources, "domain", "dkx-1", { document_id: "rules", scope: "line", line: 2, quote: "第二行", context_before: "第一行", note: "补充失败条件", inspection_id: inspection }, "alice");
+    const saved = saveKnowledgeReviewNote(f.sources, "domain", "dkx-1", { document_id: "", scope: "study", note: "同步接口描述", inspection_id: inspection }, "bob");
+    const ids = saved.notes.map(note => note.id);
+    const first = applyKnowledgeReviewNotes(f.sources, "domain", "dkx-1", { note_ids: ids, inspection_id: inspection }, "alice");
+    const path = join(f.dataDir, "knowledge-review/domain/dkx-1.json"), original = readFileSync(path, "utf8");
+    f.domainJob.turns[0].status = terminal === "discarded" ? "done" : terminal;
+    if (terminal === "discarded") f.domainJob.turns[0].proposals.push({ status: "discarded", document: { id: "rules" } } as any);
+    const history = listKnowledgeReviewNotes(f.sources, "domain", "dkx-1");
+    assert.deepEqual(history.notes, first.notes); assert.equal(readFileSync(path, "utf8"), original);
+    assert.equal(history.submissions[first.turn_id!].retryable, true);
+    assert.throws(() => applyKnowledgeReviewNotes(f.sources, "domain", "dkx-1", { note_ids: ids }, "alice"), /已经提交/);
+    const run = f.sources.domain.run;
+    f.sources.domain.run = (id, input, operator) => {
+      const staged = JSON.parse(readFileSync(path, "utf8"));
+      assert.ok(input.review_note_ids!.every(id => staged.some((note: any) => note.id === id)), "真实 run 校验意见时新副本已可读取");
+      return run(id, input, operator);
+    };
+    const second = applyKnowledgeReviewNotes(f.sources, "domain", "dkx-1", { note_ids: ids, retry: true }, "reviewer");
+    assert.deepEqual(second.notes.slice(0, 2), first.notes, "原意见及提交人、时间和轮次都不覆盖");
+    const copies = second.notes.slice(2);
+    assert.equal(copies.length, 2); assert.equal(copies[0].inspection_id, copies[1].inspection_id); assert.notEqual(copies[0].inspection_id, inspection);
+    for (let index = 0; index < copies.length; index++) {
+      assert.notEqual(copies[index].id, ids[index]); assert.equal(copies[index].retry_of, ids[index]);
+      assert.equal(copies[index].note, first.notes[index].note); assert.equal(copies[index].quote, first.notes[index].quote);
+      assert.equal(copies[index].context_before, first.notes[index].context_before); assert.equal(copies[index].turn_id, second.turn_id);
+      assert.equal(copies[index].submitted_by, "reviewer"); assert.equal(copies[index].status, "submitted");
+    }
+    assert.deepEqual(f.domainJob.turns[1].review_note_ids, copies.map(note => note.id));
+    assert.equal(second.submissions[first.turn_id!].retryable, false);
+    assert.throws(() => applyKnowledgeReviewNotes(f.sources, "domain", "dkx-1", { note_ids: ids, retry: true }, "reviewer"), /不能重试/);
+    assert.equal(f.calls.length, 2);
+  } finally { f.cleanup(); }
+});
+
+test("旧 open 带提交轮次仍是历史意见，不能混入新检视；成功历史不能重试", () => {
+  const f = fixture();
+  try {
+    const saved = saveKnowledgeReviewNote(f.sources, "domain", "dkx-1", { document_id: "rules", scope: "document", note: "历史意见" }, "alice");
+    const first = applyKnowledgeReviewNotes(f.sources, "domain", "dkx-1", { note_ids: [saved.notes[0].id] }, "alice");
+    const path = join(f.dataDir, "knowledge-review/domain/dkx-1.json"), legacy = first.notes.map(note => ({ ...note, status: "open" }));
+    writeFileSync(path, JSON.stringify(legacy)); f.domainJob.turns[0].status = "done";
+    assert.deepEqual(listKnowledgeReviewNotes(f.sources, "domain", "dkx-1").notes, legacy);
+    assert.throws(() => applyKnowledgeReviewNotes(f.sources, "domain", "dkx-1", { note_ids: [saved.notes[0].id] }, "alice"), /已经提交/);
+    assert.throws(() => applyKnowledgeReviewNotes(f.sources, "domain", "dkx-1", { note_ids: [saved.notes[0].id], retry: true }, "alice"), /不能重试/);
+    f.domainJob.turns[0].status = "failed";
+    const retry = applyKnowledgeReviewNotes(f.sources, "domain", "dkx-1", { note_ids: [saved.notes[0].id], retry: true }, "alice");
+    assert.deepEqual(retry.notes[0], legacy[0]); assert.equal(retry.notes[1].retry_of, legacy[0].id);
+  } finally { f.cleanup(); }
+});
+
+test("旧未提交意见可显式复制到新轮次，原 open 记录不再可普通重复提交", () => {
+  const f = fixture();
+  try {
+    const saved = saveKnowledgeReviewNote(f.sources, "domain", "dkx-1", { document_id: "rules", scope: "document", note: "旧意见" }, "alice");
+    const result = applyKnowledgeReviewNotes(f.sources, "domain", "dkx-1", { note_ids: [saved.notes[0].id], retry: true }, "bob");
+    assert.deepEqual(result.notes[0], JSON.parse(JSON.stringify(saved.notes[0]))); assert.equal(result.notes[1].retry_of, saved.notes[0].id);
+    assert.ok(result.notes[1].inspection_id); assert.equal(result.notes[1].status, "submitted");
+    assert.throws(() => applyKnowledgeReviewNotes(f.sources, "domain", "dkx-1", { note_ids: [saved.notes[0].id] }, "alice"), /已生成重试批次/);
+  } finally { f.cleanup(); }
+});
+
+test("失败重试沿同源链追踪，活动、已成功或已处理的后代阻止再次重试旧批次", () => {
+  const f = fixture();
+  try {
+    const saved = saveKnowledgeReviewNote(f.sources, "domain", "dkx-1", { document_id: "rules", scope: "document", note: "核对边界" }, "alice");
+    const first = applyKnowledgeReviewNotes(f.sources, "domain", "dkx-1", { note_ids: [saved.notes[0].id] }, "alice"); f.domainJob.turns[0].status = "failed";
+    const second = applyKnowledgeReviewNotes(f.sources, "domain", "dkx-1", { note_ids: [first.notes[0].id], retry: true }, "alice"); f.domainJob.turns[1].status = "failed";
+    const third = applyKnowledgeReviewNotes(f.sources, "domain", "dkx-1", { note_ids: [second.notes[1].id], retry: true }, "alice");
+    assert.equal(third.notes[2].retry_of, second.notes[1].id);
+    for (const status of ["queued", "running", "paused", "done"] as const) {
+      f.domainJob.turns[2].status = status;
+      for (const note of third.notes) assert.throws(() => applyKnowledgeReviewNotes(f.sources, "domain", "dkx-1", { note_ids: [note.id], retry: true }, "alice"), /不能重试/);
+      const response = listKnowledgeReviewNotes(f.sources, "domain", "dkx-1");
+      assert.equal(response.submissions[first.turn_id!].retryable, false); assert.equal(response.submissions[second.turn_id!].retryable, false);
+    }
+    f.domainJob.turns[2].status = "failed";
+    resolveKnowledgeReviewNotes(f.sources, "domain", "dkx-1", { note_ids: [third.notes[2].id] }, "alice");
+    assert.throws(() => applyKnowledgeReviewNotes(f.sources, "domain", "dkx-1", { note_ids: [first.notes[0].id], retry: true }, "alice"), /不能重试/);
+    assert.equal(f.calls.length, 3);
+  } finally { f.cleanup(); }
+});
+
+test("重试不能混合失败批次；run 拒绝时回滚新副本并逐字保留原记录", () => {
+  const f = fixture();
+  try {
+    const ids: string[] = [];
+    for (const document_id of ["rules", "api"]) {
+      const saved = saveKnowledgeReviewNote(f.sources, "domain", "dkx-1", { document_id, scope: "document", note: "核对边界" }, "alice");
+      const id = saved.notes.at(-1)!.id; ids.push(id);
+      applyKnowledgeReviewNotes(f.sources, "domain", "dkx-1", { note_ids: [id] }, "alice"); f.domainJob.turns.at(-1)!.status = "failed";
+    }
+    assert.throws(() => applyKnowledgeReviewNotes(f.sources, "domain", "dkx-1", { note_ids: ids, retry: true }, "alice"), /同一批次/);
+    const path = join(f.dataDir, "knowledge-review/domain/dkx-1.json"), original = readFileSync(path, "utf8");
+    f.sources.domain.run = (_id, input) => {
+      const staged = JSON.parse(readFileSync(path, "utf8")); assert.equal(staged.length, 3);
+      assert.equal(staged[2].id, input.review_note_ids![0]); throw new Error("服务正在停止");
+    };
+    assert.throws(() => applyKnowledgeReviewNotes(f.sources, "domain", "dkx-1", { note_ids: [ids[0]], retry: true }, "alice"), /服务正在停止/);
+    assert.equal(readFileSync(path, "utf8"), original); assert.equal(f.domainJob.turns.length, 2);
+    assert.equal(listKnowledgeReviewNotes(f.sources, "domain", "dkx-1").notes.length, 2);
+  } finally { f.cleanup(); }
+});
+
+test("回合已保存但批注提交标记尚未落盘，重启按精确意见编号恢复且不重复提交", () => {
+  const f = fixture();
+  try {
+    const saved = saveKnowledgeReviewNote(f.sources, "domain", "dkx-1", { document_id: "rules", scope: "document", note: "核对边界" }, "alice");
+    const first = applyKnowledgeReviewNotes(f.sources, "domain", "dkx-1", { note_ids: [saved.notes[0].id] }, "alice");
+    f.domainJob.turns[0].status = "failed";
+    const clone = { ...saved.notes[0], id: randomUUID(), retry_of: saved.notes[0].id, inspection_id: randomUUID(), status: "open" as const };
+    const untouched = { ...saved.notes[0], id: randomUUID(), note: "另一条尚未提交的意见" };
+    const path = join(f.dataDir, "knowledge-review/domain/dkx-1.json");
+    writeFileSync(path, JSON.stringify([...first.notes, clone, untouched]));
+    f.domainJob.turns.push({ ...f.domainJob.turns[0], id: "interrupted-submit", status: "running", review_note_ids: [clone.id], operator: "reviewer" });
+    assert.throws(() => applyKnowledgeReviewNotes(f.sources, "domain", "dkx-1", { note_ids: [clone.id] }, "alice"), /已经提交/);
+    const restored = listKnowledgeReviewNotes({ ...f.sources }, "domain", "dkx-1");
+    assert.deepEqual(restored.notes[0], first.notes[0]); assert.deepEqual(restored.notes[2], JSON.parse(JSON.stringify(untouched)));
+    assert.equal(restored.notes[1].status, "submitted"); assert.equal(restored.notes[1].turn_id, "interrupted-submit");
+    assert.equal(restored.notes[1].submitted_by, "reviewer"); assert.equal(restored.notes[1].retry_of, first.notes[0].id);
+    assert.equal(restored.submissions[first.turn_id!].retryable, false);
+    assert.throws(() => applyKnowledgeReviewNotes(f.sources, "domain", "dkx-1", { note_ids: [first.notes[0].id], retry: true }, "alice"), /不能重试/);
+    assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), restored.notes); assert.equal(f.calls.length, 1);
   } finally { f.cleanup(); }
 });
