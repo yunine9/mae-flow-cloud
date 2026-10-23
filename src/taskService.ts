@@ -1,3 +1,5 @@
+import { storeTaskAttachment, taskAttachment, taskAttachmentContext, materializeTaskAttachments } from "./taskAttachments.ts";
+import type { IncomingMessage } from "node:http";
 import { resolveBusinessModuleId, resolveBusinessModuleRef } from "./businessModuleIdentity.ts";
 import { resolveModuleKnowledgeLocation } from "./businessModuleKnowledge.ts";
 import { KnowledgeTaskCapacity } from "./knowledgeTaskCapacity.ts";
@@ -3033,6 +3035,26 @@ export class TaskService {
   storedTaskSummary(id: string): Readonly<TaskSummary> | undefined {
     const summary = this.tasks.get(id)?.summary;
     return summary ? { ...summary } : undefined;
+  }
+
+  async uploadConversationAttachment(id: string, request: IncomingMessage, name: string) {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    if (["completed", "canceled"].includes(task.summary.status)) throw new TaskControlError("任务已结束，不能上传附件");
+    return storeTaskAttachment(task.summary.workspace, task.cwd, request, name);
+  }
+
+  conversationAttachment(id: string, path: string) {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    return taskAttachment(task.summary.workspace, path);
+  }
+
+  withConversationAttachments(id: string, text: string, paths: unknown): string {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    try { return taskAttachmentContext(task.summary.workspace, task.cwd, id, text, paths); }
+    catch (error) { throw new TaskControlError(String((error as Error).message)); }
   }
 
   /** 批注附图落盘:任务目录是真相,同时铺进 Agent 工作区供 inspect_image 读。 */
@@ -13911,6 +13933,7 @@ export class TaskService {
         materializeRequirementSources(
           workspace, cwd, task.summary.requirement_document);
         // 批注附图与需求图片同命:现场重建后 Agent 工作区里得有(旁路)。
+        materializeTaskAttachments(workspace, cwd);
         try { materializeReviewAssets(workspace, cwd); } catch { /* 图缺了页面仍能提示 */ }
         requirementPath = materializeRequirementDocument(
           cwd, task.summary.requirement, task.summary.requirement_document);
@@ -13988,6 +14011,7 @@ export class TaskService {
         materializeRequirementSources(
           workspace, cwd, task.summary.requirement_document);
         // 批注附图与需求图片同命:现场重建后 Agent 工作区里得有(旁路)。
+        materializeTaskAttachments(workspace, cwd);
         try { materializeReviewAssets(workspace, cwd); } catch { /* 图缺了页面仍能提示 */ }
         requirementPath = materializeRequirementDocument(
           cwd, task.summary.requirement, task.summary.requirement_document,

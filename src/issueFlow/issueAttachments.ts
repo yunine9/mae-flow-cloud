@@ -21,19 +21,12 @@
  * staging 全局共享(content-addressed,哈希去重);无主文件不做 GC
  * (与截图 staging 同现状,已知欠账)。工作区副本按会话隔离。
  */
-import { createHash } from "node:crypto";
 import {
   copyFileSync,
-  createWriteStream,
   existsSync,
   mkdirSync,
-  renameSync,
-  unlinkSync,
 } from "node:fs";
-import type { IncomingMessage } from "node:http";
 import { join, resolve, sep } from "node:path";
-import { pipeline } from "node:stream/promises";
-import { Transform } from "node:stream";
 
 /** 单个附件上限(日志/压缩包常见体积;上传是流式的,超限中途掐断,
  * 服务端不为它付整包内存)。 */
@@ -48,62 +41,14 @@ export const ISSUE_ATTACHMENT_DIR = "attachments";
 /** 原始文件名 → 落盘扩展名:取最后一个点后的字母数字段(≤12 位)小写
  * 保留(.tar.gz 只留 gz,可读性够用);没有或不像就退 bin。扩展名只为
  * 人眼可读,AI 按内容读文件,不靠它判定类型。 */
-export function attachmentExtension(filename: string | undefined): string {
-  const base = (filename ?? "").split(/[\\/]/).pop() ?? "";
-  const dot = base.lastIndexOf(".");
-  const ext = dot >= 0 ? base.slice(dot + 1).toLowerCase() : "";
-  return /^[a-z0-9]{1,12}$/.test(ext) ? ext : "bin";
-}
+export { attachmentExtension } from "../attachmentUpload.ts";
 
 /**
  * 把上传请求体流式落 staging,返回工作区相对路径引用(进 description)。
  * content-addressed:同内容只存一份(哈希同名,已存在就丢弃本次落盘)。
  * 超上限中途拒绝并掐断请求,staging 不留残件。
  */
-export async function stageIssueAttachmentStream(
-  request: IncomingMessage,
-  input: { dataDir: string; filename?: string; maxBytes?: number },
-): Promise<{ path: string; bytes: number }> {
-  const maxBytes = input.maxBytes ?? ISSUE_ATTACHMENT_MAX_BYTES;
-  const ext = attachmentExtension(input.filename);
-  const dir = join(input.dataDir, STAGING_DIR);
-  mkdirSync(dir, { recursive: true });
-  const hash = createHash("sha256");
-  let bytes = 0;
-  const tmp = join(dir,
-    `upload-${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`);
-  const sink = createWriteStream(tmp);
-  const countAndHash = new Transform({
-    transform(chunk: Buffer, _enc, callback) {
-      bytes += chunk.length;
-      if (bytes > maxBytes) {
-        // 先掐请求源再拒绝:超限的大包体续传没有意义,流尽早停。
-        request.destroy();
-        callback(new Error(
-          `附件超过 ${Math.round(ISSUE_ATTACHMENT_MAX_BYTES / 1024 / 1024)}MB 上限`));
-        return;
-      }
-      hash.update(chunk);
-      callback(null, chunk);
-    },
-  });
-  try {
-    await pipeline(request, countAndHash, sink);
-  } catch (error) {
-    try { unlinkSync(tmp); } catch { /* 已清理即达目的 */ }
-    throw error;
-  }
-  const filename = `${hash.digest("hex").slice(0, 16)}.${ext}`;
-  const target = join(dir, filename);
-  try {
-    if (existsSync(target)) unlinkSync(tmp);
-    else renameSync(tmp, target);
-  } catch (error) {
-    try { unlinkSync(tmp); } catch { /* 已清理即达目的 */ }
-    throw error;
-  }
-  return { path: `${ISSUE_ATTACHMENT_DIR}/${filename}`, bytes };
-}
+export { stageAttachmentStream as stageIssueAttachmentStream } from "../attachmentUpload.ts";
 
 /** 校验引用形态:必须是 attachments/<hex16>.<ext>,不含分隔符或 ..
  * 段(路径穿越拒之门外)。返回 { hash, ext } 或 undefined。 */

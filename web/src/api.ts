@@ -2308,6 +2308,15 @@ export async function previewRequirementMaterials(
   return parseJson(response);
 }
 
+export interface TaskAttachment { path: string; name: string; bytes: number }
+export async function uploadTaskAttachment(taskId: string, file: File): Promise<TaskAttachment> {
+  const response = await fetch(`/tasks/${encodeURIComponent(taskId)}/attachments?name=${encodeURIComponent(file.name)}`, {
+    method: "POST", headers: { "content-type": "application/octet-stream" }, body: file,
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return parseJson(response);
+}
+
 /** 提交决定。结构化选项与自由说明分开，服务端统一查询未闭环批注。 */
 export async function decide(
   taskId: string,
@@ -2437,12 +2446,14 @@ export async function interruptTask(
   taskId: string,
   text: string,
   references?: SteerReference[],
+  attachments?: TaskAttachment[],
 ): Promise<{ error?: string }> {
   const response = await fetch(`/tasks/${taskId}/interrupt`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       text,
+      attachments: attachments?.map(file => file.path),
       ...(references?.length
         ? { references: references.map((item) => ({
             kind: item.kind,

@@ -1,3 +1,4 @@
+import { TaskAttachmentMessage } from "./TaskAttachmentMessage";
 import { feedbackStatusLabel, feedbackSummary } from "./feedbackPresentation";
 import { DeliveryFileList } from "./DeliveryFileList";
 /**
@@ -686,7 +687,7 @@ export function ConversationStream({
               : item.deferred === "mission" ? "任务启动时送达" : "已接收 · 待读取"}
           </em>,
           children: <>
-            <p className={CONV.answer}>{item.text}</p>
+            <p className={CONV.answer}><TaskAttachmentMessage text={item.text} /></p>
             {!!item.references?.length && (
               <div className={CONV.refs}>{item.references.map((label) => (
                 <span className={CONV.refChip} key={label}>@ {label}</span>

@@ -91,6 +91,7 @@ import { readArchitectureStory } from "./storyArchitectureSource.ts";
 import { isMainTaskDelivery } from "./requirementDecisionContract.ts";
 import { renderArchify, ARCHIFY_COMMIT } from "./archifyRender.ts";
 import {
+  createReadStream,
   closeSync,
   existsSync,
   openSync,
@@ -2485,6 +2486,25 @@ export function createTaskServer(
             return json(response, 404, { error: humanError(error) });
           }
         }
+        if (parts.length === 3 && parts[2] === "attachments") {
+          const target = storedTask(service, id);
+          if (!target) return json(response, 404, { error: "任务不存在" });
+          if (request.method === "POST") {
+            if (!canCollaborate(viewer, target, !!options.auth)) return json(response, 403, { error: "只有任务责任人或受邀协作者可以上传附件" });
+            try {
+              return json(response, 201, await service.uploadConversationAttachment(id, request, url.searchParams.get("name") ?? "attachment.bin"));
+            } catch (error) { return json(response, 400, { error: humanError(error) }); }
+          }
+          if (request.method === "GET") {
+            try {
+              const { meta, file } = service.conversationAttachment(id, url.searchParams.get("path") ?? "");
+              response.writeHead(200, { "content-type": "application/octet-stream", "content-length": meta.bytes,
+                "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(meta.name)}`, "cache-control": "no-store" });
+              createReadStream(file).on("error", () => response.destroy()).pipe(response);
+              return;
+            } catch (error) { return json(response, 404, { error: humanError(error) }); }
+          }
+        }
         // 批注附图:上传落盘拿路径,再随批注引用;读取只认资产模块的路径形状。
         if (request.method === "POST" && parts.length === 3
             && parts[2] === "annotation-assets") {
@@ -3026,7 +3046,7 @@ export function createTaskServer(
               }))
             : undefined;
           const task = await service.interrupt(
-            id, String(body.text ?? ""), viewer?.username, references);
+            id, service.withConversationAttachments(id, String(body.text ?? ""), body.attachments), viewer?.username, references);
           return json(response, 200, task);
         }
         if (request.method === "POST" && parts[2] === "cross-repository-update") {

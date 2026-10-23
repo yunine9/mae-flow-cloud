@@ -1,3 +1,5 @@
+import { TaskAttachments } from "./TaskAttachments";
+import type { TaskAttachment } from "./api";
 /**
  * 右栏唯一的输入框。
  *
@@ -146,6 +148,9 @@ export function Composer({
       setSyncBusy(false);
     }
   }
+  const [logAttachments, setLogAttachments] = useState<TaskAttachment[]>([]);
+  const [attachmentBusy, setAttachmentBusy] = useState(false);
+  useEffect(() => { setLogAttachments([]); }, [task.id]);
   const [steerText, setSteerText] = useState("");
   const [assistantText, setAssistantText] = useState("");
   const [steerBusy, setSteerBusy] = useState(false);
@@ -223,20 +228,21 @@ export function Composer({
 
   async function sendSteer() {
     const message = steerText.trim();
-    if ((!message && !refs.length) || steerBusy) return;
+    if ((!message && !refs.length && !logAttachments.length) || steerBusy || attachmentBusy) return;
     setSteerBusy(true);
     setError("");
-    const result = await interruptTask(task.id, message, refs);
-    setSteerBusy(false);
-    if (result.error) {
-      setError(result.error);
-      return;
-    }
-    setSteerText("");
-    setRefs([]);
-    setRefPickerOpen(false);
-    setSent(true);
-    onChangedRef.current?.();
+    try {
+      const result = await interruptTask(task.id, message, refs, logAttachments);
+      if (result.error) { setError(result.error); return; }
+      setSteerText("");
+      setLogAttachments([]);
+      setRefs([]);
+      setRefPickerOpen(false);
+      setSent(true);
+      onChangedRef.current?.();
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally { setSteerBusy(false); }
   }
 
   function toggleRefPicker() {
@@ -509,7 +515,8 @@ export function Composer({
 
       {!showAssistant && !showSync && !decisionDock && (
         <>
-          <Textarea ref={steerInput} id={`steer-${task.id}`} className="min-h-13 max-h-40 resize-y overflow-y-auto bg-surface"
+          <div className="relative">
+          <Textarea ref={steerInput} id={`steer-${task.id}`} className="pr-12 min-h-13 max-h-40 resize-y overflow-y-auto bg-surface"
             value={steerText}
             disabled={(!canSteer && !(refs.length > 0 && canSteerKnowledge))
               || steerBusy}
@@ -532,6 +539,9 @@ export function Composer({
                 void sendSteer();
               }
             }} />
+          <TaskAttachments taskId={task.id} files={logAttachments} onChange={setLogAttachments}
+            onBusy={setAttachmentBusy} disabled={!canSteer || steerBusy} />
+          </div>
           <div className="ws-composer-row">
             <div className="ws-composer-left">
               {canSteerKnowledge && <Button type="button" variant="outline" size="xs"
@@ -554,8 +564,8 @@ export function Composer({
               </span>
             </div>
             <Button type="button" size="lg"
-              disabled={steerBusy
-                || (!steerText.trim() && !refs.length)
+              disabled={steerBusy || attachmentBusy
+                || (!steerText.trim() && !refs.length && !logAttachments.length)
                 || (refs.length ? !canSteerKnowledge : !canSteer)}
               onClick={() => void sendSteer()}>
               {steerBusy ? "发送中…" : "发送"}
