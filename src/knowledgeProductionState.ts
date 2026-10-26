@@ -89,6 +89,8 @@ function projectDomainCandidates(job: DomainKnowledgeJob): KnowledgeProductionVi
   const group = working || archiving ? "running" : failed || anyMerged && !allCurrentMerged ? "attention" : allCurrentMerged || opened || noChanges ? "completed" : "attention";
   const docs = job.documents.map(document => {
     const { pending, proposal_problem } = documentProposalState(job, document);
+    // save 候选表示保留文稿；旧删除标记仍留在基线供确认与历史对照。
+    const deleted = pending && !proposal_problem ? false : document.deleted;
     const target = [job.knowledge_target, ...job.repositories].find(target => target.id === document.target_id);
     const publication = job.publications.find(publication => {
       const archived = [job.knowledge_target, ...job.repositories].find(candidate => candidate.id === publication.target_id);
@@ -97,7 +99,7 @@ function projectDomainCandidates(job: DomainKnowledgeJob): KnowledgeProductionVi
     const submitted = publication?.state === "opened" && publication.documents.some(old => old.id === document.id && old.revision === document.revision
       && old.content === document.content && old.path === (document.archive_path ?? document.path) && !!old.deleted === !!document.deleted);
     return { id: document.id, changed: publication?.mr_state !== "merged" && (!!pending || !submitted), status_label: publication?.mr_state === "merged" ? "已合入"
-      : submitted && !pending ? "MR 已提交" : publication?.state === "failed" ? "MR 创建失败" : document.deleted ? "待删除" : "任务文稿", knowledge_document_id: document.knowledge_document_id, proposal_problem };
+      : submitted && !pending ? "MR 已提交" : publication?.state === "failed" ? "MR 创建失败" : deleted ? "待删除" : "任务文稿", knowledge_document_id: document.knowledge_document_id, proposal_problem };
   });
   const statePublication = (publication: DomainPublication): KnowledgePublicationState => ({ key: `${publication.target_id}:${publication.branch}`,
     target: [job.knowledge_target, ...job.repositories].find(target => target.id === publication.target_id)?.name ?? publication.target_id,

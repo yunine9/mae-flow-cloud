@@ -18,7 +18,7 @@ export function domainProposalProblem(job: DomainKnowledgeJob, document: DomainD
 /** 未完成或已冲突的修改不替换正文预览。 */
 export function domainReviewDocument(job: DomainKnowledgeJob, document: DomainDocument): DomainDocument {
   const pending = latestDomainProposal(job, document.id);
-  return pending && !domainProposalProblem(job, document) ? { ...document, ...pending.proposal.document } : document;
+  return pending && !domainProposalProblem(job, document) ? { ...document, ...pending.proposal.document, deleted: false } : document;
 }
 
 /** 文件导航、检索和正文使用同一份可检视候选，发布基线仍保留在 job.documents。 */

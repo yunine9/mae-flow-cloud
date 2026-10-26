@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from "../web/node_modules/react-dom/server.js";
 import { createServer } from "../web/node_modules/vite/dist/node/index.js";
 import type { DomainKnowledgeJob } from "../src/domainKnowledgeTypes.ts";
 import { projectKnowledgeProduction } from "../src/knowledgeProductionState.ts";
-import { domainPublicationInput } from "../web/src/domainKnowledgePublication.ts";
+import { domainPublicationInput, domainReviewDocument } from "../web/src/domainKnowledgePublication.ts";
 
 const vite = await createServer({ root: "web", server: { middlewareMode: true }, appType: "custom", logLevel: "silent" });
 const { DomainKnowledgeDeletionNotice } = await vite.ssrLoadModule("/src/DomainKnowledgeExtraction.tsx");
@@ -70,4 +70,24 @@ test("正文与删除都保留在任务中，MR 合入前正式知识不改变",
   assert.match(job.production!.archive.message, /创建 MR 后仍可在原任务修改/);
   assert.doesNotMatch(job.production!.archive.title, /平台立即可读/);
   assert.equal(renderToStaticMarkup(React.createElement(DomainKnowledgeDeletionNotice, { pending: false })), "");
+});
+
+
+for (const state of ["done", "running", "failed", "conflict"] as const) test(`历史删除后重新保存候选：${state}，正文、目录与删除状态一致`, () => {
+  const job = fixture();
+  const original = structuredClone(job.documents[0]);
+  job.turns = [{ id: "restore", mode: "revise", document_ids: [original.id], message: "保留并补充正文", operator: "reviewer", created_at: "2026-10-26T00:00:00Z",
+    status: state === "conflict" ? "done" : state, proposals: [{ status: "pending", base_revision: state === "conflict" ? original.revision - 1 : original.revision,
+      document: { id: original.id, title: "保留的规则", path: "docs/rules.md", target_id: original.target_id, layer: original.layer, content: "# 保留的规则", sources: "当前证据" } }] }];
+  job.production = projectKnowledgeProduction({ kind: "domain", record: job });
+  const preview = domainReviewDocument(job, job.documents[0]);
+  const restored = state === "done";
+  assert.equal(preview.deleted, !restored);
+  assert.equal(job.production.documents[0].status_label, restored ? "任务文稿" : "待删除");
+  assert.equal(preview.content, restored ? "# 保留的规则" : original.content);
+  const html = tree(job);
+  assert.match(html, restored ? /发布 docs\/rules.md/ : /确认删除 domains\/old-rules.md/);
+  const notice = renderToStaticMarkup(React.createElement(DomainKnowledgeDeletionNotice, { deleted: preview.deleted, pending: true }));
+  assert.equal(notice.includes("知识文稿待删除"), !restored);
+  assert.deepEqual(job.documents[0], original, "预览不提前接受候选或覆盖历史删除基线");
 });
