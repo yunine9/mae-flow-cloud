@@ -1,4 +1,5 @@
 import { SessionCompaction } from "./sessionCompaction.ts";
+import { saveAnalysisContextSnapshot } from "./analysisContextSnapshot.ts";
 export { looksLikeContextOverflow, compactionInstructions } from "./sessionCompaction.ts";
 import { GIT_COMMIT_IDENTITY_GUIDANCE } from "./gitCommitIdentity.ts";
 import { COMPONENT_ANALYST, COMPONENT_PLANNING_GUIDANCE, childKnowledgeTools, componentAnalysisPrompt, type ComponentAnalysisContext } from "./componentKnowledgePlanning.ts";
@@ -444,6 +445,8 @@ export interface CloudSessionOptions {
   /** 专用图片理解模型。只给主开发/修复会话配置；子 Agent 经同一
    * openSession 继承，预热与 prepush 专项会话不隐式获得此能力。 */
   vision?: VisionCapabilityConfig;
+  /** 只读分析会话的图片仍位于原任务目录；不扩大其他文件工具的权限。 */
+  visionWorkspace?: string;
   log?: (message: string) => void;
 }
 
@@ -1341,7 +1344,7 @@ export class CloudSession {
     const visionTools = this.options.vision
       ? [createInspectImageTool({
           runtime: this.modelRuntime,
-          workspace,
+          workspace: this.options.visionWorkspace ?? workspace,
           config: this.options.vision,
           state: this.visionState,
           sessionId: config.sessionId,
@@ -1369,6 +1372,17 @@ export class CloudSession {
       ] as any,
       sessionManager: checkpoint.manager,
     });
+    try {
+      void saveAnalysisContextSnapshot({
+        eventLogPath: this.options.eventLog.path,
+        taskId: this.options.taskId, sessionId: config.sessionId,
+        provider, model, session,
+        agentsFiles: loader.getAgentsFiles?.().agentsFiles,
+        step: this.options.currentStep?.(), log: this.options.log,
+      });
+    } catch {
+      try { this.options.log?.("分析上下文快照输入读取失败；任务继续执行。"); } catch { /* 观测旁路不能阻止会话启动 */ }
+    }
     const compaction = new SessionCompaction(session, this.modelRuntime!, {
       anchor: () => this.options.compactAnchor?.() ?? "围绕当前用户需求继续工作",
       log: (message) => this.options.log?.(`任务 ${this.options.taskId} 会话 ${config.sessionId} ${message}`),

@@ -42,12 +42,14 @@ export interface DeliveryAnalysisRow {
   mr_url?: string;
   metric?: DeliveryCodeMetric;
   unavailable?: string;
+  improvement?: import("./deliveryImprovementTypes.ts").ImprovementView;
 }
 export interface DeliveryTaskTokens {
   id: string; parent_id?: string;
   usage?: { input_tokens: number; output_tokens: number; total_tokens: number };
 }
 export interface DeliveryAnalysisReport {
+  improvement_policy?: import("./deliveryImprovementTypes.ts").ImprovementPolicy & { can_configure?: boolean };
   task_tokens?: DeliveryTaskTokens[];
   generated_at: string;
   rows: DeliveryAnalysisRow[];

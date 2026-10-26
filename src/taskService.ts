@@ -20,6 +20,8 @@ import { assertRepositoryCloneAddress } from "./repositoryAddress.ts";
 import { applyGitCommitIdentity, gitCommitIdentityConfigs } from "./gitCommitIdentity.ts";
 import { DeliveryExperiences } from "./deliveryExperience.ts";
 import { DeliverySummaries, deliveryReportView, type DeliveryReportView } from "./deliverySummary.ts";
+import { DeliveryImprovements, initializeImprovementPolicy, readImprovementPolicy, updateImprovementPolicy } from "./deliveryImprovement.ts";
+import { memoryFeedbackEvidence } from "./memoryFeedback.ts";
 import { progressAdvanced, taskProgressTimestamp } from "./taskProgressTime.ts";
 import type { ComponentRepository } from "./componentRepositories.ts";
 import { importExternalReviews, importStoredExternalReviews, notifyExternalReviews } from "./externalReviewInbox.ts";
@@ -1973,6 +1975,20 @@ export class TaskService {
     notifier: this.options.notifier, taskLink: personalTaskLink(this.notificationLinkBase(), task.summary.luban_account ?? "", task.summary.id),
     model: this.sessionModels(task), onTokenUsage: sample => this.recordTaskTokenUsage(task, sample), log: this.options.log, onPublished: () => this.persist(task),
   }));
+  private readonly deliveryImprovements = new DeliveryImprovements<TaskState>(task => ({
+    dataDir: this.options.dataDir, kernelRoot: this.options.host?.kernelRoot,
+    model: this.sessionModels(task), onTokenUsage: sample => this.recordTaskTokenUsage(task, sample), log: this.options.log,
+    vision: this.taskVision(task), knowledgeHistory: () => memoryFeedbackEvidence(task.summary.workspace, this.memories()),
+    platformContext: () => ({ runtime_overrides: this.options.settings?.runtime(), execution_policy: this.options.settings?.executionPolicy(),
+      warmup_enabled: this.options.warmup?.enabled === true, prepush_enabled: this.options.prepush?.enabled === true,
+      prepush_build_slots: this.options.prepush?.buildSlots,
+      repair_rounds: this.options.delivery?.repairRounds, poll_interval_ms: this.options.delivery?.pollIntervalMs,
+      poll_timeout_ms: this.options.delivery?.pollTimeoutMs, continuous_review: this.options.host?.continuousReview }),
+    related: [...this.tasks.values()].filter(other => other.summary.id === task.summary.parent_task_id
+      || other.summary.parent_task_id === task.summary.id
+      || (!!task.summary.parent_task_id && other.summary.parent_task_id === task.summary.parent_task_id)
+      || task.summary.blocked_by?.includes(other.summary.id)),
+  }));
   readonly overallStories = new OverallStoryCoordinator<TaskState>({
     task: (id) => this.tasks.get(id),
     log: (message) => this.options.log?.(message),
@@ -1996,6 +2012,8 @@ export class TaskService {
   });
 
   constructor(readonly options: TaskServiceOptions) {
+    // 只从本次启用之后的完成交付开始自动分析，不批量补跑旧任务。
+    try { initializeImprovementPolicy(options.dataDir); } catch (error) { options.log?.(`自动交付分析设置未保存：${String(error)}`); }
     this.knowledgeTaskCapacity.register(() => this.extractionRunning.size, () => this.pumpSkillExtraction());
     this.reviews = new ReviewStore(join(options.dataDir, "reviews.jsonl"),
       (id) => this.tasks.get(id)?.summary.status === "canceled");
@@ -2414,7 +2432,7 @@ export class TaskService {
         taskId: string;
         role: string;
         work: Promise<unknown>;
-      }> = [{ taskId: "delivery-experience", role: "交付经验", work: this.deliveryExperiences.shutdown() }, { taskId: "delivery-summary", role: "交付报告", work: this.deliverySummaries.shutdown() }, { taskId: "overall-story", role: "整体 Story", work: this.overallStories.shutdown() },
+      }> = [{ taskId: "delivery-improvement", role: "交付改进分析", work: this.deliveryImprovements.shutdown() }, { taskId: "delivery-experience", role: "交付经验", work: this.deliveryExperiences.shutdown() }, { taskId: "delivery-summary", role: "交付报告", work: this.deliverySummaries.shutdown() }, { taskId: "overall-story", role: "整体 Story", work: this.overallStories.shutdown() },
         { taskId: "domain-extraction", role: "领域知识萃取", work: this.domainKnowledgeExtraction?.shutdown() ?? Promise.resolve() },
         { taskId: "component-research", role: "组件知识萃取", work: this.componentResearch?.shutdown() ?? Promise.resolve() },
         { taskId: "knowledge-answers", role: "知识问答", work: this.knowledgeAnswers?.shutdown() ?? Promise.resolve() },
@@ -2691,12 +2709,54 @@ export class TaskService {
     return this.project(task);
   }
 
-  deliveryAnalysis(retry = false) {
+  deliveryAnalysis(retry = false): ReturnType<typeof buildDeliveryAnalysis> {
     for (const task of this.tasks.values()) if (task.summary.delivery?.git_push?.sha)
       observeDeliveryCode(task.summary, task.cwd, task.summary.delivery.git_push.sha, retry);
     const summaries = [...this.tasks.values()].map(task => ({ ...task.summary, token_usage: tokenUsageSnapshot(task.tokenUsage) }));
     const profiles = resolveRepositoryProfiles(this.options.dataDir, [...new Set(summaries.map(t => t.repo_url).filter((r): r is string => !!r))]).flatMap(r => r.profile ? [r.profile] : []);
-    return buildDeliveryAnalysis(summaries.map(summary => this.moduleOwnership(summary)), listBusinessModules(this.options.dataDir).modules, profiles);
+    for (const task of this.tasks.values()) this.considerDeliveryImprovement(task);
+    const report = buildDeliveryAnalysis(summaries.map(summary => this.moduleOwnership(summary)), listBusinessModules(this.options.dataDir).modules, profiles);
+    for (const row of report.rows) {
+      const task = this.tasks.get(row.id)!;
+      row.improvement = this.deliveryImprovements.view({ ...task.summary,
+        delivery_generation: row.delivery_id === "initial" ? undefined : row.delivery_id,
+        delivery: { ...task.summary.delivery, git_push: { ...task.summary.delivery?.git_push, sha: row.metric?.published_head ?? row.metric?.head ?? "" } } as TaskSummary["delivery"],
+      }).state;
+    }
+    return { ...report, improvement_policy: readImprovementPolicy(this.options.dataDir) };
+  }
+
+  improvementPolicy(input?: { enabled?: unknown; threshold_percent?: unknown }) {
+    return input ? updateImprovementPolicy(this.options.dataDir, input) : readImprovementPolicy(this.options.dataDir);
+  }
+
+  private improvementOwner(id: string, deliveryId?: string): TaskState {
+    const task = this.tasks.get(id);
+    if (!task || task.summary.origin === "issue") throw new TaskControlError("需求任务不存在");
+    if (!deliveryId || deliveryId === (task.summary.delivery_generation ?? "initial")) return task;
+    const previous = task.summary.delivery_history?.find(h => h.id === deliveryId);
+    if (!previous) throw new TaskControlError("指定交付记录不存在");
+    const original = JSON.parse(readFileSync(join(task.summary.workspace, "delivery-history", previous.archive, "summary.json"), "utf8"));
+    return { ...task, summary: { ...original, workspace: task.summary.workspace,
+      delivery_generation: previous.id === "initial" ? undefined : previous.id,
+      delivery_history: task.summary.delivery_history } };
+  }
+
+  deliveryImprovement(id: string, deliveryId?: string, start = false) {
+    const task = this.improvementOwner(id, deliveryId);
+    if (start && (continuationPending(task.summary) || task.summary.status === "canceled"))
+      throw new TaskControlError("任务正在准备继续修改或已经取消，暂时不能启动分析");
+    return start ? this.deliveryImprovements.start(task) : this.deliveryImprovements.view(task.summary, true);
+  }
+
+  deliveryImprovementEvidence(id: string, deliveryId: string | undefined, reference: string) {
+    return this.deliveryImprovements.evidence(this.improvementOwner(id, deliveryId).summary, reference);
+  }
+
+  private considerDeliveryImprovement(task: TaskState) {
+    if (!readImprovementPolicy(this.options.dataDir).enabled) return;
+    try { this.deliveryImprovements.consider(task); }
+    catch (error) { this.options.log?.(`交付改进分析未启动：${String(error)}`); }
   }
 
   /** 团队知识运营读模型。独立接口按需计算，避免把所有任务足迹塞进
@@ -8333,6 +8393,7 @@ export class TaskService {
     this.writeTaskState(task, strict);
     this.deliveryExperiences.start(task);
     this.deliverySummaries.start(task);
+    this.considerDeliveryImprovement(task);
     if (task.summary.status === "canceled") this.reviews.cancelTask(task.summary.id);
     // 文件先落袋(它才是真相),投影旁路跟进;失败由投影自己 fail-open。
     this.bypass(task, "投影 upsert",
@@ -9035,7 +9096,7 @@ export class TaskService {
         now,
         retentionDays,
         // 状态是收口那一刻写的,清理和收尾可能正擦肩而过:句柄还在就不碰。
-        busy: !!task.driver || !!task.container || !!task.containerReopen || this.deliverySummaries.isRunning(summary.id),
+        busy: !!task.driver || !!task.container || !!task.containerReopen || this.deliverySummaries.isRunning(summary.id) || this.deliveryImprovements.isRunning(summary.id),
       });
       if (!verdict.reclaim) continue;
       try {
@@ -9433,7 +9494,7 @@ export class TaskService {
       task.summary.detail = "正在从最新基准准备继续修改，保留原目录与构建缓存";
       this.writeTaskState(task, true);
       this.removeFromQueue(id);
-      await Promise.all([this.deliverySummaries.stopTask(id), this.deliveryExperiences.stopTask(id), awaitTaskDeliveryAnalytics(previous)]);
+      await Promise.all([this.deliverySummaries.stopTask(id), this.deliveryExperiences.stopTask(id), this.deliveryImprovements.stopTask(id), awaitTaskDeliveryAnalytics(previous)]);
       const repo = task.summary.repo_url ?? this.effectiveDefaultRepo();
       if (!repo) throw new TaskControlError("任务没有配置代码仓");
       validateRepositoryAddress(repo);
@@ -9523,7 +9584,7 @@ export class TaskService {
         || task.prepushActive || task.assistantActive
         || task.mergeSettlement || task.evidenceRetryActive
         || task.repairEvidenceRetryActive
-        || task.deliveryRecoveryActive || task.reviewOutboxFlush) {
+        || task.deliveryRecoveryActive || task.reviewOutboxFlush || this.deliveryImprovements.isRunning(id)) {
       throw new TaskControlError(
         `任务 ${id} 仍有执行资源或后台收尾动作，暂不能从头重跑`,
       );
@@ -9656,7 +9717,7 @@ export class TaskService {
         || task.prepushActive || task.assistantActive
         || task.mergeSettlement || task.evidenceRetryActive
         || task.repairEvidenceRetryActive
-        || task.deliveryRecoveryActive || task.reviewOutboxFlush)) {
+        || task.deliveryRecoveryActive || task.reviewOutboxFlush || this.deliveryImprovements.isRunning(id))) {
       throw new TaskControlError(
         `任务 ${id} 仍有执行资源或后台收尾动作，拒绝彻底删除`,
       );
@@ -13096,7 +13157,7 @@ export class TaskService {
         `任务 ${id} 的子任务仍在推进，请先分别处理未完成的子任务`,
       );
     }
-    if (status === "canceled" && !task.driver && !task.container && !hasAuxiliarySessions(task)) {
+    if (status === "canceled" && !task.driver && !task.container && !hasAuxiliarySessions(task) && !this.deliveryImprovements.isRunning(id)) {
       return { ...task.summary };
     }
     if (status === "completed") {
@@ -13143,7 +13204,7 @@ export class TaskService {
     const prepushAbort = task.prepushAbort;
     prepushAbort?.abort();
     const cleanup = await Promise.allSettled([
-      Promise.all([driver?.abort(), abortAuxiliarySessions(task)]),
+      Promise.all([driver?.abort(), abortAuxiliarySessions(task), this.deliveryImprovements.stopTask(id)]),
       container?.stop() ?? Promise.resolve(),
     ]);
     if (cleanup[0].status === "fulfilled") {

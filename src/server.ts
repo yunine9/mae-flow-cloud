@@ -1155,7 +1155,7 @@ export function createTaskServer(
         url.pathname === "/history" || parts[0] === "tasks"
         || url.pathname === "/launch-knowledge-preview"
         || url.pathname === "/knowledge-insights"
-        || url.pathname === "/delivery-analytics"
+        || parts[0] === "delivery-analytics"
         || url.pathname.startsWith("/memory-insights")
         || parts[0] === "reviews" || parts[0] === "repository-skills"
         || parts[0] === "repositories"
@@ -1202,7 +1202,13 @@ export function createTaskServer(
         return json(response, 200, service.knowledgeInsights());
       }
       if (request.method === "GET" && url.pathname === "/delivery-analytics") {
-        return json(response, 200, service.deliveryAnalysis(url.searchParams.get("refresh") === "1"));
+        const report = service.deliveryAnalysis(url.searchParams.get("refresh") === "1");
+        return json(response, 200, report.improvement_policy ? { ...report, improvement_policy: { ...report.improvement_policy, can_configure: !options.auth || viewer?.role === "admin" } } : report);
+      }
+      if (request.method === "PUT" && url.pathname === "/delivery-analytics/improvement-policy") {
+        if (options.auth && viewer?.role !== "admin") return json(response, 403, { error: "只有管理员可以修改自动分析设置" });
+        try { return json(response, 200, service.improvementPolicy(await readBody(request))); }
+        catch (error) { return json(response, 400, { error: humanError(error) }); }
       }
       // 登录成员共同维护经验；修改只影响知识复用，不授予任务操作权限。
       if (parts[0] === "memory-insights") {
@@ -2867,6 +2873,22 @@ export function createTaskServer(
             return json(response, 200, service.withdrawTaskMemory(
               id, decodeURIComponent(parts[3]), viewer?.username ?? "本地用户"));
           }
+        }
+        if (parts[2] === "delivery-improvement" && parts.length === 4 && parts[3] === "evidence" && request.method === "GET") {
+          if (!storedTask(service, id)) return json(response, 404, { error: `任务 ${id} 不存在` });
+          response.setHeader("cache-control", "no-store");
+          try { return json(response, 200, service.deliveryImprovementEvidence(id, url.searchParams.get("delivery_id") ?? undefined, url.searchParams.get("ref") ?? "")); }
+          catch (error) { return json(response, 404, { error: humanError(error) }); }
+        }
+        if (parts[2] === "delivery-improvement" && parts.length === 3 && ["GET", "POST"].includes(request.method ?? "")) {
+          const target = storedTask(service, id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          if (request.method === "POST" && !canOperate(viewer, target.luban_account, !!options.auth))
+            return json(response, 403, { error: "只有任务责任人或管理员可以启动交付分析" });
+          response.setHeader("cache-control", "no-store");
+          try { return json(response, request.method === "POST" ? 202 : 200,
+            service.deliveryImprovement(id, url.searchParams.get("delivery_id") ?? undefined, request.method === "POST")); }
+          catch (error) { return json(response, 400, { error: humanError(error) }); }
         }
         if (request.method === "POST" && parts[2] === "delivery-report" && parts.length === 3) {
           const target = storedTask(service, id);
