@@ -116,7 +116,7 @@ export function normalizeKnowledgeAssetMetadata(input: {
   const modules = moduleIds(input.business_module_ids ?? []);
   const repositories = repositoryList(input.repositories ?? []);
   const technologies = normalizeKnowledgeLanguages(input.technologies ?? [])
-    .filter((item) => item !== "agnostic");
+    .filter(item => rawNature !== "business" || item !== "agnostic");
   if (rawNature === "business") {
     if (!modules.length) {
       throw new Error("业务知识必须至少选择一个归属业务模块");
@@ -153,8 +153,7 @@ export function readSkillKnowledgeMetadata(content: string): KnowledgeAssetMetad
   const declared = scalar(metadata, "knowledge_nature")
     ?? scalar(metadata, "skill_kind");
   const inferred = declared === "general" ? "unclassified"
-    : declared ?? ((technologies.length
-        || legacyLanguages.some((item) => item !== "agnostic"))
+    : declared ?? ((technologies.length || legacyLanguages.length)
       ? "engineering" : modules.length ? "business" : "unclassified");
   return normalizeKnowledgeAssetMetadata({
     nature: inferred,
@@ -245,6 +244,7 @@ export function knowledgeMatchesTask(metadata: KnowledgeAssetMetadata, context: 
       && !metadata.business_module_ids.some((id) =>
         context.businessModuleIds.includes(id))) return false;
   if (metadata.nature === "engineering" && metadata.technologies.length
+      && !metadata.technologies.includes("agnostic")
       && !metadata.technologies.some((item) =>
         context.technologies.includes(item))) return false;
   return true;

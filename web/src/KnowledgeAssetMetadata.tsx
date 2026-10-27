@@ -153,9 +153,9 @@ export function SkillMetadataEditor({ value, modules, onChange }: {
       <span className="grid gap-0.5"><strong className="text-sm
         text-foreground">适用技术栈（必选，可多选）</strong><small
         className="text-sm text-faint">
-        必须至少选择一种技术栈；清单统一在配置中心维护。</small></span>
+        不区分语言时选“通用”；具体技术栈在配置中心维护。</small></span>
       <KnowledgeLanguagePicker value={value.technologies}
-        includeAgnostic={false}
+        includeAgnostic
         onChange={(technologies) => onChange({ ...value, technologies })} />
       {!value.technologies.length && <p className="m-0 rounded-md
         bg-attention-soft p-2 text-sm/relaxed text-attention">

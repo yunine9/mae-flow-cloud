@@ -29,7 +29,7 @@ test("归档来源仓不能被误当业务适用仓，未归属知识仍可找�
 test("跨模块知识按明确适用模块出现，各目录按资产ID去重", () => {
   const doc = document("shared", { module_ids: ["alarm", "upgrade"], technologies: ["cpp"] });
   const result = projectKnowledgeModules({ documents: [doc, doc], businessModules: [module("alarm"), module("upgrade")], components: [] });
-  assert.deepEqual(result.modules.map(m => [m.key, m.documentCount]), [["business:alarm", 1], ["business:upgrade", 1]]);
+  assert.deepEqual(result.modules.filter(m => m.id !== "agnostic").map(m => [m.key, m.documentCount]), [["business:alarm", 1], ["business:upgrade", 1]]);
 });
 
 test("显式适用仓归入业务仓，组件知识直接列出而不按基础仓分组", () => {
@@ -62,8 +62,8 @@ test("停用知识保留可读，未知时间不推断陈旧或近期维护", ()
 
 test("已归档或已删除模块的旧知识不会被误分到工程语言", () => {
   const result = projectKnowledgeModules({ documents: [document("old", { module_ids: ["old"], technologies: ["cpp"] })], businessModules: [module("old", { status: "archived" })], components: [] });
-  assert.equal(result.modules.length, 1);
-  assert.equal(result.modules[0].key, "unassigned");
+  assert.equal(result.modules.filter(m => m.id !== "agnostic").length, 1);
+  assert.equal(result.modules.find(m => m.id !== "agnostic")!.key, "unassigned");
 });
 
 test("同一基础仓的组件按各自名称逐项保留；来源配置不产生额外目录或重复文稿", () => {
@@ -92,13 +92,13 @@ test("工程目录使用配置名称，改名不改变引用，删除后的知�
   const input = { documents, businessModules: [], components: [] };
   const before = projectKnowledgeModules({ ...input, technologyStacks: [{ id: "framework-x", name: "团队框架", enabled: true }] });
   const after = projectKnowledgeModules({ ...input, technologyStacks: [{ id: "framework-x", name: "团队新框架", enabled: false }] });
-  assert.equal(before.modules[0].name, "团队框架");
-  assert.equal(after.modules[0].name, "团队新框架");
-  assert.equal(after.modules[0].key, before.modules[0].key);
+  assert.equal(before.modules.find(m => m.id === "framework-x")!.name, "团队框架");
+  assert.equal(after.modules.find(m => m.id === "framework-x")!.name, "团队新框架");
+  assert.equal(after.modules.find(m => m.id === "framework-x")!.key, before.modules.find(m => m.id === "framework-x")!.key);
   const removed = projectKnowledgeModules({ ...input, documents: [document("custom-guide", { technologies: [], active: false })], technologyStacks: [] });
-  assert.equal(removed.modules[0].key, "unassigned");
-  assert.equal(removed.modules[0].documents[0].id, "custom-guide");
-  assert.equal(removed.modules[0].inactiveCount, 1);
+  assert.equal(removed.modules.find(m => m.key === "unassigned")!.key, "unassigned");
+  assert.equal(removed.modules.find(m => m.key === "unassigned")!.documents[0].id, "custom-guide");
+  assert.equal(removed.modules.find(m => m.key === "unassigned")!.inactiveCount, 1);
 });
 
 test("正式目录只统计正式文档，模块保留长期领域目录绑定", () => {
@@ -111,5 +111,16 @@ test("正式目录只统计正式文档，模块保留长期领域目录绑定",
 
 test("正式目录按维护时间与名称排序，不存在已归档或建设中分档", () => {
   const data = projectKnowledgeModules({ now, documents: [document("recent", { module_ids: ["告警"], history: [{ at: "2026-09-29", operator: "a", action: "同步" }] })], businessModules: [module("交易"), module("告警"), module("支付")], components: [] });
-  assert.deepEqual(data.modules.sort(compareKnowledgeModules).map(module => module.id), ["告警", "交易", "支付"]);
+  assert.deepEqual(data.modules.filter(m => m.id !== "agnostic").sort(compareKnowledgeModules).map(module => module.id), ["告警", "交易", "支付"]);
+});
+
+
+test("工程下始终保留通用入口；通用 Skill 正式入库后按此归类", () => {
+  const empty = projectKnowledgeModules({ documents: [], businessModules: [], components: [] });
+  assert.equal(empty.modules[0].key, "engineering:agnostic");
+  assert.equal(empty.modules[0].name, "通用");
+  const skill: HostSkillShelfEntry = { name: "通用排障", description: "问题处理流程", nature: "engineering", form: "skill", business_module_ids: [], repositories: [], technologies: ["agnostic"], digest: "s1", updated_at: "2026-09-30", path: "general-triage/SKILL.md", bytes: 30, loadable: true };
+  const data = projectKnowledgeModules({ documents: [], businessModules: [], components: [], skills: [skill] });
+  assert.equal(data.modules[0].skillCount, 1);
+  assert.equal(data.modules[0].documents[0].skillDirectory, "general-triage");
 });

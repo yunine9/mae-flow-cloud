@@ -33,20 +33,20 @@ export function KnowledgeModuleHome({ onOpenModule, onOpenDocument }: KnowledgeM
     <header className="km-home-heading">
       <div className="km-home-title">
         <h2>{{all:"知识目录",business:"业务知识",engineering:"工程知识",unassigned:"待整理"}[category]}</h2>
-        {data && <span className="km-home-count">{visible.length} {category === "business" ? "个模块" : category === "engineering" ? "个技术栈目录" : "个目录"}</span>}
+        {data && <span className="km-home-count">{visible.length} {category === "business" ? "个模块" : category === "engineering" ? "个工程目录" : "个目录"}</span>}
       </div>
       <div className="km-home-filterbar">
         <label className="km-home-search"><Search size={18} /><Input type="search" aria-label="搜索目录或文稿" placeholder="搜索目录、知识名称或文件名" value={query} onChange={e => setQuery(e.target.value)} /></label>
         <Popover open={filterOpen} onOpenChange={setFilterOpen}>
           <PopoverTrigger render={<Button variant="outline" className="km-category-trigger" />}><SlidersHorizontal size={18}/><span>知识分类</span><strong>{{all:"全部",business:"业务",engineering:"工程",unassigned:"待整理"}[category]}</strong><ChevronDown size={15}/></PopoverTrigger>
-          <PopoverContent align="end" sideOffset={10} className="tw-root km-category-panel" aria-label="按知识分类筛选"><div className="km-category-disc" role="group" aria-label="知识分类">{([["business","业务",Building2],["engineering","工程",Code2],["all","全部",null]] as const).map(([value,label,Icon])=><button type="button" key={value} data-category={value} aria-pressed={category===value} onClick={()=>{setCategory(value);}}>{Icon&&<Icon size={21}/>}<span>{label}</span></button>)}<div className="km-category-indicator" style={{transform:`rotate(${category==="business"?-90:category==="engineering"?90:0}deg)`}}/></div><p className="text-center text-xs text-muted-foreground">业务按模块，工程按技术栈</p><Button size="sm" variant="ghost" className="text-primary" onClick={()=>setFilterOpen(false)}>收起</Button></PopoverContent>
+          <PopoverContent align="end" sideOffset={10} className="tw-root km-category-panel" aria-label="按知识分类筛选"><div className="km-category-disc" role="group" aria-label="知识分类">{([["business","业务",Building2],["engineering","工程",Code2],["all","全部",null]] as const).map(([value,label,Icon])=><button type="button" key={value} data-category={value} aria-pressed={category===value} onClick={()=>{setCategory(value);}}>{Icon&&<Icon size={21}/>}<span>{label}</span></button>)}<div className="km-category-indicator" style={{transform:`rotate(${category==="business"?-90:category==="engineering"?90:0}deg)`}}/></div><p className="text-center text-xs text-muted-foreground">业务按模块，工程按技术栈或通用方法</p><Button size="sm" variant="ghost" className="text-primary" onClick={()=>setFilterOpen(false)}>收起</Button></PopoverContent>
         </Popover>
       </div>
     </header>
     {error && <div role="alert" className="flex items-center justify-between gap-3 rounded-lg border border-danger/30 bg-danger-soft p-4 text-sm"><span>知识目录读取失败：{error}</span><Button variant="outline" onClick={invalidateKnowledgeReads}>重试</Button></div>}
     {!data && !error && <p role="status" className="py-12 text-center text-muted-foreground">正在读取知识目录…</p>}
     {data?.warnings.map(warning => <p key={warning} role="status" className="text-sm text-attention">{warning}</p>)}
-    {([['business', '业务模块'], ['engineering', '技术栈'], ['unassigned', '待整理']] as const).map(([group, label]) => {
+    {([['business', '业务模块'], ['engineering', '工程知识'], ['unassigned', '待整理']] as const).map(([group, label]) => {
       const modules = visible.filter(m => m.category === group);
       if (!modules.length) return null;
       const Icon = group === "business" ? BookOpen : group === "engineering" ? Code2 : FolderOpen;

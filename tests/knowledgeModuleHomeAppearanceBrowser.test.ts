@@ -24,7 +24,7 @@ test("知识库首页桌面外观：多模块与技术栈、路径隐藏、搜�
       const output = dom.match(/<pre[^>]*id="result"[^>]*>([^<]+)<\/pre>/)?.[1];
       assert.ok(output, `${name}: 浏览器未完成`); const result = JSON.parse(output);
       assert.equal(result.error, undefined, `${name}: ${result.error}`); assert.equal(result.passed, true);
-      assert.equal(result.width, width); assert.equal(result.cards, category === "engineering" ? 3 : 11);
+      assert.equal(result.width, width); assert.equal(result.cards, category === "engineering" ? 4 : 12);
     }
   } finally { stop(); rmSync(dir, { recursive: true, force: true }); }
 });

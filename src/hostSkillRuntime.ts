@@ -25,6 +25,7 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
+import { isExecutableSkillFile } from "./skillFilePermissions.ts";
 import {
   knowledgeMatchesIssueSession,
   knowledgeMatchesTask,
@@ -208,7 +209,7 @@ function makeReadonly(path: string): void {
       makeReadonly(child);
       chmodSync(child, 0o555);
     } else {
-      chmodSync(child, 0o444);
+      chmodSync(child, isExecutableSkillFile(child) ? 0o555 : 0o444);
     }
   }
   chmodSync(path, 0o555);
@@ -388,8 +389,9 @@ export function materializeHostSkills(options: {
           package_digest: digest,
         } satisfies SnapshotMetadata));
         chmodSync(metadataPath, 0o444);
-        makeReadonly(destination);
       }
+      // 旧快照可能已丢失执行位；复用时修复权限，正文和固定版本不变。
+      makeReadonly(destination);
       paths.push(reused ?? targetFile);
       names.push(skill.name);
     } catch (error) {

@@ -86,12 +86,13 @@ function desktop() {
   }
 }
 async function run() {
-  await until(() => cards().length === 11, "加载 8 个业务模块和 3 个技术栈");
+  await until(() => cards().length === 12, "加载 8 个业务模块和 3 个技术栈");
   check(!document.querySelector('[aria-label="知识目录"]')?.textContent?.includes("Function_Knowledge"), "首页不显示已配置的领域知识相对路径");
   check(cards().every(entry => !/文档：|最近维护|暂无维护记录/.test(entry.textContent ?? "") && !entry.querySelector('[aria-label^="文档数量"]')), "模块卡片不展示文档数量和维护时间");
   const longTitle = moduleFixtures[2][1], longCard = card(longTitle);
   check(longCard?.title === longTitle || longCard?.querySelector(`[title="${longTitle}"]`), "截断的长标题可通过悬停查看完整名称");
   desktop();
+  card("通用")!.click(); await pause(); check(opened.at(-1) === "engineering:agnostic", "通用入口打开工程通用目录");
   card("交易订单与支付")!.click(); await pause(); check(opened.at(-1) === "business:trade", "业务模块卡片打开正确模块");
   card("企业账户与客户服务")!.click(); await pause(); check(opened.at(-1) === "business:new", "空模块仍可打开");
   await search("跨区域");
@@ -104,14 +105,14 @@ async function run() {
   await search("不存在的业务或文稿");
   check(cards().length === 0 && document.body.textContent?.includes("没有匹配的目录或文稿"), "搜索空结果可解释");
   const clear = [...document.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent?.trim() === "清空搜索");
-  check(clear, "空结果可清空搜索"); clear!.click(); await until(() => cards().length === 11, "清空搜索恢复全部卡片");
+  check(clear, "空结果可清空搜索"); clear!.click(); await until(() => cards().length === 12, "清空搜索恢复全部卡片");
   await category("business"); check(cards().length === 8, "业务分类只展示 8 个模块"); desktop();
-  await category("engineering"); check(cards().length === 3, "工程分类只展示 3 个技术栈"); desktop();
+  await category("engineering"); check(cards().length === 4, "工程分类只展示 3 个技术栈"); desktop();
   card("C++")!.click(); await pause(); check(opened.at(-1) === "engineering:cpp", "技术栈卡片打开正确目录");
-  await category("all"); check(cards().length === 11, "全部分类恢复 11 个目录");
+  await category("all"); check(cards().length === 12, "全部分类恢复 11 个目录");
   if (new URLSearchParams(location.search).get("category") === "engineering") await category("engineering");
   window.scrollTo({ top: 0 }); desktop();
   check(!errors.length, errors.join("\n"));
-  document.getElementById("result")!.textContent = JSON.stringify({ passed: true, width: innerWidth, cards: cards().length, businessModules: 8, technologyStacks: 3 });
+  document.getElementById("result")!.textContent = JSON.stringify({ passed: true, width: innerWidth, cards: cards().length, businessModules: 8, technologyStacks: 3, general: 1 });
 }
 run().catch(error => { document.getElementById("result")!.textContent = JSON.stringify({ error: String(error) }); });

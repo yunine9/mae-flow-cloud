@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { createTechnologyStack } from "../src/technologyStacks.ts";
 import {
   knowledgeMatchesTask,
+  knowledgeMatchesIssueSession,
   normalizeKnowledgeAssetMetadata,
   readSkillKnowledgeMetadata,
   writeSkillKnowledgeMetadata,
@@ -24,6 +25,28 @@ languages: [Java]
 
 # 排障方法
 `;
+
+test("通用工程 Skill 保留明确标签，跨语言匹配但仍尊重仓库和模块范围", () => {
+  const metadata = normalizeKnowledgeAssetMetadata({ nature: "engineering",
+    form: "skill", technologies: ["通用"] });
+  assert.deepEqual(metadata.technologies, ["agnostic"]);
+  assert.deepEqual(readSkillKnowledgeMetadata(writeSkillKnowledgeMetadata(SKILL, metadata)), metadata);
+  assert.equal(readSkillKnowledgeMetadata(SKILL.replace("[Java]", "[agnostic]")).nature, "engineering");
+  assert.equal(readSkillKnowledgeMetadata(SKILL.replace("languages: [Java]", "knowledge_nature: business\nbusiness_modules: [orders]\nlanguages: [agnostic]")).nature, "business");
+  for (const technologies of [[], ["cpp"], ["java"]]) {
+    assert.equal(knowledgeMatchesTask(metadata, { repositories: [], technologies, businessModuleIds: [] }), true);
+  }
+  const context = { repositories: [], technologies: [], businessModuleIds: [] };
+  assert.equal(knowledgeMatchesIssueSession(metadata, context), true);
+  for (const restricted of [{ ...metadata, repositories: ["https://example.com/repo.git"] },
+    { ...metadata, business_module_ids: ["orders"] }]) {
+    assert.equal(knowledgeMatchesTask(restricted, context), false);
+    assert.equal(knowledgeMatchesIssueSession(restricted, context), false);
+  }
+  const incomplete = { ...metadata, technologies: [] };
+  assert.equal(knowledgeMatchesTask(incomplete, context), false);
+  assert.equal(knowledgeMatchesIssueSession(incomplete, context), false);
+});
 
 test("统一模型：性质与作用域强制；业务模块和工程语言均可多选", () => {
   assert.throws(() => normalizeKnowledgeAssetMetadata({ form: "document" }),

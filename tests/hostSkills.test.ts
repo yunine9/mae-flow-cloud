@@ -12,6 +12,7 @@
  */
 
 import { test } from "node:test";
+import { execFileSync } from "node:child_process";
 import assert from "node:assert/strict";
 import {
   chmodSync,
@@ -21,6 +22,7 @@ import {
   readdirSync,
   realpathSync,
   symlinkSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -37,6 +39,7 @@ import {
   knowledgeUsageSnapshot,
 } from "../src/knowledgeTrace.ts";
 import { materializeHostSkills } from "../src/hostSkillRuntime.ts";
+import { approveSkillSubmission, listSkillVersions, rollbackHostSkill, submitHostSkill, updateHostSkillKnowledgeMetadata } from "../src/hostSkillLibrary.ts";
 import { mfcTemp } from "./mfcTmp.ts";
 
 const SCRIPT: Scene[] = [{ text: "写完了。" }];
@@ -178,6 +181,67 @@ test("没有 skill 目录照常跑——不是每个部署都有内网 skill", a
   const dataDir = mfcTemp("mfc-skill-none-");
   const seen = await runOnce(dataDir);
   assert.ok(!seen.includes("JAVA-AUTOUT-MARKER"));
+});
+
+test("通用 Skill 完整包经上传审查、更新属性和回退，需求/问题 Agent 均能读取并执行 CLI", async () => {
+  const dataDir = mfcTemp("mfc-general-cli-"), sourceRoot = join(dataDir, "skills");
+  const metadata = { nature: "engineering" as const, business_module_ids: [], repositories: [], technologies: ["agnostic"] };
+  const nativeFixture = join(dataDir, "native-echo");
+  if (process.platform === "darwin") {
+    const source = join(dataDir, "native.c");
+    writeFileSync(source, "#include <stdio.h>\nint main(int argc, char **argv) { if (argc > 1) puts(argv[1]); return 0; }\n");
+    execFileSync("cc", [source, "-o", nativeFixture]);
+  }
+  const files = [
+    { path: "SKILL.md", content_base64: Buffer.from("---\nname: general-triage\ndescription: GENERAL-TRIAGE-DESCRIPTION\n---\nGENERAL-TRIAGE-BODY\n运行 bin/check 和 bin/native-echo。\n").toString("base64") },
+    { path: "bin/check", content_base64: Buffer.from("#!/bin/sh\nprintf 'GENERAL-CLI-EXECUTED\\n'\n").toString("base64") },
+    { path: "bin/native-echo", content_base64: readFileSync(process.platform === "darwin" ? nativeFixture : "/bin/echo").toString("base64") },
+    { path: "templates/Example.class", content_base64: Buffer.from("cafebabe00000041", "hex").toString("base64") },
+  ];
+  const submission = await submitHostSkill(dataDir, "general-triage", files, "author", metadata);
+  assert.deepEqual(submission.technologies, ["agnostic"]);
+  await approveSkillSubmission(dataDir, "general-triage", submission.id, "reviewer");
+  await updateHostSkillKnowledgeMetadata(dataDir, "general-triage", metadata, "reviewer");
+  await rollbackHostSkill(dataDir, "general-triage", listSkillVersions(dataDir, "general-triage")[0].version_id, "reviewer");
+  assert.equal(statSync(join(sourceRoot, "general-triage/bin/check")).mode & 0o777, 0o755);
+  assert.equal(statSync(join(sourceRoot, "general-triage/bin/native-echo")).mode & 0o777, 0o755);
+  assert.equal(statSync(join(sourceRoot, "general-triage/templates/Example.class")).mode & 0o777, 0o644);
+
+  const service = new TaskService({ dataDir, provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0 });
+  const task = service.create("使用通用问题处理方法");
+
+  for (const knowledgeScope of ["task", "issue"] as const) {
+    const workspace = knowledgeScope === "task" ? task.workspace : join(dataDir, knowledgeScope);
+    mkdirSync(workspace, { recursive: true });
+    const selectedRoot = knowledgeScope === "task" ? join(workspace, "host-skill-snapshot") : sourceRoot;
+    const options = { sourceRoot: selectedRoot, workspaceRoot: workspace,
+      snapshotRoot: join(workspace, ".mae-flow-work/host-skills"), knowledgeScope,
+      context: { repositories: [], technologies: knowledgeScope === "task" ? ["cpp"] : [], businessModuleIds: [] } };
+    const projected = materializeHostSkills(options);
+    assert.deepEqual(projected.warnings, []);
+    assert.deepEqual(projected.names, ["general-triage"]);
+    const file = projected.paths[0], root = dirname(file), script = join(root, "bin/check"), native = join(root, "bin/native-echo");
+    // 复用旧快照时只恢复执行位，不重新选版本或替换正文。
+    chmodSync(script, 0o444); chmodSync(native, 0o444);
+    assert.deepEqual(materializeHostSkills(options).paths, projected.paths);
+    assert.equal(statSync(file).mode & 0o777, 0o444);
+    assert.equal(statSync(script).mode & 0o777, 0o555);
+    assert.equal(statSync(native).mode & 0o777, 0o555);
+    const requests = await runDirect(workspace, undefined, [
+      { tool: { name: "read", input: { path: file } } },
+      { tool: { name: "bash", input: { command: `'${script}' && '${native}' GENERAL-NATIVE-EXECUTED` } } },
+      { text: "完成。" },
+    ], true, selectedRoot, { knowledgeScope, knowledgeContext: options.context });
+    const seen = JSON.stringify(requests);
+    assert.match(seen, /GENERAL-TRIAGE-DESCRIPTION/);
+    assert.match(seen, /GENERAL-TRIAGE-BODY/);
+    const toolResults = requests.flatMap(request => (request.messages as any[]) ?? []).flatMap(message => Array.isArray(message.content) ? message.content : []).filter(block => block.type === "tool_result");
+    assert.ok(toolResults.length >= 2);
+    assert.ok(toolResults.every(block => !block.is_error), JSON.stringify(toolResults));
+    assert.match(JSON.stringify(toolResults), /GENERAL-CLI-EXECUTED/);
+    assert.match(JSON.stringify(toolResults), /GENERAL-NATIVE-EXECUTED/);
+    assert.ok(!seen.includes(join(sourceRoot, "general-triage/SKILL.md")));
+  }
 });
 
 test("任务资源清单可取消团队 Skill，空数组不会退回全量装载", () => {

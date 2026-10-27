@@ -87,10 +87,11 @@ export function projectKnowledgeModules(input: {
   const modules: KnowledgeModule[] = business.map(m => ({ key: `business:${m.id}`, id: m.id, name: m.name, description: m.description, category: "business", knowledgeLocation: m.knowledge_location, documents: [], repositories: m.repositories.map(r => ({ id: repositoryKey(r), name: repositoryName(r), documents: [] })), documentCount: 0, skillCount: 0, inactiveCount: 0, recentlyMaintained: 0 }));
   function language(id: string) {
     let module = modules.find(m => m.key === `engineering:${id}`);
-    if (!module) { module = { key: `engineering:${id}`, id, name: technologyStackLabel(id, input.technologyStacks ?? []), description: "基础组件知识与团队 Skill", category: "engineering", documents: [], repositories: [], documentCount: 0, skillCount: 0, inactiveCount: 0, recentlyMaintained: 0 }; modules.push(module); }
+    if (!module) { module = { key: `engineering:${id}`, id, name: id === "agnostic" ? "通用" : technologyStackLabel(id, input.technologyStacks ?? []), description: id === "agnostic" ? "不区分语言和业务的工程方法与团队 Skill" : "基础组件知识与团队 Skill", category: "engineering", documents: [], repositories: [], documentCount: 0, skillCount: 0, inactiveCount: 0, recentlyMaintained: 0 }; modules.push(module); }
     return module;
   }
   for (const component of input.components.filter(c => c.enabled)) for (const id of component.languages) language(id);
+  language("agnostic");
   const unassigned: KnowledgeModule = { key: "unassigned", id: "unassigned", name: "待整理知识", description: "尚未明确模块或技术栈归属，原有内容仍可阅读", category: "unassigned", documents: [], repositories: [], documentCount: 0, skillCount: 0, inactiveCount: 0, recentlyMaintained: 0 };
   for (const doc of documents) {
     const matches = modules.filter(m => m.category === "business" && (doc.module_ids.includes(m.id) || (!doc.module_ids.length && doc.repositories.some(r => m.repositories.some(g => g.id === repositoryKey(r))))));
@@ -139,7 +140,7 @@ export function loadKnowledgeModules(refresh = false): Promise<KnowledgeModuleDa
 export function knowledgeModuleNames(data: KnowledgeModuleData | undefined, stacks: TechnologyStack[]) {
   if (!data) return data;
   return { ...data, modules: data.modules.map(module => module.category === "engineering"
-    ? { ...module, name: technologyStackLabel(module.id, stacks) } : module) };
+    ? { ...module, name: module.id === "agnostic" ? "通用" : technologyStackLabel(module.id, stacks) } : module) };
 }
 async function readKnowledgeModules(): Promise<KnowledgeModuleData> {
   const generation = knowledgeReadGeneration();

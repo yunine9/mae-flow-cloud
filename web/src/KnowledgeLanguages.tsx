@@ -38,7 +38,7 @@ export function KnowledgeLanguagePicker({ value, onChange, includeAgnostic = tru
   return <div className="grid gap-2">
     <div className="flex flex-wrap gap-1.5" role="group" aria-label="适用技术栈，可多选">
       {options.map(option => <button type="button" key={option.id} aria-pressed={value.includes(option.id)}
-        disabled={loading || !!error}
+        disabled={option.id !== "agnostic" && (loading || !!error)}
         className={cn("rounded-full border px-2.5 py-1 text-sm transition-colors disabled:opacity-50",
           value.includes(option.id) ? "border-primary bg-primary/5 font-bold text-primary" : "border-line bg-surface text-muted-foreground hover:border-line-strong")}
         onClick={() => toggle(option.id)}>{option.label}</button>)}

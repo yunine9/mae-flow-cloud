@@ -8,7 +8,7 @@
  *
  * - 写路径 fail-closed:装载器不认、含疑似密钥、越出边界的包一律拒收,
  *   一个字节都不落盘。只读货架可以展示历史坏件,管理面不能新造坏件。
- * - 权限显式归一(文件 0644/目录 0755),不依赖上传时的 umask——skill
+ * - 权限显式归一(普通文件 0644，程序与目录 0755),不依赖上传时的 umask——skill
  *   是公开指南谁都该读得到;正因为权限全开,内容里永远不许出现令牌,
  *   上传入口的掩码扫描就是这条的兜底。
  * - 版本痕留在 skill-versions/,每次覆盖/下线先归档,回退=把归档重新
@@ -24,6 +24,7 @@ import { createHash } from "node:crypto";
 import {
   appendFileSync,
   chmodSync,
+  copyFileSync,
   cpSync,
   existsSync,
   lstatSync,
@@ -38,6 +39,7 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
 import { packageDigest } from "./hostSkillRuntime.ts";
+import { isExecutableSkillFile } from "./skillFilePermissions.ts";
 import { durableWriteFileSync } from "./durableWrite.ts";
 import { requireTechnologyStackChanges } from "./technologyStacks.ts";
 import { KnowledgeRecordFormatError, recordCheck, recordFields, recordObject, recordReadReason, recordStrings } from "./knowledgeRecordValidation.ts";
@@ -358,14 +360,14 @@ function scanSecretText(path: string, text: string): void {
   }
 }
 
-/** 上传即归一权限:文件 0644/目录 0755。显式 chmod 而不是信 umask,
+/** 上传即归一权限:普通文件 0644，程序与目录 0755。显式 chmod 而不是信 umask,
  * 内网容器 uid 与服务账号对不上是已知事实,只有权限位救得了它。 */
 function normalizePermissions(root: string): void {
   chmodSync(root, 0o755);
   for (const entry of readdirSync(root, { withFileTypes: true })) {
     const child = join(root, entry.name);
     if (entry.isDirectory()) normalizePermissions(child);
-    else chmodSync(child, 0o644);
+    else chmodSync(child, isExecutableSkillFile(child) ? 0o755 : 0o644);
   }
 }
 
@@ -543,7 +545,9 @@ function requireSkillTechnologyReferences(dataDir: string, directory: string, te
     const live = join(dataDir, LIVE_DIR, directory, "SKILL.md");
     const previous = existsSync(live)
       ? readSkillKnowledgeMetadata(readFileSync(live, "utf8")).technologies : [];
-    requireTechnologyStackChanges(dataDir, technologies, previous);
+    requireTechnologyStackChanges(dataDir,
+      technologies.filter(id => id !== "agnostic"),
+      previous.filter(id => id !== "agnostic"));
   } catch (error) {
     throw new SkillLibraryError(error instanceof Error ? error.message : String(error));
   }
@@ -631,7 +635,7 @@ function copyOrdinaryDirectory(from: string, to: string): void {
       throw new SkillLibraryError(`Skill 包包含软链接: ${entry.name}`);
     }
     if (entry.isDirectory()) copyOrdinaryDirectory(source, target);
-    else if (entry.isFile()) writeFileSync(target, readFileSync(source));
+    else if (entry.isFile()) copyFileSync(source, target);
     else throw new SkillLibraryError(`Skill 包包含非常规文件: ${entry.name}`);
   }
 }
