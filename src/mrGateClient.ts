@@ -1,3 +1,4 @@
+import { withRemoteReadTimeout } from "./remoteReadTimeout.ts";
 import { readJson } from "./jsonBody.ts";
 import type { GateItem, GateView } from "./mergeWatch.ts";
 
@@ -45,6 +46,7 @@ export async function fetchMrGates(options: {
   delivery?: { source_branch?: string; target_branch?: string;
     mr_id?: string | number; mr_url?: string };
   requireExisting?: boolean;
+  signal?: AbortSignal;
   log?: (error: string) => void;
   onFailure?: (reason: string) => void;
 }): Promise<GateView | undefined> {
@@ -74,13 +76,13 @@ export async function fetchMrGates(options: {
     if (urlIid) params.set("mr", urlIid);
     else if (delivery.mr_id !== undefined) params.set("mr", String(delivery.mr_id));
     else if (delivery.mr_url) params.set("mr", delivery.mr_url);
-    const response = await fetch(`${platformUrl}/mr/gates?${params}`, {
-      headers: options.headers, signal: AbortSignal.timeout(10_000),
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
     let body;
     try {
-      body = await readJson(response);
+      body = await withRemoteReadTimeout(async signal => {
+        const response = await fetch(`${platformUrl}/mr/gates?${params}`, { headers: options.headers, signal });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return await readJson(response);
+      }, 10_000, options.signal);
     } catch (error) {
       if (error instanceof SyntaxError) {
         return failed("交付平台响应不完整：MR 状态响应不是合法 JSON");

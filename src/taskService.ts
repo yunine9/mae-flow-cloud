@@ -1724,6 +1724,7 @@ interface TaskState {
   /** 红灯具体报错采集的防重入锁；与绿灯核销证据不是同一条链。 */
   repairEvidenceRetryActive?: boolean;
   deliveryRecoveryActive?: boolean;
+  deliveryRecoveryDeadlineTimer?: ReturnType<typeof setTimeout>;
   /** 检视回复账本发送的单飞锁；恢复、交付与合入 watcher 共用。 */
   reviewOutboxFlush?: Promise<boolean>;
   /** 环境预热的防重入锁(内存态):一任务只跑一个预热专员。 */
@@ -2421,6 +2422,7 @@ export class TaskService {
     if (this.memorySweepTimer) clearTimeout(this.memorySweepTimer);
     if (this.shutdownPromise) return this.shutdownPromise;
     this.shuttingDown = true;
+    for (const task of this.tasks.values()) clearTimeout(task.deliveryRecoveryDeadlineTimer);
     for (const sync of this.knowledgeRepositorySyncs.values()) sync.abort.abort(new Error("服务正在停止，知识同步可在重启后接续"));
     this.shutdownPromise = (async () => {
       this.queue = [];
@@ -14760,6 +14762,9 @@ export class TaskService {
     reason: string,
     cls: StallClass,
   ): void {
+    clearTimeout(task.deliveryRecoveryDeadlineTimer);
+    task.deliveryRecoveryDeadlineTimer = undefined;
+    reason = reason.replace(/[；;]\s*系统正在自动重试.*$/, "");
     const delivery = task.summary.delivery;
     if (delivery?.stalled === reason && delivery.stall_class === cls) {
       if (delivery.skipped) {
@@ -14832,6 +14837,22 @@ export class TaskService {
    * 的 catch 根本不挂起(那是 external_verify 才走的分支),于是只会
    * 试一次就散——测试逮住过。 */
   private scheduleDeliveryRecovery(task: TaskState, epoch: number): void {
+    // 到期检查独立于请求返回；发件箱损坏仍沿用原来的持续探测策略。
+    if (!this.reviewReplyOutboxStalled(task)) {
+      const deadline = this.verificationDeadline(task);
+      const expected = task.summary.delivery?.verify_deadline;
+      clearTimeout(task.deliveryRecoveryDeadlineTimer);
+      task.deliveryRecoveryDeadlineTimer = setTimeout(() => {
+        task.deliveryRecoveryDeadlineTimer = undefined;
+        if (this.current(task, epoch) && task.summary.status === "verifying"
+            && task.summary.delivery?.verify_deadline === expected
+            && !task.summary.delivery?.stalled && !this.reviewReplyOutboxStalled(task)
+            && task.summary.delivery?.pipeline !== "running") {
+          this.markVerificationStalled(task, this.stallReason(task), "infrastructure");
+        }
+      }, Math.max(0, deadline - Date.now()));
+      task.deliveryRecoveryDeadlineTimer.unref();
+    }
     if (task.deliveryRecoveryActive) return;
     task.deliveryRecoveryActive = true;
     const delay = recoveryDelayMs(
@@ -14889,6 +14910,10 @@ export class TaskService {
         }
         return;
       }
+    }
+    if (Date.now() >= this.verificationDeadline(task)) {
+      this.markVerificationStalled(task, this.stallReason(task), "infrastructure");
+      return;
     }
     await this.tryDeliver(task, epoch);
     if (!this.recoveryStillNeeded(task, epoch)) return;
@@ -17925,14 +17950,17 @@ export class TaskService {
   }
 
   private remoteDeliveryHost(task: TaskState, epoch: number): RemoteReconcileHost {
+    const stalledAtStart = task.summary.delivery?.stalled;
+    const remaining = Date.parse(task.summary.delivery?.verify_deadline ?? "") - Date.now();
     return { summary: task.summary, cwd: task.cwd, repo: task.summary.repo_url ?? this.effectiveDefaultRepo() ?? "", platformUrl: this.effectivePlatformUrl(), headers: this.platformIdentity(task),
-      current: () => this.current(task, epoch), persist: () => this.persist(task),
-      gates: async mr => { let reason = "MR 状态查询失败";
+      readTimeoutMs: remaining > 0 ? Math.min(10_000, remaining) : 10_000,
+      current: () => this.current(task, epoch) && task.summary.delivery?.stalled === stalledAtStart, persist: () => this.persist(task),
+      gates: async (mr, signal) => { let reason = "MR 状态查询失败";
         const view = mr ? await fetchMrGates({ platformUrl: this.effectivePlatformUrl(),
           repo: task.summary.repo_url ?? this.effectiveDefaultRepo() ?? "", headers: this.platformIdentity(task),
           delivery: { mr_id: mr.id, mr_url: mr.url, source_branch: mr.source_branch, target_branch: mr.target_branch },
-          requireExisting: true, onFailure: error => { reason = error; } })
-          : await this.fetchGates(task, true, error => { reason = error; });
+          requireExisting: true, signal, onFailure: error => { reason = error; } })
+          : await this.fetchGates(task, true, error => { reason = error; }, signal);
         if (!view) throw new Error(reason); return view;
       }, published: receipt => this.recordPublishedPush(task, receipt),
       settle: (state, sha) => this.settleMergeState(task, state, sha), watch: () => this.ensureMergeWatch(task),
@@ -17967,8 +17995,8 @@ export class TaskService {
   }
 
   private fetchGates(task: TaskState, requireExisting = false,
-    onFailure?: (reason: string) => void): Promise<GateView | undefined> {
-    return fetchMrGates({ platformUrl: this.effectivePlatformUrl(), onFailure,
+    onFailure?: (reason: string) => void, signal?: AbortSignal): Promise<GateView | undefined> {
+    return fetchMrGates({ platformUrl: this.effectivePlatformUrl(), onFailure, signal,
       delivery: task.summary.delivery, requireExisting,
       repo: task.summary.repo_url ?? this.effectiveDefaultRepo() ?? "",
       headers: this.platformIdentity(task),

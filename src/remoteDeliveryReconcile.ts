@@ -1,3 +1,4 @@
+import { withRemoteReadTimeout } from "./remoteReadTimeout.ts";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { resolve } from "node:path";
@@ -13,9 +14,10 @@ export interface RemoteMr { id: string | number; url: string; source_branch: str
 export interface RemoteReconcileResult { message: string; candidates?: RemoteMr[]; proceed: boolean }
 export interface RemoteReconcileHost {
   summary: TaskSummary; cwd?: string; repo: string; platformUrl?: string; headers: Record<string, string>;
+  readTimeoutMs?: number;
   current(): boolean; persist(): void;
   observe(branch: string): Promise<{ head: string; sha?: string; url: string }>;
-  gates(mr?: RemoteMr): Promise<GateView | undefined>;
+  gates(mr?: RemoteMr, signal?: AbortSignal): Promise<GateView | undefined>;
   published(receipt: NonNullable<NonNullable<TaskSummary["delivery"]>["git_push"]>): void;
   settle(state: "merged" | "closed", sha?: string): Promise<void>;
   retirePushQuestion(merged?: boolean): void; watch(): void;
@@ -25,7 +27,7 @@ export interface RemoteReconcileHost {
  * 该函数不推送、不创建 MR，也不以本地 HEAD 猜测远端版本。 */
 const inFlight = new WeakMap<TaskSummary, Promise<RemoteReconcileResult>>();
 export async function reconcileRemoteDelivery(host: RemoteReconcileHost, selected?: string): Promise<RemoteReconcileResult> {
-  while (inFlight.has(host.summary)) { await inFlight.get(host.summary); if (!host.current()) return { message: "任务已发生变化", proceed: false }; }
+  while (inFlight.has(host.summary)) { await withRemoteReadTimeout(() => inFlight.get(host.summary)!, host.readTimeoutMs); if (!host.current()) return { message: "任务已发生变化", proceed: false }; }
   const work = reconcile(host, selected); inFlight.set(host.summary, work);
   try { return await work; } finally { if (inFlight.get(host.summary) === work) inFlight.delete(host.summary); }
 }
@@ -69,12 +71,13 @@ async function reconcile(host: RemoteReconcileHost, selected?: string): Promise<
   const hasMr = () => !!summary.delivery?.mr_url?.trim() || !!String(summary.delivery?.mr_id ?? "").trim();
   if (!hasMr() && source && target && host.platformUrl) {
     const query = new URLSearchParams({ repo: host.repo, source_branch: source, target_branch: target });
-    const response = await fetch(`${host.platformUrl}/mr/discover?${query}`, { headers: host.headers, signal: AbortSignal.timeout(10_000) });
-    if (!host.current()) return done("任务已发生变化，本次查询未应用", false);
-    if (response.status === 404) throw new Error("平台未配置 mr_discover，无法确认已有 MR；请更新适配器配置后重试");
     {
-      if (!response.ok) throw new Error(`MR 查找失败（HTTP ${response.status}）`);
-      const body = await response.json() as { mrs?: RemoteMr[] };
+      const body = await withRemoteReadTimeout(async signal => {
+        const response = await fetch(`${host.platformUrl}/mr/discover?${query}`, { headers: host.headers, signal });
+        if (response.status === 404) throw new Error("平台未配置 mr_discover，无法确认已有 MR；请更新适配器配置后重试");
+        if (!response.ok) throw new Error(`MR 查找失败（HTTP ${response.status}）`);
+        return await response.json() as { mrs?: RemoteMr[] };
+      }, host.readTimeoutMs);
       if (!host.current()) return done("任务已发生变化，本次查询未应用", false);
       if (!Array.isArray(body.mrs)) throw new Error("MR 查找响应不完整");
       const matching = body.mrs.filter(mr => mr.source_branch === source && mr.target_branch === target
@@ -84,12 +87,12 @@ async function reconcile(host: RemoteReconcileHost, selected?: string): Promise<
       const candidates: RemoteMr[] = [];
       const published = summary.delivery?.git_push?.sha;
       for (const mr of matching) {
-        const view = await host.gates(mr);
+        const view = await withRemoteReadTimeout(signal => host.gates(mr, signal), host.readTimeoutMs);
         if (!host.current()) return done("任务已发生变化，本次查询未应用", false);
         if (!view) throw new Error("候选 MR 状态核验失败");
         if (view.mrState === "opened") candidates.push(mr);
         else if (published && view.sourceSha === published && source && host.cwd) {
-          const observed = await host.observe(source);
+          const observed = await withRemoteReadTimeout(() => host.observe(source), host.readTimeoutMs);
           if (!host.current()) return done("任务已发生变化，本次查询未应用", false);
           if (observed.head === published) candidates.push(mr);
         }
@@ -104,7 +107,7 @@ async function reconcile(host: RemoteReconcileHost, selected?: string): Promise<
     }
   }
   if (hasMr()) {
-    const view = await host.gates();
+    const view = await withRemoteReadTimeout(signal => host.gates(undefined, signal), host.readTimeoutMs);
     if (!host.current()) return done("任务已发生变化，本次查询未应用", false);
     if (!view) throw new Error("MR 状态核验失败，请检查平台连接及凭据后重试");
     if (view.mrState !== "opened") {
@@ -123,7 +126,7 @@ async function reconcile(host: RemoteReconcileHost, selected?: string): Promise<
   if (!source || !host.cwd || !host.repo) return done(hasMr()
     ? "MR 尚未合入；缺少仓库或本地现场，尚未核验推送版本"
     : "尚未确认任务分支或仓库，无法核验远端推送");
-  const observed = await host.observe(source);
+  const observed = await withRemoteReadTimeout(() => host.observe(source), host.readTimeoutMs);
   if (!host.current()) return done("任务已发生变化，本次查询未应用", false);
   if (observed.sha && observed.sha === observed.head) {
     const receipt = { sha: observed.sha, ref: `refs/heads/${source}`, remote: "origin", url: observed.url };
