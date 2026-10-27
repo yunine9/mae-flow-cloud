@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { PlatformQueryCache, codeHubRateLimited, type QueryResult } from "./platformQueryCache.ts";
 /**
  * CodeHub 适配层——把内部 CLI(codehubcli)翻译成宿主消费的三端点契约。
  *
@@ -411,6 +413,7 @@ function orderStatusRuns(
 export class PlatformAdapter {
   private readonly config: AdapterConfig;
   private serviceToken = "";
+  private readonly queries = new PlatformQueryCache();
   /** 调用账落点(#408):构造时按配置文件位置定。 */
   private adapterCallsFile = "";
 
@@ -755,7 +758,7 @@ export class PlatformAdapter {
     query: URLSearchParams,
     body: Record<string, unknown>,
     headers: Record<string, string | string[] | undefined>,
-  ): Promise<{ status: number; payload: unknown }> {
+  ): Promise<QueryResult> {
     const startedAt = Date.now();
     const rawParent = headers["x-mfc-request-id"];
     const parentValue = Array.isArray(rawParent) ? rawParent[0] : rawParent;
@@ -773,13 +776,32 @@ export class PlatformAdapter {
       }
     }
     try {
-      const result = await this.route(method, path, query, body, headers);
+      const identity = this.values({}, headers);
+      const scope = createHash("sha256").update(identity.token).digest("hex");
+      const configured = path === "/mr/gates" ? this.config.mr_gates
+        : path === "/mr/discussions" ? this.config.mr_discussions
+        : path === "/mr/discover" ? this.config.mr_discover
+        : path === "/pipeline/status" ? this.config.pipeline_status
+        : path === "/pipeline/artifacts" ? this.config.pipeline_artifacts : undefined;
+      const read = method === "GET" && !!configured;
+      const params = new URLSearchParams(query); params.sort();
+      // 已指定 MR 时，两流程附带的分支名差异不应拆成两次对象查询。
+      if (path === "/mr/gates" && params.get("mr")
+          && this.config.mr_gates?.command.some(arg => arg.includes("{mr}"))
+          && !this.config.mr_gates.command.some(arg => /\{(?:source|target)_branch\}/.test(arg))) {
+        params.delete("source_branch"); params.delete("target_branch");
+      }
+      const observed = read ? await this.queries.read(scope, path + "?" + params, () => this.route(method, path, query, body, headers), path !== "/pipeline/artifacts")
+        : { result: await this.route(method, path, query, body, headers), source: "direct" };
+      const result = observed.result;
+      if (method === "POST" && result.status >= 200 && result.status < 300) this.queries.invalidate(scope);
       appendAudit(this.adapterCallsFile, {
         kind: "adapter.call",
         msg: `${method} ${path} → ${result.status}`,
         ...(parentRequestId ? { parent_request_id: parentRequestId } : {}),
         endpoint: `${method} ${path}`,
         status: result.status,
+        query_source: observed.source,
         duration_ms: Date.now() - startedAt,
         ...(Object.keys(summary).length ? { params: summary } : {}),
         ...(result.status >= 400 ? { level: "warn" as const } : {}),
@@ -878,7 +900,7 @@ export class PlatformAdapter {
         const result = await this.handle("GET", "/pipeline/status", new URLSearchParams({
           sha: String(body.sha ?? ""), repo: String(body.repo ?? ""), mr: String(body.mr ?? ""),
         }), {}, headers);
-        return { ...result, status: 201 };
+        return result.status >= 200 && result.status < 300 ? { ...result, status: 201 } : result;
       }
       const stdout = await this.run(spec, this.values(body, headers));
       let parsedCache: unknown;
@@ -908,6 +930,7 @@ export class PlatformAdapter {
           return { status: 200,
                    payload: { runs: await this.statusRuns(spec, values) } };
         } catch (error) {
+          if (codeHubRateLimited(error)) throw error;
           const reason = String((error as Error).message ?? error);
           failures.push(reason.slice(0, 500));
           this.log(`[adapter] pipeline_status 候选[${failures.length - 1}] `
@@ -1126,6 +1149,7 @@ export class PlatformAdapter {
           }
           return { status: 200, payload: { files } };
         } catch (error) {
+          if (codeHubRateLimited(error)) throw error;
           const reason = String((error as Error).message ?? error);
           failures.push(reason.slice(0, 500));
           this.log(`[adapter] pipeline_artifacts 候选[${failures.length - 1}]`
@@ -1262,9 +1286,9 @@ export class PlatformAdapter {
         this.handle(request.method ?? "GET", url.pathname,
           url.searchParams, body,
           request.headers as Record<string, string | undefined>)
-          .then(({ status, payload }) => {
+          .then(({ status, payload, headers }) => {
             response
-              .writeHead(status, { "content-type": "application/json" })
+              .writeHead(status, { "content-type": "application/json", ...headers })
               .end(JSON.stringify(payload));
           })
           .catch((error) => {
