@@ -1,11 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager,
   defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { SessionCompaction, estimateContextSize, reportedContextLimit } from "../src/sessionCompaction.ts";
+import { pendingDecisionsPrompt, PENDING_DECISIONS_FILE } from "../src/pendingDecisionsPrompt.ts";
+import { concurrentWorkPrompt } from "../src/concurrentWorkPrompt.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { mfcTemp } from "./mfcTmp.ts";
 
@@ -14,6 +16,7 @@ const isSummary = (request: any) => JSON.stringify(request.system).includes("你
 
 async function fixture(options: {
   window?: number;
+  system?: (root: string) => string;
   normal?: (request: any, index: number) => Scene;
   summary?: (request: any, index: number) => Promise<Scene> | Scene;
   tool?: () => Promise<string> | string;
@@ -43,7 +46,7 @@ async function fixture(options: {
   const manager = SessionManager.create(root, join(agentDir, "sessions"));
   const loader = new DefaultResourceLoader({ cwd: root, agentDir, noExtensions: true,
     noSkills: true, noPromptTemplates: true, noThemes: true,
-    systemPromptOverride: () => "执行当前用户需求，禁止修改 B。", agentsFilesOverride: () => ({ agentsFiles: [] }) });
+    systemPromptOverride: () => "执行当前用户需求，禁止修改 B。" + (options.system?.(root) ?? ""), agentsFilesOverride: () => ({ agentsFiles: [] }) });
   await loader.reload();
   const { session } = await createAgentSession({ cwd: root, agentDir, modelRuntime: runtime,
     model: runtime.getModel("maeflow", "scripted-v1"), resourceLoader: loader,
@@ -255,4 +258,31 @@ test("工具未结束期间不压缩、不取消工具", async () => {
     assert.equal(h.counts().tools, 1, JSON.stringify({ counts: h.counts(), logs: h.logs, messages: h.session.agent.state.messages }).slice(0, 4000));
     assert.match(JSON.stringify(h.server.requests.at(-1)), /UT通过/);
   } finally { release(); await h.close(); }
+});
+
+
+test("#555：多轮压缩后固定恢复指令仍在模型请求中，原决策文件可重复读取", async () => {
+  let path = "";
+  const decisions = { decisions: [{ id: "lock-strategy", question: "是否调整锁策略", status: "pending", basis: "analysis.md；原 UT 已通过" }] };
+  const h = await fixture({ system: root => pendingDecisionsPrompt(root),
+    normal: (_request, index) => index % 2 === 1 ? { tool: { name: "readLog", input: {} } } : { text: "已有分析和验证保留；原决策尚待答复。" },
+    tool: () => readFileSync(path, "utf8") });
+  try {
+    path = join(h.root, PENDING_DECISIONS_FILE); mkdirSync(join(h.root, ".mae-flow-work"), { recursive: true });
+    writeFileSync(path, JSON.stringify(decisions));
+    for (let round = 0; round < 2; round++) {
+      seed(h);
+      await h.session.prompt("新交办完成后接续原工作。\n" + concurrentWorkPrompt());
+      assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), decisions);
+      const request = h.server.requests.filter(r => !isSummary(r)).at(-1)!;
+      assert.ok(JSON.stringify(request.system).includes(path));
+      assert.match(JSON.stringify(request), /lock-strategy/);
+    }
+    assert.equal(h.counts().tools, 2, "压缩不重放已经执行的工具");
+    assert.equal(h.manager.getBranch().filter(e => e.type === "compaction").length, 2);
+    for (const request of h.server.requests.filter(isSummary)) {
+      assert.match(JSON.stringify(request.system), /未决决策与承诺/);
+      assert.match(JSON.stringify(request.system), /新交办不等于旧工作已取消/);
+    }
+  } finally { await h.close(); }
 });

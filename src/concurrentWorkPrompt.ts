@@ -1,3 +1,5 @@
+import { pendingDecisionRecoveryPrompt } from "./pendingDecisionsPrompt.ts";
+
 /** 工作安排交给 Agent；不新增阶段门禁或并发写工作区的执行器。 */
 export function concurrentWorkPrompt(): string {
   return [
@@ -7,6 +9,7 @@ export function concurrentWorkPrompt(): string {
     "等待远端流水线、下载或独立验证时，可以继续不依赖其结果的工作。独立调查和只读检查可并行；使用子 Agent 时先分清任务，写代码需隔离工作目录，统一汇总后再验证，不让多个执行者同时修改同一工作目录。",
     "避免用长时间阻塞的轮询占住会话；使用已有后台任务或短时查询能力，并保留日志和任务标识。不要为了接新意见反复杀掉正常运行的命令。",
     "仅修改受影响内容、运行相关验证，不因为收到批注就重走全部阶段。构建结果只对应被验证的那份代码，新修改不能沿用旧提交的绿灯。",
+    pendingDecisionRecoveryPrompt(),
     "完成一部分就反馈具体改动和剩余事项；若确实在等待，说明等待对象和可继续做的工作，不承诺没有依据的完成时间。",
   ].join("\n");
 }

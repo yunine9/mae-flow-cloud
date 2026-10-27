@@ -1,3 +1,4 @@
+import { pendingDecisionsPrompt } from "./pendingDecisionsPrompt.ts";
 import { SessionCompaction } from "./sessionCompaction.ts";
 import { saveAnalysisContextSnapshot } from "./analysisContextSnapshot.ts";
 export { looksLikeContextOverflow, compactionInstructions } from "./sessionCompaction.ts";
@@ -204,6 +205,7 @@ export function askToolDescription(scope?: "task" | "issue"): string {
     + "设计、验收和技术细节放在对应文档，卡片先给必要事实，最后请用户确认。"
     // 实战实测:正文预告"两个衍生题一次问完",工具调用只带了一题,
     // 另一题要么多花一轮补问,要么被自行拍板。预告即契约。
+    + "需要用户拍板的业务或设计问题，先按系统指引保存未决决策，再立即举卡；不要把新交办当成旧问题已解决。"
     + "正文预告了几个问题,questions 就必须带几个——预告了却不发,"
     + "等于把没问过的事当已确认。";
   return scope === "issue"
@@ -1177,7 +1179,7 @@ export class CloudSession {
       ...(this.options.additionalSystemInstructions ?? []),
       ...resourceBlockNotice(blockedRepositoryResources),
       ...(this.options.humanFacing && config.sessionId === this.sessionId
-        ? [HUMAN_FACING_STYLE] : []),
+        ? [HUMAN_FACING_STYLE, pendingDecisionsPrompt(workspace)] : []),
     ];
     const loader = new DefaultResourceLoader({
       cwd: workspace,

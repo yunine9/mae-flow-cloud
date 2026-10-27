@@ -1,3 +1,4 @@
+import { pendingDecisionRecoveryPrompt } from "./pendingDecisionsPrompt.ts";
 import {
   findCutPoint, sessionEntryToContextMessages,
   type AgentSession, type ModelRuntime,
@@ -14,9 +15,10 @@ export function compactionInstructions(anchor: string): string {
 当前任务现场（优先于旧历史）：\n${anchor}
 保留：用户目标、明确决定与禁止事项；当前阶段；已完成且不要重做的操作；
 未完成工作和下一步；正在修改的文件、关键符号；最新失败的具体原因与日志位置。
+逐条保留未决问题、选项、分析依据及 pending-decisions.json 路径；保留待举卡、待登记目标变更等已宣布未完成动作。举过卡不等于用户已答复，新交办不等于旧工作已取消；保留先前分析、代码与验证结果，不因整理新批次覆盖旧结果。
 区分“已验证”“待验证”“猜测”。已推送、已审批、已执行的工具不能写成待办。
 旧日志、重复规则、已解决错误和探索过程合并为结论；不要复制长代码和日志。
-按【目标与约束 / 已完成 / 进行中与下一步 / 关键证据】组织，简洁但不能漏掉未解决事项。
+按【目标与约束 / 已完成 / 未决决策与承诺 / 进行中与下一步 / 关键证据】组织，简洁但不能漏掉未解决事项。
 例如：保留“用户选择先修 A，禁止修改 B；UT 在 x.log 因 C 失败，D 已修未重测”。
 不要写成“做了很多排查，继续完善”，也不要把工具中断写成测试通过。`;
 }
@@ -213,6 +215,7 @@ export class SessionCompaction {
         ? (typeof userMessage.content === "string" ? [{ type: "text" as const, text: userMessage.content }] : userMessage.content) : [];
       const continuation: Message = { role: "user", timestamp: Date.now(), content: [{ type: "text",
         text: "请依据交接摘要继续尚未完成的当前任务。已经执行的操作不要重做；需要核实时读取对应文件或日志。"
+          + "\n" + pendingDecisionRecoveryPrompt()
           + (pinned.length ? "\n以下为当前需求原文，已经执行的部分以摘要为准，不代表重新执行：" : "") }, ...pinned] };
       const kept = replaceTail ? [continuation]
         : entries.slice(cut).flatMap(sessionEntryToContextMessages).filter(usable);

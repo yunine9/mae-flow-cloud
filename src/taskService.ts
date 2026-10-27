@@ -18855,6 +18855,7 @@ export class TaskService {
       `任务责任人在工作台明确提交了 ${annotations.length} 条当前 MR 检视意见。`
         + "按当前责任人要求逐条落实并更新原 MR；较新的要求可调整目标或逐条暂缓：",
       rendered,
+      concurrentWorkPrompt(),
       "- Cloud 宿主已把本批意见登记到当前任务的持续检视流程。不要 init，"
         + "不要 exit/goto/skip；先执行 current，按当前反馈步骤继续。",
       "- 这些不是待你猜测是否接纳的外部建议：用户点击“提交并继续修改”已经明确授权"
@@ -18867,7 +18868,7 @@ export class TaskService {
         + "问题里必须点明歧义和不同结果，不能用泛泛的‘请确认’把工作退回用户。",
       ...priorPipeline,
       this.reviewReceiptInstructionsFor(task, annotations),
-      "- 本批修改、必要验证与逐条答复完成后即可结束本轮，宿主会登记结果并继续交付。不要为了推进 feedback_triage 重复处理已闭环意见或重复编译；仍有实际失败或新意见则继续处理。",
+      "- 本批修改、必要验证与逐条答复完成后，先按新交办工作指引核对原有结果、未决问题和已宣布未完成动作，再结束本轮；宿主会登记结果并继续交付。不要为了推进 feedback_triage 重复处理已闭环意见或重复编译；仍有实际失败或新意见则继续处理。",
       "- 在当前 MR 分支修改必要的源码和测试，遵守仓库的 commit 指引。"
         + "不要读取或索要个人 Git 令牌；可用 task_control push 阶段性推送到原分支、"
         + "更新原 MR；Build-Fix 与权威流水线分别记录新 SHA 的真实结果。",
