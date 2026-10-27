@@ -7,13 +7,14 @@
  */
 import type { IssueCancelReason } from "../api";
 
-/** 中文词表:resolved=问题已处理与 wrong_module=业务模块绑错不会
- *  出现在统计页终止行(服务端不下发),入表只为下拉词表完整、键型
- *  对齐。 */
+/** 中文词表:resolved=问题已处理、accidental=误发起与 wrong_module=
+ *  业务模块绑错不会出现在统计页终止行(服务端不下发),入表只为下
+ *  拉词表完整、键型对齐;排除类排在下拉前段。 */
 export const CANCEL_REASON_LABELS: Record<IssueCancelReason, string> = {
-  resolved: "问题已处理", inaccurate: "分析不准确", slow: "速度太慢",
-  disobedient: "指令不遵从", unclear_plan: "方案未明确",
-  wrong_module: "业务模块绑错", other: "其他原因",
+  resolved: "问题已处理", accidental: "误发起",
+  wrong_module: "业务模块绑错", inaccurate: "分析不准确",
+  slow: "速度太慢", disobedient: "指令不遵从", unclear_plan: "方案未明确",
+  other: "其他原因",
 };
 
 /** 下拉选项:顺序即下拉顺序,与服务端 ISSUE_CANCEL_REASONS 同源同序。 */

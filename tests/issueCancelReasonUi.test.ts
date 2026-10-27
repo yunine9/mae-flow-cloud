@@ -46,8 +46,9 @@ test("两个终止入口弹同一份确认框:工作台与列表卡片都渲染 
     "列表卡片终止按钮应接 terminate(开框,不发请求)");
 });
 
-test("原因下拉七项必选:默认「问题已处理」,稳定英文值与界面中文成对", () => {
-  // 词表唯一份(#540 复审)在 issues/cancelReasons.ts:七项,顺序即
+test("原因下拉八项必选:默认「问题已处理」,稳定英文值与界面中文成对", () => {
+  // 词表唯一份(#540 复审)在 issues/cancelReasons.ts:八项,排除类在
+ // 前,顺序即
   // 下拉顺序(Record 键序),与服务端词表(ISSUE_CANCEL_REASONS)同源
   // 同序;确认框只 import 共享选项,不再自抄一份。
   const cancelReasons = readFileSync(
@@ -56,12 +57,12 @@ test("原因下拉七项必选:默认「问题已处理」,稳定英文值与界
     cancelReasons.indexOf("CANCEL_REASON_LABELS"),
     cancelReasons.indexOf("};"));
   assert.deepEqual(
-    [...labels.matchAll(/(resolved|inaccurate|slow|disobedient|unclear_plan|wrong_module|other):/g)]
+    [...labels.matchAll(/(resolved|accidental|wrong_module|inaccurate|slow|disobedient|unclear_plan|other):/g)]
       .map((match) => match[1]),
-    ["resolved", "inaccurate", "slow", "disobedient", "unclear_plan",
-     "wrong_module", "other"],
-    "七个稳定英文值必须齐且按词表顺序");
-  for (const label of ["问题已处理", "分析不准确", "速度太慢", "指令不遵从", "方案未明确", "业务模块绑错", "其他原因"]) {
+    ["resolved", "accidental", "wrong_module", "inaccurate", "slow",
+     "disobedient", "unclear_plan", "other"],
+    "八个稳定英文值必须齐且按词表顺序");
+  for (const label of ["问题已处理", "误发起", "业务模块绑错", "分析不准确", "速度太慢", "指令不遵从", "方案未明确", "其他原因"]) {
     assert.ok(labels.includes(label), `下拉必须有中文项「${label}」`);
   }
   assert.match(dialogSource,
@@ -171,6 +172,6 @@ test("api 客户端:control 请求侧有 reason 与 reason_text,镜像有终止�
   assert.match(summary, /cancel_reason_text\?: string;/,
     "IssueSummary 镜像要有 cancel_reason_text 字段");
   assert.match(api,
-    /export type IssueCancelReason =[\s\S]*?"resolved"[\s\S]*?"inaccurate"[\s\S]*?"slow"[\s\S]*?"disobedient"[\s\S]*?"unclear_plan"[\s\S]*?"wrong_module"[\s\S]*?"other";/,
+    /export type IssueCancelReason =[\s\S]*?"resolved"[\s\S]*?"accidental"[\s\S]*?"wrong_module"[\s\S]*?"inaccurate"[\s\S]*?"slow"[\s\S]*?"disobedient"[\s\S]*?"unclear_plan"[\s\S]*?"other";/,
     "终止原因枚举类型要在 api.ts 导出(协议词表)");
 });
