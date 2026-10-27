@@ -94,6 +94,8 @@ export interface KnowledgeSourceCleanupState {
   publications: KnowledgeCleanupPublication[]; started?: boolean;
 }
 export interface DomainKnowledgeJob {
+  /** 主文件版本用于防止旧归档进度覆盖后来保存的任务。 */
+  archive_progress_revision?: string;
   task_kind?: "extraction" | "inspection";
   inspection_source?: { document_id: string; started_at: string; finished_at?: string };
   /** 与检视正文一同固定的资源引用；后续同步不会替换任务中的图片。 */

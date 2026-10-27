@@ -1,4 +1,6 @@
+import { DomainArchiveProgressStore, copyDomainArchiveState, copyDomainPublication } from "./domainArchiveProgress.ts";
 import { resolveBusinessModuleId, resolveBusinessModuleIds } from "./businessModuleIdentity.ts";
+import { DomainKnowledgeStore } from "./domainKnowledgeStore.ts";
 import { KnowledgeTaskCapacity } from "./knowledgeTaskCapacity.ts";
 import { componentArchiveFiles, componentArchiveParts, componentArchivePath } from "./componentKnowledgeArchiveFormat.ts";
 import { listFormalKnowledgeDocuments, listKnowledgeDocuments, readKnowledgeDocument, readKnowledgeDocumentFacts, readKnowledgeArchiveVersion, readKnowledgeArchiveVersionFacts, eraseKnowledgeDocument } from "./knowledgeDocuments.ts";
@@ -20,7 +22,6 @@ import { assertRepositoryCloneAddress } from "./repositoryAddress.ts";
 import { readKnowledgeMaterial } from "./knowledgeMaterials.ts";
 import { IncompleteDomainResearch, readSkillWorkDocuments, readSkillWorkDocumentSummaries, type SkillWorkResult } from "./domainSkillWork.ts";
 import { domainKnowledgeTask } from "./knowledgeTaskCenter.ts";
-import { durableWriteFileSync } from "./durableWrite.ts";
 import { readDomainReviewNoteBatch } from "./domainKnowledgeReviewNotes.ts";
 import { currentKnowledgeArchiveBatches, projectKnowledgeProduction } from "./knowledgeProductionState.ts";
 import type { KnowledgeArchivePreview, KnowledgeProductionAction } from "./knowledgeProductionTypes.ts";
@@ -229,6 +230,7 @@ export class DomainKnowledgeExtraction {
   private jobs = new Map<string, DomainKnowledgeJob>();
   private running = new Map<string, DomainRunning>();
   private readWarnings: string[] = [];
+  private store = new DomainKnowledgeStore(message => this.readWarnings.push(message));
   private publishing = new Map<string, symbol>();
   private archiving = new Map<string, Promise<void>>();
   private stopped = false;
@@ -251,7 +253,7 @@ export class DomainKnowledgeExtraction {
       const path = join(root, name, "job.json");
       if (!existsSync(path)) continue;
       try {
-        const job: unknown = JSON.parse(readFileSync(path, "utf8"));
+        const job: unknown = this.store.read(path);
         if (!validStoredJob(job, name)) throw new Error("记录形状无效");
         let changed = false;
         for (const batch of job.archive_batches ?? []) {
@@ -333,7 +335,9 @@ export class DomainKnowledgeExtraction {
   private persist(job: DomainKnowledgeJob) {
     mkdirSync(this.root(job.id), { recursive: true });
     const path = join(this.root(job.id), "job.json");
-    durableWriteFileSync(path, JSON.stringify(job), { mode: 0o600 });
+    this.store.save(path, job);
+    const live = this.jobs.get(job.id);
+    if (live) live.archive_progress_revision = job.archive_progress_revision;
   }
   private indexPublished(id: string) {
     try { this.options.onIndexed?.(); }
@@ -861,16 +865,18 @@ export class DomainKnowledgeExtraction {
   }
   private async runManualArchive(job: DomainKnowledgeJob, original: DomainArchiveBatch, targetIds: string[], operator: string, owner: symbol) {
     if (!this.options.publish) throw new Error("未配置 Git 归档发布器");
-    let snapshot = structuredClone(job);
+    if (!this.live(job.id).archive_progress_revision) this.persist(this.live(job.id));
+    let snapshot = copyDomainArchiveState(job);
+    const progress = new DomainArchiveProgressStore();
     const batchId = original.id;
     const currentBatch = () => snapshot.archive_batches!.find(batch => batch.id === batchId)!;
     // 操作的私有副本与读取副本分离；耐久写成功后才替换公开记录。
     const commit = (change: (candidate: DomainKnowledgeJob, batch: DomainArchiveBatch) => void) => {
       this.assertPublicationOwner(job.id, owner);
-      const candidate = structuredClone(this.live(job.id)), batch = candidate.archive_batches!.find(batch => batch.id === batchId)!;
-      change(candidate, batch); this.persist(candidate); snapshot = candidate;
+      const candidate = copyDomainArchiveState(this.live(job.id)), batch = candidate.archive_batches!.find(batch => batch.id === batchId)!;
+      change(candidate, batch); progress.save(join(this.root(job.id), "job.json"), candidate); snapshot = candidate;
       // 研究执行体持有 turn/document 引用；这里只换归档字段，不能替换仍在执行的嵌套对象。
-      Object.assign(this.live(job.id), { archive_batches: structuredClone(candidate.archive_batches), publications: structuredClone(candidate.publications) });
+      Object.assign(this.live(job.id), { archive_batches: candidate.archive_batches, publications: candidate.publications });
     };
     const fail = (reason: string, targetId?: string, previous?: DomainPublication) => {
       const update = (candidate: DomainKnowledgeJob, batch: DomainArchiveBatch) => {
@@ -884,7 +890,7 @@ export class DomainKnowledgeExtraction {
             : { ...(saved ?? { target_id: targetId, branch: "", documents: [] }), state: "failed", error: reason };
           batch.publications = [...batch.publications.filter(publication => publication.target_id !== targetId),
             publication];
-          candidate.publications = structuredClone(batch.publications);
+          candidate.publications = batch.publications;
         }
         batch.state = archiveRepositoryGroups(batch.targets).every(group => batch.publications.some(publication => group.ids.includes(publication.target_id) && publication.state === "opened")) && !batch.replacements?.some(item => !(["closed", "merged"] as string[]).includes(item.state)) ? "done" : "failed";
         batch.error = batch.state === "failed" ? reason : undefined;
@@ -892,9 +898,9 @@ export class DomainKnowledgeExtraction {
       try { commit(update); }
       catch (error) {
         this.assertPublicationOwner(job.id, owner);
-        const candidate = structuredClone(this.live(job.id)); update(candidate, candidate.archive_batches!.find(batch => batch.id === batchId)!);
+        const candidate = copyDomainArchiveState(this.live(job.id)); update(candidate, candidate.archive_batches!.find(batch => batch.id === batchId)!);
         Object.assign(this.live(job.id), { archive_batches: candidate.archive_batches, publications: candidate.publications });
-        this.readWarnings.push(`人工归档失败记录保存失败：domain-extraction/${job.id}/job.json；${error instanceof Error ? error.message : String(error)}；请检查磁盘后手动重试`);
+        this.readWarnings.push(`人工归档失败记录保存失败：domain-extraction/${job.id}/archive-progress.json；${error instanceof Error ? error.message : String(error)}；请检查磁盘后手动重试`);
       }
     };
     const work = (async () => {
@@ -913,18 +919,18 @@ export class DomainKnowledgeExtraction {
           if (!accepting || controller.signal.aborted) return;
           if (!validPublication(publication)) throw new Error("MR 回执格式不正确或缺少有效链接，未记为已归档；请手动重试");
           commit((candidate, batch) => {
-            batch.publications = [...batch.publications.filter(current => current.target_id !== target.id), structuredClone(publication)];
-            candidate.publications = structuredClone(batch.publications);
+            batch.publications = [...batch.publications.filter(current => current.target_id !== target.id), copyDomainPublication(publication)];
+            candidate.publications = batch.publications;
           });
         };
         try {
           const batch = currentBatch();
-          const publicationJob = { ...structuredClone(snapshot), documents: structuredClone(batch.documents.filter(document => ids.includes(document.target_id))),
+          const publicationJob = structuredClone({ ...snapshot, evidence: [], turns: [], documents: batch.documents.filter(document => ids.includes(document.target_id)),
             knowledge_layout: batch.knowledge_layout,
             knowledge_target: structuredClone(batch.targets.find(candidate => candidate.id === "domain") ?? snapshot.knowledge_target),
-            repositories: structuredClone(batch.targets.filter(candidate => candidate.id !== "domain")), issue_no: batch.issue_no, issue_description: batch.issue_description };
+            repositories: structuredClone(batch.targets.filter(candidate => candidate.id !== "domain")), issue_no: batch.issue_no, issue_description: batch.issue_description });
           const publication = await Promise.race([this.options.publish!(publicationJob, structuredClone(target), previous && structuredClone(previous), operator, save, controller.signal), new Promise<never>((_, reject) => {
-            timer = setTimeout(() => { accepting = false; controller.abort(); reject(new Error("人工归档超时：此仓操作 180 秒内未完成，请手动重试")); }, 180_000);
+            timer = setTimeout(() => { accepting = false; controller.abort(); reject(new Error("人工归档超时：此仓操作 600 秒内未完成，请手动重试")); }, 600_000);
           })]);
           this.assertPublicationOwner(job.id, owner); save(publication);
         } catch (error) {
@@ -946,7 +952,7 @@ export class DomainKnowledgeExtraction {
               if (previous?.state === "done" && previous.publications.every(publication => replacedUrls.has(publication.url))) previous.state = "superseded";
             }
           });
-          const outcome = await this.options.closePublication(structuredClone(snapshot), structuredClone(replacement.target), structuredClone(replacement.publication), operator);
+          const outcome = await this.options.closePublication(structuredClone({ ...snapshot, evidence: [], turns: [] }), structuredClone(replacement.target), structuredClone(replacement.publication), operator);
           commit((_, batch) => {
             const current = batch.replacements!.find(item => item.publication.url === url)!;
             current.state = outcome === "merged" ? "merged" : "closed"; current.error = undefined;
@@ -1439,7 +1445,7 @@ export class DomainKnowledgeExtraction {
           const result = await this.execute({ job: { ...this.get(job.id), documents: structuredClone(workingDocuments) }, turn: structuredClone(turn), root: this.root(job.id), signal: controller.signal,
             read: () => structuredClone(workingDocuments),
             update: patch => { if (!controller.signal.aborted && !job.deleted_at) { const { research, ...rest } = patch; Object.assign(job, rest); if (research) turn.research = structuredClone(research); if (patch.skill) turn.skill = patch.skill; if (patch.revisions) turn.revisions = { ...turn.revisions, ...patch.revisions }; this.persist(job); } },
-            evidence: event => { if (!controller.signal.aborted && !job.deleted_at) { scanForSecrets("研究记录", Buffer.from(JSON.stringify(event))); job.evidence.push({ at: new Date().toISOString(), ...event }); this.persist(job); } },
+            evidence: event => { if (!controller.signal.aborted && !job.deleted_at) { scanForSecrets("研究记录", Buffer.from(JSON.stringify(event))); this.store.appendEvidence(join(this.root(job.id), "job.json"), job, { at: new Date().toISOString(), ...event }); } },
             remove: documentId => {
               if (controller.signal.aborted || job.deleted_at) throw new Error("本轮已停止");
               if (turn.mode === "discuss") throw new Error("讨论不修改文档");

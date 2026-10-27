@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage } from "node:http";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DomainKnowledgeExtraction } from "../src/domainKnowledgeExtraction.ts";
+import { DomainKnowledgeStore } from "../src/domainKnowledgeStore.ts";
 import { domainKnowledgeRoute } from "../src/domainKnowledgeRoutes.ts";
 import type { DomainKnowledgeJob, DomainPublication } from "../src/domainKnowledgeTypes.ts";
 import type { TaskService } from "../src/taskService.ts";
@@ -66,6 +67,8 @@ function harness(dir: string, options: { noGit?: boolean; multiple?: boolean; fa
 }
 async function close(manager: DomainKnowledgeExtraction) { await within(manager.shutdown(), "管理器关停超过5秒预算"); }
 const batchPath = (dir: string, id: string) => join(dir, "domain-extraction", id, "job.json");
+const progressPath = (dir: string, id: string) => join(dir, "domain-extraction", id, "archive-progress.json");
+const readStoredJob = (path: string) => new DomainKnowledgeStore().read(path) as DomainKnowledgeJob;
 
 test("Issue488：已有归档批次但未创建MR时继续原批次与分支，完成后重复点击不再创建", { timeout: 15_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-archive-missing-mr-"));
@@ -73,13 +76,13 @@ test("Issue488：已有归档批次但未创建MR时继续原批次与分支，�
   try {
     const id = await state.seed();
     await close(state.manager);
-    const file = batchPath(dir, id), stored = JSON.parse(readFileSync(file, "utf8")) as DomainKnowledgeJob;
+    const file = batchPath(dir, id), stored = readStoredJob(file);
     const batch: NonNullable<DomainKnowledgeJob["archive_batches"]>[number] = { id: randomUUID(), created_at: new Date().toISOString(), operator: "reviewer", state: "done",
       knowledge_layout: stored.knowledge_layout, documents: structuredClone(stored.documents), targets: [structuredClone(stored.knowledge_target)], publications: [] };
     stored.archive_batches = [batch];
     batch.issue_no = "REQ-EXISTING"; batch.state = "done";
     batch.publications = [{ target_id: "domain", state: "pending", branch: "codex/pushed-without-mr", documents: [] }];
-    writeFileSync(file, JSON.stringify(stored));
+    new DomainKnowledgeStore().save(file, stored);
     state = harness(dir);
     const before = JSON.stringify(listKnowledgeDocuments(dir)), preview = state.manager.previewArchive(id);
     assert.equal(preview.status_label, "待创建 MR");
@@ -103,7 +106,7 @@ test("领域候选不提前进入正式库，旧发布入口拒绝且不会自�
       await assert.rejects(state.manager.publish(id, "reviewer"), /直接创建 MR/);
       assert.equal(listKnowledgeDocuments(dir).length, 0);
       assert.equal(state.calls.length, 0);
-      const stored = JSON.parse(readFileSync(batchPath(dir, id), "utf8")) as DomainKnowledgeJob;
+      const stored = readStoredJob(batchPath(dir, id));
       assert.equal(stored.documents.length, 1); assert.equal(stored.archive_batches?.length ?? 0, 0);
       assert.equal(state.manager.get(id).production?.archive.status_label, "待创建 MR");
     } finally { await close(state.manager); rmSync(dir, { recursive: true, force: true }); }
@@ -167,7 +170,7 @@ test("生产线验收5/6/8/14：多目标手动归档保存部分成功，失败
     assert.ok(reason, "失败仓带原因");
     const texts = [created.message, ...created.targets.flatMap(target => [target.message, target.error ?? ""])];
     assert.equal(texts.filter(text => text.includes(reason)).length, 1, `失败原因只出现一次：${JSON.stringify(texts)}`);
-    const stored = JSON.parse(readFileSync(batchPath(dir, id), "utf8")) as DomainKnowledgeJob;
+    const stored = readStoredJob(batchPath(dir, id));
     const failed = stored.archive_batches!.find(batch => batch.state === "failed")!;
     assert.equal(failed.issue_no, "REQ-EXPORT"); assert.equal(failed.operator, "exporter");
     const failedBranch = failed.publications.find(publication => publication.target_id === "repo-1")!.branch;
@@ -188,9 +191,11 @@ test("生产线验收1/5/14：MR 提交中断后重启记失败，保留已发�
     const id = await state.seed(); const api = manual(state.manager);
     assert.equal(typeof api.createArchive, "function"); const preview = api.previewArchive(id);
     await api.createArchive(id, { issue_no: "REQ-RESTART", expected_revisions: preview.expected_revisions }, "exporter"); await close(state.manager);
-    const stored = JSON.parse(readFileSync(batchPath(dir, id), "utf8")) as DomainKnowledgeJob, batch = stored.archive_batches!.find(batch => batch.state === "done")!;
+    const stored = readStoredJob(batchPath(dir, id)), batch = stored.archive_batches!.find(batch => batch.state === "done")!;
     batch.state = "running"; batch.publications[0].state = "pending"; delete batch.publications[0].url; delete batch.publications[0].mr_id;
-    stored.publications = structuredClone(batch.publications); writeFileSync(batchPath(dir, id), JSON.stringify(stored));
+    stored.publications = structuredClone(batch.publications);
+    // 合并最新进度后保存新的主文件版本，旧检查点不能把模拟中断状态覆盖回 done。
+    new DomainKnowledgeStore().save(batchPath(dir, id), stored);
     let external = 0; restarted = new DomainKnowledgeExtraction(dir, async () => { throw new Error("不应重复研究"); }, { publish: async () => { external++; throw new Error("不应自动归档"); } });
     await settle(); await settle();
     assert.equal(external, 0); const recovered = restarted.get(id).archive_batches!.find(row => row.id === batch.id)!;
@@ -214,7 +219,7 @@ test("任务新版候选继续原 MR，保留旧批次快照且不提前更新�
     assert.equal(second.status_label, "MR 待合入"); assert.equal(second.targets[0].url, oldUrl);
     assert.notEqual(state.calls[0].job.documents[0].revision, state.calls[1].job.documents[0].revision);
     assert.equal(state.calls[1].previous?.url, oldUrl);
-    const stored = JSON.parse(readFileSync(batchPath(dir, id), "utf8")) as DomainKnowledgeJob;
+    const stored = readStoredJob(batchPath(dir, id));
     assert.equal(stored.archive_batches!.length, 2);
     assert.equal(stored.archive_batches![0].documents[0].content, original.content);
     assert.deepEqual(listKnowledgeDocuments(dir), []);
@@ -246,9 +251,9 @@ test("生产线验收4/5/14：MR成功回执耐久写EIO保留已保存分支，
     const id = await state.seed(); const preview = state.manager.previewArchive(id), formal = JSON.stringify(listKnowledgeDocuments(dir)), rename = fs.renameSync;
     let failed = false;
     const interception = t.mock.method(fs, "renameSync", (...args: Parameters<typeof fs.renameSync>) => {
-      if (!failed && String(args[1]) === batchPath(dir, id)) {
-        const candidate = JSON.parse(readFileSync(String(args[0]), "utf8")) as DomainKnowledgeJob;
-        if (candidate.archive_batches?.some(batch => batch.publications.some(publication => publication.state === "opened"))) {
+      if (!failed && String(args[1]) === progressPath(dir, id)) {
+        const candidate = JSON.parse(readFileSync(String(args[0]), "utf8")) as { batches: Array<{ publications: DomainPublication[] }> };
+        if (candidate.batches.some(batch => batch.publications.some(publication => publication.state === "opened"))) {
           failed = true; throw Object.assign(new Error("测试MR回执耐久写 EIO"), { code: "EIO" });
         }
       }

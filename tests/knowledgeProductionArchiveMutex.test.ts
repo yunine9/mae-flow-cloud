@@ -43,7 +43,7 @@ test("生产线验收6/14：已有 MR 后启动修订时保留旧回执，研究
   } finally { release(); await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("生产线验收5/14：人工归档每仓180秒硬预算，忽略abort的迟到回执不改变failed事实", async t => {
+test("生产线验收5/14：人工归档每仓600秒硬预算，忽略abort的迟到回执不改变failed事实", async t => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const dir = mkdtempSync(join(tmpdir(), "knowledge-manual-target-budget-"));
   let resolveReply!: (publication: DomainPublication) => void, saveLate!: (publication: DomainPublication) => void, signal: AbortSignal | undefined;
@@ -54,12 +54,14 @@ test("生产线验收5/14：人工归档每仓180秒硬预算，忽略abort的�
     const job = service.create(config, "alice"); await flush();
     let returned = false;
     active = service.createArchive(job.id, { issue_no: "REQ-BUDGET", expected_revisions: service.previewArchive(job.id).expected_revisions }, "alice").then(value => { returned = true; return value; });
-    await flush(); t.mock.timers.tick(179_999); await flush(); assert.equal(returned, false);
+    await flush(); t.mock.timers.tick(599_999); await flush(); assert.equal(returned, false);
     t.mock.timers.tick(1); await flush(); await active; assert.equal(returned, true); assert.equal(signal?.aborted, true);
-    assert.equal(service.previewArchive(job.id).status_label, "MR 创建失败"); assert.match(service.previewArchive(job.id).targets[0].error ?? "", /180 秒/);
+    assert.equal(service.previewArchive(job.id).status_label, "MR 创建失败"); assert.match(service.previewArchive(job.id).targets[0].error ?? "", /600 秒/);
     const path = join(dir, "domain-extraction", job.id, "job.json"), before = readFileSync(path, "utf8");
+    const progressPath = join(dir, "domain-extraction", job.id, "archive-progress.json"), progressBefore = readFileSync(progressPath, "utf8");
     const late: DomainPublication = { target_id: "domain", state: "opened", branch: "codex/late", url: "https://example.test/mr/late", documents: docs(service.get(job.id)) };
     saveLate(late); resolveReply(late); await flush(); assert.equal(readFileSync(path, "utf8"), before);
+    assert.equal(readFileSync(progressPath, "utf8"), progressBefore);
   } finally { resolveReply?.({ target_id: "domain", branch: "", state: "failed", documents: [] }); await flush(); await service.shutdown(); rmSync(dir, { recursive: true, force: true }); t.mock.timers.reset(); }
 });
 
@@ -111,11 +113,13 @@ for (const outcome of ["返回", "抛错"] as const) test(`生产线验收2/6/14
     assert.equal(service.previewArchive(job.id).targets[0].status_label, "MR 创建失败");
     assert.deepEqual(service.previewArchive(job.id).targets[0].actions.map(action => action.id), ["retry-archive"]);
     const path = join(dir, "domain-extraction", job.id, "job.json"), before = readFileSync(path, "utf8");
+    const progressPath = join(dir, "domain-extraction", job.id, "archive-progress.json"), progressBefore = readFileSync(progressPath, "utf8");
     const late: DomainPublication = { target_id: "domain", state: "opened", branch: "codex/late", url: "https://example.test/mr/late", documents: docs(service.get(job.id)) };
     assert.throws(() => saveLate(late), /迟到结果未保存/);
     if (outcome === "返回") resolveReply(late); else rejectReply(new Error("迟到网络错误"));
     const error = await active; await flush(); assert.ok(error instanceof Error); assert.match(error.message, /迟到结果未保存/);
     assert.equal(readFileSync(path, "utf8"), before);
+    assert.equal(readFileSync(progressPath, "utf8"), progressBefore);
   } finally { resolveReply?.({ target_id: "domain", branch: "", state: "failed", documents: [] }); await flush();
     if (!closed) { const closing = service.shutdown(); t.mock.timers.tick(60_000); await flush(); await closing; }
     rmSync(dir, { recursive: true, force: true }); t.mock.timers.reset(); }
