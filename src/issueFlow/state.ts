@@ -355,29 +355,32 @@ export interface IssueMrGateRecord {
 }
 
 /** 终止原因(#541):稳定英文值是协议,界面渲染中文——resolved=问题已
- * 处理(默认)/inaccurate=分析不准确/slow=速度太慢/disobedient=指令不
- * 遵从/unclear_plan=方案未明确/wrong_module=业务模块绑错/other=其他
- * (附选填说明)。统计侧只有负面原因计一次解决率失败;resolved 与
- * wrong_module(模块绑错,重开登记即可)与无原因取消待遇相同(不进
- * 统计)。 */
+ * 处理(默认)/accidental=误发起/wrong_module=业务模块绑错/
+ * inaccurate=分析不准确/slow=速度太慢/disobedient=指令不遵从/
+ * unclear_plan=方案未明确/other=其他(附选填说明)。下拉顺序=排除类
+ * 在前。统计侧只有负面原因计一次解决率失败;resolved、accidental
+ * (发起失误)、wrong_module(模块绑错,重开登记即可)与无原因取消
+ * 待遇相同(不进统计)。 */
 export type IssueCancelReason =
   | "resolved"
+  | "accidental"
+  | "wrong_module"
   | "inaccurate"
   | "slow"
   | "disobedient"
   | "unclear_plan"
-  | "wrong_module"
   | "other";
 
 /** 码表单一事实:路由白名单与 UI 下拉共用这一份,顺序即下拉顺序。 */
 export const ISSUE_CANCEL_REASONS: readonly IssueCancelReason[] = [
-  "resolved", "inaccurate", "slow", "disobedient", "unclear_plan",
-  "wrong_module", "other",
+  "resolved", "accidental", "wrong_module", "inaccurate", "slow",
+  "disobedient", "unclear_plan", "other",
 ];
 
 /** 负面原因(#542):这些原因终止的有单会话进一次解决率分母记失败;
- *  resolved(问题已处理)、wrong_module(业务模块绑错)与无原因取消
- *  (历史数据)待遇相同,不进任何统计。显式列举词表——将来新增中性/负面原因时各自显式表态,不靠
+ *  resolved(问题已处理)、accidental(误发起)、wrong_module(业务模
+ *  块绑错)与无原因取消(历史数据)待遇相同,不进任何统计。显式列举
+ *  词表——将来新增中性/负面原因时各自显式表态,不靠
  *  「非 resolved 即负面」的隐式推导漂移。 */
 export const ISSUE_NEGATIVE_CANCEL_REASONS: readonly IssueCancelReason[] = [
   "inaccurate", "slow", "disobedient", "unclear_plan", "other",
@@ -386,7 +389,7 @@ export const ISSUE_NEGATIVE_CANCEL_REASONS: readonly IssueCancelReason[] = [
 /** 词表外终止原因的统一报错(#540 复审):路由白名单与服务的 fail-loud
  *  各拒各的,但对外必须是同一句话——常量收口,不许各写一份漂移。 */
 export const ISSUE_CANCEL_REASON_UNKNOWN_ERROR =
-  "未知终止原因:只支持 resolved/inaccurate/slow/disobedient/unclear_plan/wrong_module/other";
+  "未知终止原因:只支持 resolved/accidental/wrong_module/inaccurate/slow/disobedient/unclear_plan/other";
 
 export interface IssueSessionState {
   id: string;
