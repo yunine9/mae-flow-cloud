@@ -23,7 +23,7 @@ const textExtensions = new Set(["", ".ts", ".tsx", ".js", ".mjs", ".json", ".jso
 async function checked(scope: AnalysisScope, path: string): Promise<string> {
   const parts = path.split(/[\\/]/).filter(Boolean);
   if (path.startsWith("/") || path.includes("\0") || parts.some(p => p === ".." || blocked.test(p))) throw new Error("材料路径不在只读分析范围内");
-  if (scope.sourceOnly && parts.length && !["src", "skills", "docs", "scripts", "kernel", "package.json", "CONTEXT.md", "AGENTS.md"].includes(parts[0])) throw new Error("平台读取只开放源码、规则和文档");
+  if (scope.sourceOnly && parts.length && !["src", "web", "tests", "skills", "docs", "scripts", "kernel", "package.json", "CONTEXT.md", "AGENTS.md"].includes(parts[0])) throw new Error("平台读取只开放源码、规则和文档");
   let cursor = resolve(scope.root);
   if ((await lstat(cursor)).isSymbolicLink()) throw new Error("分析根目录不能是链接");
   for (const part of parts) {
@@ -39,7 +39,7 @@ async function checked(scope: AnalysisScope, path: string): Promise<string> {
 export function improvementEvidenceTool(scopes: Record<string, AnalysisScope>, receiptRoot?: string) {
   return {
     name: "analysis_evidence", label: "读取交付过程与平台材料",
-    description: "只读任务及关联任务的原始记录、历史交付、知识/技能快照，以及当前平台和内核源码。list查看目录，search定位，read按字节偏移续读。当前平台源码不是历史运行版本证明。",
+    description: "只读任务及关联任务的原始记录、历史交付、知识/技能快照，以及开放范围中的当前团队货架、平台和内核源码。list查看目录，search定位，read按字节偏移续读。当前平台源码不是历史运行版本证明。",
     parameters: Type.Object({ action: Type.Union([Type.Literal("scopes"), Type.Literal("list"), Type.Literal("read"), Type.Literal("search")]),
       scope: Type.Optional(Type.String()), path: Type.Optional(Type.String()), query: Type.Optional(Type.String()), offset: Type.Optional(Type.Integer({ minimum: 0 })) }),
     execute: async (_id: string, args: { action: string; scope?: string; path?: string; query?: string; offset?: number }) => {

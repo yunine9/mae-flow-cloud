@@ -25,6 +25,12 @@ test("证据读取：从日志开头分页、完整续读、关联任务及当�
   writeFileSync(join(related, "notes.md"), "关联背景，不是本任务验证");
   writeFileSync(join(platform, "src", "sample.ts"), "export const version = 1;");
   writeFileSync(join(platform, "private.log"), "not platform source");
+  for (const directory of ["web/src", "tests", "skills/example", "web/node_modules"]) mkdirSync(join(platform, directory), { recursive: true });
+  writeFileSync(join(platform, "web/src/page.tsx"), "export const page = 'current frontend';");
+  writeFileSync(join(platform, "tests/page.test.ts"), "test('page', () => {});");
+  writeFileSync(join(platform, "skills/example/SKILL.md"), "current platform skill");
+  writeFileSync(join(platform, "web/.env"), "PRIVATE_WEB_ENV");
+  writeFileSync(join(platform, "web/node_modules/private.js"), "PRIVATE_DEPENDENCY");
   const tool = improvementEvidenceTool({ task: { root: f.root, description: "任务" }, related: { root: related, description: "关联" }, platform: { root: platform, description: "当前源码", sourceOnly: true } });
   let page = await data(tool, { action: "read", path: "events.jsonl" });
   assert.equal(page.offset, 0); assert.ok(page.text.startsWith("开头证据")); assert.ok(page.next_offset > 0); assert.doesNotMatch(page.text, /末尾证据/);
@@ -33,7 +39,12 @@ test("证据读取：从日志开头分页、完整续读、关联任务及当�
   assert.equal(combined, text); assert.doesNotMatch(combined, /�/);
   assert.equal((await data(tool, { action: "read", scope: "related", path: "notes.md" })).text, "关联背景，不是本任务验证");
   assert.match((await data(tool, { action: "read", scope: "platform", path: "src/sample.ts" })).text, /version/);
-  await assert.rejects(tool.execute("call", { action: "read", scope: "platform", path: "private.log" }));
+  for (const path of ["web/src/page.tsx", "tests/page.test.ts", "skills/example/SKILL.md"]) {
+    assert.ok((await data(tool, { action: "read", scope: "platform", path })).text);
+  }
+  const frontend = await data(tool, { action: "search", scope: "platform", path: "web", query: "current frontend" });
+  assert.equal(frontend.hits.length, 1);
+  for (const path of ["private.log", "web/.env", "web/node_modules/private.js"]) await assert.rejects(tool.execute("call", { action: "read", scope: "platform", path }));
   const search = await data(tool, { action: "search", path: "", query: "末尾证据" });
   assert.match(search.limitation, /128KiB/); assert.match(search.limitation, /不证明/);
 });

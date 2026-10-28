@@ -169,3 +169,47 @@ test("专家失败保留缺口并继续综合，最终会话异常不返回伪�
   t.mock.method(CloudSession, "create", async () => ({ start: async () => ({ status: "failed" }), finalReply: () => "不能发布的报告", dispose() {}, abort: async () => {} }));
   await assert.rejects(runImprovementAgent(input, new AbortController().signal, f.options()), /正常结束/);
 });
+
+
+test("真实分析入口加载新版 Skill，当前货架与历史快照分开读取且工具保持只读", async t => {
+  const f = fixture(t);
+  for (const [root, text] of [[join(f.root, "skills/java-autout"), "CURRENT_RULE"],
+    [join(f.workspace, "host-skill-snapshot/java-autout"), "HISTORICAL_RULE"]]) {
+    mkdirSync(join(root, "procedures"), { recursive: true });
+    writeFileSync(join(root, "SKILL.md"), text);
+    writeFileSync(join(root, "procedures/mock_strategy.md"), text + "_MOCK");
+  }
+  mkdirSync(join(f.workspace, "analysis-context"));
+  writeFileSync(join(f.workspace, "analysis-context/session.json"), JSON.stringify({ system_prompt: "HISTORICAL_PROMPT" }));
+  writeFileSync(join(f.root, "private-data.json"), "PRIVATE_DATA");
+  let calls = 0;
+  t.mock.method(CloudSession, "create", async (config: any) => {
+    calls++;
+    assert.deepEqual([...config.allowedTools].sort(), ["analysis_code", "analysis_evidence"]);
+    const tool = config.extraTools.find((entry: any) => entry.name === "analysis_evidence");
+    const read = async (scope: string, path: string) => JSON.parse((await tool.execute("read", { action: "read", scope, path })).content[0].text);
+    assert.match((await read("skill_library", "java-autout/procedures/mock_strategy.md")).text, /CURRENT_RULE_MOCK/);
+    assert.match((await read("task", "host-skill-snapshot/java-autout/procedures/mock_strategy.md")).text, /HISTORICAL_RULE_MOCK/);
+    assert.match((await read("task", "analysis-context/session.json")).text, /HISTORICAL_PROMPT/);
+    const manifest = JSON.parse((await read("analysis", "manifest.json")).text);
+    assert.match(manifest.scopes.skill_library, /当前版本/);
+    assert.match(manifest.limitations.join("\n"), /当前货架不能替代缺失历史/);
+    await assert.rejects(read("skill_library", "../private-data.json"));
+    return {
+      start: async (prompt: string) => {
+        assert.match(prompt, /修改构成与占比/);
+        assert.match(prompt, /五类原因/);
+        assert.match(prompt, /当时正文不可得/);
+        assert.match(prompt, /每个提交只计一次/);
+        assert.match(prompt, /低频但导致关键功能失效/);
+        return { status: "turn_finished" };
+      },
+      finalReply: () => "根据已读取证据给出报告", dispose() {}, abort: async () => {},
+    };
+  });
+  const service = new DeliveryImprovements(f.options);
+  service.start(f.task); await service.flush();
+  assert.equal(service.view(f.summary).state?.status, "completed", service.view(f.summary).state?.message);
+  assert.equal(calls, 4, "三个维度和综合会话均收到真实 Skill 与相同证据读取边界");
+  await service.shutdown();
+});

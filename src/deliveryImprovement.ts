@@ -82,7 +82,7 @@ export async function runImprovementAgent(input: RunInput, signal: AbortSignal, 
   const dimensions = [
     ["requirements", "需求与业务知识：追查需求和澄清历史、父子任务拆分与交接、当时的知识版本和实际读取结果，解释理解偏差如何形成。"],
     ["code-validation", "编码与验证：逐提交分析实际变化，串联缺陷、规范、组件用法及各轮真实验证，找可提前发现的条件。"],
-    ["workflow", "流程与协作：追查主/子Agent的实际任务卡、回复、工具记录、人工决定、重复步骤和提示词。源码符合现有实现不证明机制合理；优先评估删除或简化。"],
+    ["workflow", "流程与协作：追查主/子Agent的实际任务卡、回复、工具记录、人工决定、重复步骤和提示词。核实流程的实际效果，区分有效质量检查、环境/工具故障和无收益的重复步骤；有效检查以减少往返为主，不能仅因检查失败就建议删除。"],
   ];
   const results = await Promise.allSettled(dimensions.map(async ([role, instruction]) => {
     const body = await runAnalysisPass(input, signal, options, role,
@@ -182,6 +182,9 @@ export class DeliveryImprovements<T extends Owner> {
         task: { root: snapshot.workspace, description: "任务全过程原始记录，可能包含多次交付，须按时间及版本核对" },
         platform: { root: ANALYSIS_PLATFORM_ROOT, sourceOnly: true, description: "分析时部署的平台源码、规则和文档；不能直接作为历史运行版本证明" },
       };
+      const skillLibraryRoot = join(options.dataDir, "skills");
+      if (existsSync(skillLibraryRoot)) scopes.skill_library = { root: skillLibraryRoot,
+        description: "分析时的团队 Skill 货架，只读当前版本；历史要求优先读取 task/host-skill-snapshot 及当时工具返回，版本未核实不可替代" };
       if (options.kernelRoot && existsSync(options.kernelRoot)) scopes.kernel = { root: options.kernelRoot, description: "分析时内核源码与技能，历史版本是否一致须核对" };
       for (const related of options.related ?? []) if (related.summary.id !== snapshot.id) scopes[related.summary.id] = { root: related.summary.workspace, description: `关联任务 ${related.summary.id} 的材料，只读背景；不得将其结果当作本任务验证` };
       const historical = snapshot.delivery_history?.find(h => h.id === (snapshot.delivery_generation ?? "initial"));
@@ -196,7 +199,7 @@ export class DeliveryImprovements<T extends Owner> {
         delivery_window: { started_at: snapshot.delivery_started_at ?? snapshot.created_at, completed_at: snapshot.completed_at,
           note: "历史交付优先读取delivery归档；task根下混合的事件、知识及上下文须按本窗口与SHA核对，不能仅按目录位置归属。" },
         instructions: "instructions.md", template: "report-template.md",
-        limitations: ["原始执行记录不普遍绑定代码版本；HEAD不能代表未提交代码。", "足迹不证明理解或采用，缺足迹不证明没读。", "当前平台/内核源码未必是任务当时运行版本，未来规划未提供。", "分析读取不是原子快照；变化中的记录须交叉核对。", ...codeLimitations, ...(!row?.metric ? ["指标或Git范围缺失，不能完整解释提交；须明确限制。"] : [])],
+        limitations: ["原始执行记录不普遍绑定代码版本；HEAD不能代表未提交代码。", "足迹不证明理解或采用，缺足迹不证明没读。", "当前平台/内核源码未必是任务当时运行版本，未来规划未提供。", "团队 Skill 历史正文仅在任务快照或原始记录保存时可读；当前货架不能替代缺失历史。", "分析读取不是原子快照；变化中的记录须交叉核对。", ...codeLimitations, ...(!row?.metric ? ["指标或Git范围缺失，不能完整解释提交；须明确限制。"] : [])],
         scopes: Object.fromEntries(Object.entries(scopes).map(([id, s]) => [id, s.description])) };
       writeFileSync(join(runRoot, "manifest.json"), redactAnalysisText(JSON.stringify(manifest, null, 2)), { mode: 0o600 });
       if (options.knowledgeHistory) {
