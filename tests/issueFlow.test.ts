@@ -32,7 +32,7 @@ test("B1验收2：问题流技能源目录保持标准形态，物化幂等且�
   // vendor/mattpocock/ 下是原封照搬的外部技能(同步时整目录覆盖,不本地
   // 改),与平台自有技能同一张清单注册。
   const expected = [
-    "code-review", "codebase-design", "diagnosing-bugs", "fetch-logs",
+    "code-review", "codebase-design", "fetch-logs",
     "grilling", "implement", "issue-analysis", "issue-delivery",
     "repo-docs", "tdd",
   ];

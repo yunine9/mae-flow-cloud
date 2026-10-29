@@ -19,6 +19,8 @@ function externalDocuments(dir: string, assets: SearchableKnowledge[], manualIds
       const content = readFileSync(join(dir, "skills", skill.path), "utf8");
       skills.push({id:`skill:${skill.path}`, title:skill.name, kind:"skill", scope:"团队 Skill",
         summary:skill.description, whenToUse:skill.description, content, revision:skill.package_digest,
+        applicability: { modules: skill.business_module_ids, repositories: skill.repositories,
+          languages: skill.technologies, versions: [] },
         productVersions:knowledgeProductVersions(content)});
     } catch { /* 无法读取的包仍可在原 Skill 管理界面修复。 */ }
   }

@@ -130,12 +130,12 @@ test("技能 frontmatter:目录名与 name 一致,description 非空(路由索�
 });
 
 test("技能指路真实性:skills/<名>/SKILL.md 引用必须指向真实物化的技能", () => {
-  // 编排技能的让位/取用指针(implement 指路、diagnosing-bugs 回路、
-  // grilling 对齐)是 AI 顺藤摸瓜的藤:指路悬空=方法断供,按物化清单
+  // 编排技能的让位/取用指针(implement 指路、grilling 对齐)
+  // 是 AI 顺藤摸瓜的藤:指路悬空=方法断供,按物化清单
   // 当场对账。
   const known = new Set(
     discoverIssueSkillPackages(SKILL_SOURCE_DIR).map((pkg) => pkg.name));
-  assert.ok(known.size >= 9, "物化清单探针:平台+vendor 技能应齐装");
+  assert.ok(known.size >= 8, "物化清单探针:平台+vendor 技能应齐装");
   for (const { name, text } of skillFiles()) {
     for (const match of text.matchAll(/skills\/([a-z0-9-]+)\/SKILL\.md/g)) {
       assert.ok(known.has(match[1]),

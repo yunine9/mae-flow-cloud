@@ -8,7 +8,7 @@
 简报与技能(issue-analysis 等)的分界尺(2026-09-08 拍板):简报只写**触发**
 (何时、用什么方法)加**一句分寸**,不复述方法内容——"怎么做"归技能正文;
 简报里出现"怎么做"的句子,就是该往技能挪的信号。点名外部 vendor 方法
-(grilling/diagnosing-bugs/implement)时同样只点名不复述,环境对照写在
+(grilling/implement)时同样只点名不复述,环境对照写在
 编排技能(issue-analysis/issue-delivery)里。
 
 ## stage.dts_info
@@ -21,7 +21,7 @@
 
 ## stage.analyze
 
-循证定位:方法论取用、分流与取证规范见技能 issue-analysis(grilling 对齐、diagnosing-bugs 诊断回路的取用时机也在其取用次序里);事实自己查不问用户,对齐与决策类提问按开场「介入节奏」的档位执行。
+循证定位:方法论取用、分流与取证规范见技能 issue-analysis;事实自己查不问用户,对齐与决策类提问按开场「介入节奏」的档位执行。
 
 ## stage.fix
 

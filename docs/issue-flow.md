@@ -250,7 +250,7 @@ fetch-logs(环境工具用法)。工号 = 登录账号,不再从 $HOME 猜。
 
 ### 分析供给线与报告门票(2026-08-31,ADR-0005)
 
-分析质量的三层供给,取用次序写在 issue-analysis 技能里(替换式,命中
+分析方法的取用次序写在 issue-analysis 技能里(替换式,命中
 即用,不叠加;不做显式冲突裁决):
 
 1. **业务仓问题 skill**:约定放业务仓根目录 `.cac/skills/<name>/SKILL.md`
@@ -263,8 +263,7 @@ fetch-logs(环境工具用法)。工号 = 登录账号,不再从 $HOME 猜。
    会话;匹配走 `knowledgeMatchesIssueSession`——任务口径上一处豁免:
    未限定仓库/模块的 engineering 通用知识进所有问题会话,技术栈维度
    不参与,未分类维持不进。货架方法论经管理面发布,仓内不内置种源。
-3. **通用诊断回路 diagnosing-bugs**:兜底方法论(vendor 技能,物化在
-   `skills/diagnosing-bugs/`);都没有则 Agent 按取证规范自行定位。
+未命中业务仓或团队货架的技能时,Agent 按 issue-analysis 的取证规范自行定位。
 
 报告门票:`submit_analysis` 机械校验 issue-analysis.md 含四章节
 (问题现象/问题根因/修改方案/置信度),缺章节整单打回——轻量路径的简版

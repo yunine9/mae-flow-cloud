@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import fs, { mkdtempSync, rmSync } from "node:fs";
+import fs, { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +12,8 @@ import type { TaskService } from "../src/taskService.ts";
 import { MemoryStore } from "../src/taskMemory.ts";
 import { gitKnowledgeDocument } from "./fixtures/gitKnowledge.ts";
 import { readGitKnowledgeSnapshot, writeGitKnowledgeSnapshot } from "../src/knowledgeRepositorySnapshots.ts";
+import { submitHostSkill, approveSkillSubmission } from "../src/hostSkillLibrary.ts";
+import { createTechnologyStack } from "../src/technologyStacks.ts";
 
 test("轻量目录保留正式知识与经验的展示口径，读取单篇不装配全库正文", () => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-directory-"));
@@ -55,6 +57,30 @@ test("轻量目录保留正式知识与经验的展示口径，读取单篇不�
     fs.readFileSync = original; syncBuiltinESMExports();
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("Skill 提交时选择的技术栈进入生效包，并在知识目录中保留归属", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "knowledge-skill-directory-"));
+  try {
+    createTechnologyStack(dir, { name: "Java" }, "owner");
+    const source = "---\nname: uploaded-guide\ndescription: Java 编码规范\n---\n\n# 编码规范\n";
+    const submission = await submitHostSkill(dir, "uploaded-guide", [
+      { path: "SKILL.md", content_base64: Buffer.from(source).toString("base64") },
+    ], "owner", { nature: "engineering", business_module_ids: [], repositories: [], technologies: ["java"] });
+    assert.match(readFileSync(join(dir, "skill-submissions", "uploaded-guide", submission.id, "package", "SKILL.md"), "utf8"), /technologies: \[java\]/);
+    await approveSkillSubmission(dir, "uploaded-guide", submission.id, "reviewer");
+    const id = "skill:uploaded-guide/SKILL.md";
+    for (const document of [knowledgeDocumentCatalog(dir).documents.find(row => row.id === id),
+      knowledgeDocumentDirectory(dir).find(row => row.id === id), readCatalogKnowledgeDocument(dir, id)]) {
+      assert.deepEqual(document?.technologies, ["java"]);
+    }
+
+    mkdirSync(join(dir, "skills", "legacy-guide"));
+    writeFileSync(join(dir, "skills", "legacy-guide", "SKILL.md"),
+      "---\nname: legacy-guide\ndescription: 旧版 Skill\n---\n\n# 旧版\n");
+    assert.deepEqual(knowledgeDocumentDirectory(dir).find(row => row.id === "skill:legacy-guide/SKILL.md")?.technologies, [],
+      "没有知识标签的旧 Skill 继续留在待整理范围");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("知识目录 HTTP 不计算全文索引或需求任务效果，任务摘要不返回文稿清单", async () => {
