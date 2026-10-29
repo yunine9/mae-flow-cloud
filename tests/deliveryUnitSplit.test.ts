@@ -104,6 +104,8 @@ test("单仓拆分:同 AR 单号确认→串行子任务+任务书+全局 Story 
     assert.match(prompt, /scope.paths 只是可选参考路径/);
     assert.match(prompt, /story_sha256/);
     assert.match(prompt, /不再生成独立 CHAIN/);
+    assert.match(prompt, /建议拆分或不拆分、理由和拟定的交付边界/);
+    assert.match(prompt, /拆与不拆由责任人在现有方案确认卡上决定/);
 
     const card = await until(() => {
       const now = service.get(parent.id)!;

@@ -52,6 +52,8 @@ function fixture(t: any, candidates = 1) {
 
 for (const candidates of [1, 2]) test(`${candidates} 个候选仓收敛为一个交付单元：确认后原任务继续，重复确认和重启不建子任务`, async t => {
   const f = fixture(t, candidates);
+  assert.equal(f.internal.autoAnswerFor(f.state, true), undefined,
+    "月光模式也不能代责任人同意不拆分的最终方案");
   const result = await f.confirm();
   assert.equal(f.service.list().length, 1, "单个交付单元不新增子任务");
   assert.equal(result.id, f.parent.id);

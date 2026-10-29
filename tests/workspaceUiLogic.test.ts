@@ -542,6 +542,37 @@ test("最终交付决定卡不要求勾选文件，人工意见仍可提交", ()
   assert.match(html, /delivery\.ts/);
 });
 
+test("需求最终方案卡展示拆分建议和 Agent 的理由，选项仍提交原有契约值", () => {
+  const render = (count: number, question: string) => renderToStaticMarkup(React.createElement(taskCard.WaitingCard, {
+    task: {
+      ...task(`split-${count}`, "waiting_for_human"),
+      requirement_graph: {
+        stage: "analysis",
+        repositories: Array.from({ length: count }, (_, index) => ({ id: `unit-${index}`, responsibility: "独立交付" })),
+        repository_assessments: [], dependencies: [],
+      },
+      waiting: {
+        waiting_id: `wait-${count}`, state_version: 1, step: "requirement-analysis",
+        question: { questions: [{ question, options: [
+          count === 1 ? "确认并继续开发" : "确认并生成任务", "需要修改",
+        ] }] },
+      },
+    },
+    onDecided: () => undefined,
+    repositoryAssigneeSelection: { assignments: {}, tickets: {}, ready: false, loading: false },
+  }));
+  const single = render(1, "建议不拆分：只有一个独立验收目标。是否同意？");
+  assert.match(single, /确认开发方案/);
+  assert.match(single, /建议不拆分：只有一个独立验收目标。是否同意？/);
+  assert.match(single, /同意不拆分，继续开发/);
+  assert.match(single, /不同意当前方案，要求调整/);
+
+  const multiple = render(2, "建议拆分：两个模块可以独立交付。是否同意？");
+  assert.match(multiple, /确认拆分方案/);
+  assert.match(multiple, /建议拆分：两个模块可以独立交付。是否同意？/);
+  assert.match(multiple, /同意拆分，生成任务/);
+});
+
 test("管理员旁路只开放给当前复检白名单中的他人待闭环意见", () => {
   const current = annotation();
   const access = (item: Record<string, unknown>, options: {

@@ -950,7 +950,12 @@ export function WaitingCard({
           {/* 标题按卡类型说话,原始步骤 id(cloud_push_confirm 之类)
               不再印给人看——认不出的类型就只保留通用标题,卡的正文
               自会说明这是什么决定。 */}
-          <h3 id={`decision-${task.id}`}>{chainReview ? "任务分工" : waitingStepTitle(task) ?? "需要你的决策"}</h3>
+          <h3 id={`decision-${task.id}`}>
+            {waitingStepTitle(task) ?? "需要你的决策"}
+            {chainReview && (task.requirement_graph?.repositories.length ?? 0) > 0
+              ? ` · 建议${task.requirement_graph!.repositories.length === 1 ? "不拆分" : "拆分"}`
+              : null}
+          </h3>
         </div>
         {/* 几乎恒为 1 题:徽标只在真有多题时才有信息量。 */}
         {questions.length > 1 && (
@@ -975,7 +980,11 @@ export function WaitingCard({
            背景,把左边已经画出来的东西再讲一遍。 */
         <div className="chain-decision-facts" role="note">
           {chainProjectionReady ? <>
-            <span><b>{task.requirement_graph.repositories.length}</b>个模块任务</span>
+            <span>{task.requirement_graph.repositories.length === 1
+              ? <><b>建议不拆分</b>，由本任务继续开发</>
+              : task.requirement_graph.repositories.length > 1
+                ? <><b>建议拆分</b>为 {task.requirement_graph.repositories.length} 个模块任务</>
+                : <><b>建议无需修改</b>，确认分析结论</>}</span>
             <span><b>{task.requirement_graph.repository_assessments
               ?.filter((item) => item.outcome === "no_change").length ?? 0}</b>个仓无需修改</span>
             <span>{task.requirement_graph.dependencies.length > 0
@@ -1061,7 +1070,7 @@ export function WaitingCard({
                   {String(index + 1).padStart(2, "0")}
                 </span>}
                 <span className="question-text">
-                  {chainReview ? "确认以上分工？" : item.question || "需要你确认"}
+                  {item.question || "是否同意当前方案？"}
                 </span>
                 {skippable && <span className="q-optional">可跳过</span>}
               </legend>
@@ -1081,9 +1090,18 @@ export function WaitingCard({
                       : effect?.handles_feedback || inferredAdjustment
                         ? "将留在本轮，处理意见后重新检视"
                         : "";
-                  const [title, rawHint] = split
+                  const [originalTitle, rawHint] = split
                     ? [split[1].trim(), split[2].trim()]
                     : [option, consequence];
+                  const title = chainReview && option === "需要修改"
+                    ? "不同意当前方案，要求调整"
+                    : chainReview && confirmsChainOption(option)
+                      ? task.requirement_graph?.repositories.length === 1
+                        ? "同意不拆分，继续开发"
+                        : (task.requirement_graph?.repositories.length ?? 0) > 1
+                          ? "同意拆分，生成任务"
+                          : "同意无需修改，结束分析"
+                      : originalTitle;
                   const hint = locked
                     ? `由责任人 ${task.luban_account ?? ""} 确认；你可以选其他项或批注插话`
                     : rawHint;
