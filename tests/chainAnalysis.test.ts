@@ -143,6 +143,12 @@ test("跨仓分析会话:候选仓逐仓判断→只按改动模块建任务→�
     assert.equal(card.requirement_graph?.repository_assessments?.length, 3);
     assert.equal(card.requirement_graph?.repository_assessments?.[2].outcome,
       "no_change");
+    const firstMessage = readFileSync(join(parent.workspace, "events.jsonl"), "utf8")
+      .split("\n").filter(Boolean).map((line) => JSON.parse(line))
+      .find((event) => event.kind === "user_message")?.payload?.text;
+    assert.match(firstMessage ?? "", /"repository_assessments":\[\{"name":"仓库名","url":"原始地址","outcome":"change_required"/,
+      "机读图示例必须进入真实分析会话的首条消息，而非只存在于提示词函数里");
+    assert.match(firstMessage ?? "", /outcome 只能写 change_required 或 no_change/);
     assert.equal(card.requirement_graph?.review_snapshot?.waiting_id,
       card.waiting?.waiting_id,
       "最终方案卡出现时必须锁定用户实际看到的版本");
@@ -257,6 +263,61 @@ test("跨仓分析会话:候选仓逐仓判断→只按改动模块建任务→�
     await model.stop();
     await luban.stop();
   }
+});
+
+test("机读图写错字段时一次报出缺项和合法枚举，修正后恢复就绪", async (t) => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-chain-schema-"));
+  const apiRepo = makeRepo(dataDir, "schema-api");
+  const webRepo = makeRepo(dataDir, "schema-web");
+  const ticket = "REQ-SCHEMA";
+  const service = new TaskService({
+    dataDir, provider: "a", model: "a-1", maxConcurrent: 0,
+    modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
+    host: { kernelRoot: join(dataDir, "no-kernel") },
+  });
+  t.after(async () => { await service.shutdown(); rmSync(dataDir, { recursive: true, force: true }); });
+  const parent = service.create("双仓交付", {
+    account: "owner", ticket, repos: [apiRepo, webRepo],
+  });
+  const state = (service as any).tasks.get(parent.id);
+  state.cwd = join(parent.workspace, "repositories");
+  const artifactDir = join(state.cwd, ".mae-flow-work", ticket);
+  const assessments = [
+    { name: "schema-api", url: apiRepo, outcome: "change_required", reason: "接口需要调整", evidence: ["src/api.ts"] },
+    { name: "schema-web", url: webRepo, outcome: "change_required", reason: "页面需要调整", evidence: ["src/web.ts"] },
+  ];
+  const units = [
+    { id: "api", name: "schema-api", url: apiRepo, responsibility: "提供接口", scope: { name: "接口" } },
+    { id: "web", name: "schema-web", url: webRepo, responsibility: "消费接口", scope: { name: "页面" } },
+  ];
+  const write = (graph: Record<string, unknown>) => {
+    writeRequirementArtifacts(artifactDir, ticket, "# 双仓方案\n接口与页面分别交付。\n", graph);
+    (service as any).refreshRequirementGraph(state);
+    return state.summary.requirement_graph;
+  };
+  const missingFields = write({
+    repository_assessments: [
+      { repo: "schema-api", assessment: "接口需要调整", outcome: "in_scope" },
+      assessments[1],
+    ], repositories: units, dependencies: [],
+  });
+  assert.equal(missingFields.projection_state, "invalid");
+  assert.match(missingFields.projection_error, /缺 name.*缺 url.*outcome 值 "in_scope" 不合法.*缺 reason/);
+  assert.match(missingFields.projection_error, /change_required 或 no_change/);
+  assert.match(missingFields.projection_error, /"evidence":\[/);
+
+  const wrongUnit = write({
+    repository_assessments: assessments,
+    repositories: [{ path: "schema-api", role: "提供接口" }, units[1]],
+    dependencies: [],
+  });
+  assert.equal(wrongUnit.projection_state, "invalid");
+  assert.match(wrongUnit.projection_error, /第 1 个模块交付单元缺少 id、name、url、responsibility/);
+  assert.match(wrongUnit.projection_error, /repositories\[\] 每项示例/);
+
+  const fixed = write({ repository_assessments: assessments, repositories: units, dependencies: [] });
+  assert.equal(fixed.projection_state, "ready");
+  assert.equal(fixed.projection_error, undefined);
 });
 
 test("真实模块依赖图缺失时拒绝确认，不能拿候选仓占位图生成任务", async () => {

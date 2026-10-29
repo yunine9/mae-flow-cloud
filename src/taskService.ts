@@ -1897,6 +1897,18 @@ const CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP =
 /** Agent 提议拆分的决定卡:Cloud 自己的步骤,不在内核流程里。人有最后一票
  * ——选「不拆」编码会话原地继续,零成本;选拆才转身成分析单。 */
 const CLOUD_SPLIT_PROPOSAL_STEP = "cloud_split_proposal";
+// 需求分析的机读格式同时给开场提示和投影报错使用，避免 Agent 写错后
+// 只能猜字段名。示例值必须是合法枚举，不能把两个值拼成一个示例值。
+const REQUIREMENT_ASSESSMENT_EXAMPLE =
+  '{"name":"仓库名","url":"原始地址","outcome":"change_required","reason":"结论理由","evidence":["代码依据"]}';
+const REQUIREMENT_UNIT_EXAMPLE =
+  '{"id":"unit-1","name":"仓库名","url":"原始地址","responsibility":"本模块做什么","scope":{"name":"功能模块名","paths":[]}}';
+const REQUIREMENT_ASSESSMENT_FORMAT =
+  `repository_assessments[] 每项示例：${REQUIREMENT_ASSESSMENT_EXAMPLE}；`
+    + 'url 必须照录下单地址，outcome 只允许 change_required 或 no_change。';
+const REQUIREMENT_UNIT_FORMAT =
+  `repositories[] 每项示例：${REQUIREMENT_UNIT_EXAMPLE}；`
+    + 'url 必须照录下单地址，scope.paths 可为空数组。';
 /** "这批还没人处理"与"回执不合格"是两回事。批次刚登记就被重启/异常打断
  * 时 Agent 一次都没跑过,回执文件当然不存在——那不该报"Agent 没有留下
  * 回执"再停摆等人(内网 task-38 实锤:12:29 建 build_fix 批次、12:48 部署
@@ -4117,23 +4129,29 @@ export class TaskService {
       }
       const expected = task.summary.repositories ?? [];
       if (!Array.isArray(parsed.repository_assessments)) {
-        throw new Error("缺少 repository_assessments，无法区分需修改仓与仅排查仓");
+        throw new Error(`缺少 repository_assessments，无法区分需修改仓与仅排查仓。${REQUIREMENT_ASSESSMENT_FORMAT}`);
       }
       const seenAssessmentUrls = new Set<string>();
-      const assessments = parsed.repository_assessments.map((item) => {
+      const assessments = parsed.repository_assessments.map((item, index) => {
         const url = String(item?.url ?? "").trim();
         const name = String(item?.name ?? "").trim();
         const outcome = item?.outcome;
         const reason = String(item?.reason ?? "").trim();
+        const problems = [
+          !name ? "缺 name" : "",
+          !url ? "缺 url" : "",
+          outcome !== "change_required" && outcome !== "no_change"
+            ? `outcome 值 ${JSON.stringify(String(outcome ?? "未填写").slice(0, 60))} 不合法` : "",
+          !reason ? "缺 reason" : "",
+        ].filter(Boolean);
+        if (problems.length) {
+          throw new Error(`第 ${index + 1} 条排查结论字段不合法：${problems.join("、")}。${REQUIREMENT_ASSESSMENT_FORMAT}`);
+        }
         if (!expected.includes(url)) {
-          throw new Error(`排查结论包含未下单的仓库：${url || "未填写地址"}`);
+          throw new Error(`排查结论包含未下单的仓库：${url}。${REQUIREMENT_ASSESSMENT_FORMAT}`);
         }
         if (seenAssessmentUrls.has(url)) {
           throw new Error(`仓库 ${name || url} 出现了重复的排查结论`);
-        }
-        if (!name || !reason
-            || (outcome !== "change_required" && outcome !== "no_change")) {
-          throw new Error(`仓库 ${name || url || "未知"} 的排查结论不完整`);
         }
         seenAssessmentUrls.add(url);
         const evidence = Array.isArray(item.evidence)
@@ -4149,7 +4167,7 @@ export class TaskService {
         throw new Error(`还有 ${missingAssessments.length} 个候选仓没有排查结论`);
       }
       if (!Array.isArray(parsed.repositories)) {
-        throw new Error("缺少 repositories，模块交付单元尚未生成");
+        throw new Error(`缺少 repositories，模块交付单元尚未生成。${REQUIREMENT_UNIT_FORMAT}`);
       }
       const rawNodes = parsed.repositories;
       // 同 url 是否唯一,决定旧图产物按 url 兜底匹配是否安全:单仓
@@ -4172,13 +4190,20 @@ export class TaskService {
         previousUrlCounts.set(node.url,
           (previousUrlCounts.get(node.url) ?? 0) + 1);
       }
-      const repositories = rawNodes.map((item) => {
+      const repositories = rawNodes.map((item, index) => {
         const id = String(item?.id ?? "").trim();
         const name = String(item?.name ?? "").trim();
         const url = String(item?.url ?? "").trim();
         const responsibility = String(item?.responsibility ?? "").trim();
-        if (!id || !name || !expected.includes(url) || !responsibility) {
-          throw new Error(`模块交付单元 ${name || id || "未知"} 的基本信息不完整`);
+        const missing = [
+          !id ? "id" : "", !name ? "name" : "",
+          !url ? "url" : "", !responsibility ? "responsibility" : "",
+        ].filter(Boolean);
+        if (missing.length) {
+          throw new Error(`第 ${index + 1} 个模块交付单元缺少 ${missing.join("、")}。${REQUIREMENT_UNIT_FORMAT}`);
+        }
+        if (!expected.includes(url)) {
+          throw new Error(`模块交付单元 ${name} 的 url 不是下单仓库地址：${url}。${REQUIREMENT_UNIT_FORMAT}`);
         }
         const known = task.summary.requirement_graph?.repositories
           .find((candidate) => candidate.id === id
@@ -20333,12 +20358,12 @@ export class TaskService {
       `同时将建单投影写到 ${join(artifactDir, "requirement-graph.json")}，`
         + "在 Story 最终写完后计算真实字节 SHA-256；格式："
         + `{"plan_revision":"r1","story_sha256":"64位十六进制摘要",`
-        + `"repository_assessments":[{"name":"仓库名","url":"原始地址",`
-        + `"outcome":"change_required|no_change","reason":"结论理由","evidence":["代码依据"]}],`
-        + `"repositories":[{"id":"unit-1","name":"仓库名","url":"原始地址",`
-        + `"responsibility":"给责任人看的一句通俗分工摘要：本模块做什么。尽量简短，不罗列验收细节或实现步骤；完整职责、验收、接口、错误码、函数和启动命令保留在 Story",`
-        + `"scope":{"name":"功能模块名","paths":[]}}],`
-        + `"dependencies":[{"dependent":"unit-2","prerequisite":"unit-1","reason":"必须等待的真实前置条件"}]}。`
+        + `"repository_assessments":[${REQUIREMENT_ASSESSMENT_EXAMPLE}],`
+        + `"repositories":[${REQUIREMENT_UNIT_EXAMPLE}],"dependencies":[]}。`
+        + "这是字段格式示例，不是让你填写字面占位值。outcome 只能写 change_required 或 no_change，"
+        + "不得自创字段名或 in_scope/out_of_scope 等枚举；有多个候选仓或交付单元时按相同结构追加。"
+        + "没有硬依赖时 dependencies 写空数组；有真实依赖时每项写 dependent、prerequisite 和 reason。"
+        + "responsibility 用一句通俗的话说明本模块做什么，完整职责、验收、接口和启动命令保留在 Story。"
         + "每个候选仓恰好一条排查结论；无需修改仓不建单，需要修改仓至少一个模块。"
         + "id 唯一、仓地址照录。scope.name 使用简短业务模块名称，不堆砌实现术语；依赖 reason 用一句话解释必须等什么，不复制技术契约。scope.paths 只是可选参考路径，可为空或省略，"
         + "Story 的模块职责表以交付单元 id 为第一列，每个模块独占一行，便于从分工卡定位到详细说明；详细设计仍按既有模板展开。"
