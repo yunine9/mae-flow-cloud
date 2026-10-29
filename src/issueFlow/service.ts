@@ -1,3 +1,6 @@
+import { runCodecheckPrepush, rememberCodecheckBase, type CodecheckRunner } from "../codecheckPrepush.ts";
+import { runCodecheckSkillSession } from "../codecheckSkillSession.ts";
+import { excludeCodecheckArtifacts } from "../codecheckArtifacts.ts";
 import { resolveBusinessModuleRef } from "../businessModuleIdentity.ts";
 import { completedInRange, validateCompletionRange, type CompletionRange } from "../completionRange.ts";
 import { applyGitCommitIdentity } from "../gitCommitIdentity.ts";
@@ -729,6 +732,8 @@ export interface IssueFlowOptions {
     enabled?: boolean;
     runner?: IssueWarmupRunner;
   };
+  /** 上传 Skill 的固定调用；不新增交付阶段。 */
+  codecheck?: { runner?: CodecheckRunner };
   /** 容器属主判定的运行时形态:生产缺席即按进程真实形态判定(非 root
    * 部署守卫直接 false,零开销);只有测试注入它来模拟 root 宿主。 */
   ownershipRuntime?: ContainerOwnershipRuntime;
@@ -2786,6 +2791,8 @@ export class IssueFlowService {
         branch,
       });
     }
+    excludeCodecheckArtifacts(repo.dir);
+    if (cloned) await rememberCodecheckBase(join(live.root, "codecheck"), repo.dir);
     const head = await currentHead(repo.dir);
     // 克隆与切分支都以宿主身份落盘,而容器已经在跑:不把整棵仓交回容器
     // 用户,容器内 git add/commit 就是 Permission denied。收口必须压在
@@ -3967,7 +3974,7 @@ export class IssueFlowService {
         workspace: live.root,
         cwd: live.root,
         extraLedgerFiles: ["issue.json", "issue.json.tmp"],
-        extraLedgerDirs: ["skills", ".mae-flow-work/host-skills",
+        extraLedgerDirs: ["codecheck", "skills", ".mae-flow-work/host-skills",
           ".mae-flow-work/business-modules"],
         failClosed: false,
         log: (message) => this.log(`[issue-warmup-gate] ${message}`),
@@ -4034,6 +4041,41 @@ export class IssueFlowService {
     }
   }
 
+  private async checkCodecheckBeforePush(live: LiveIssue, repo: { dir: string; url: string }): Promise<string> {
+    const epoch = live.controlEpoch;
+    const result = await runCodecheckPrepush({ repo: repo.dir, workspace: live.root,
+      recordRoot: join(live.root, "codecheck"), sourceRoot: join(this.options.dataDir, "skills"),
+      moduleDataDir: this.options.dataDir, context: issueKnowledgeContext(live.state), scope: "issue",
+      target: live.state.baseline, log: message => this.log(`[issue-codecheck] ${message}`),
+      ticket: live.state.ticket,
+      commitConvention: `本单修复提交使用 [${live.state.ticket}][fix] 描述。`,
+      run: this.options.codecheck?.runner ?? (async request => {
+        if (this.shuttingDown || live.controlEpoch !== epoch) throw new IssueControlError("会话已停止");
+        if (!this.options.isolation) throw new Error("CodeCheck 需要任务执行容器，未回退到宿主运行");
+        await this.ensureContainer(live);
+        if (this.shuttingDown || live.controlEpoch !== epoch) throw new IssueControlError("会话已停止");
+        const model = this.modelChoice(live.state.account);
+        repairContainerMutationOwnership({ workspace: live.root, path: join(request.repo, ".codecheckcli"),
+          user: this.options.isolation?.user, runtime: this.options.ownershipRuntime });
+        return runCodecheckSkillSession(live, request, {
+          taskId: `${live.id}:codecheck`, workspace: live.root, agentDir: join(live.root, "pi-agent"),
+          provider: model.provider, model: model.model,
+          eventLog: new EventLog(join(live.root, "codecheck", "events.jsonl"), undefined, this.log),
+          transcript: new TranscriptStore(join(live.root, "codecheck", "transcript.jsonl"), "codecheck"),
+          humanGate: live.humanGate, streamBashOutput: true,
+          bashOperations: createContainerBashOperations(() => live.controlEpoch === epoch ? live.container : undefined),
+          afterFileMutation: path => { repairContainerMutationOwnership({ workspace: live.root, path,
+            user: this.options.isolation?.user, runtime: this.options.ownershipRuntime }); },
+          log: message => this.log(`[issue-codecheck] ${message}`),
+        });
+      }),
+    });
+    if (this.shuttingDown || live.controlEpoch !== epoch) throw new IssueControlError("会话已停止");
+    recordTransition(live.state, { source: "platform", note: result.summary });
+    saveState(live.root, live.state);
+    return result.summary;
+  }
+
   private async openDriver(live: LiveIssue): Promise<CloudSession> {
     if (this.shuttingDown || isTerminal(live.state.status)) throw new IssueControlError("会话已停止");
     const epoch = live.controlEpoch;
@@ -4066,6 +4108,10 @@ export class IssueFlowService {
       workspace: live.root,
       dataRoot: this.options.dataDir,
       persist: () => saveState(live.root, live.state),
+      beforePush: repo => this.checkCodecheckBeforePush(live, repo),
+      assertActive: () => {
+        if (this.shuttingDown || live.controlEpoch !== epoch || isTerminal(live.state.status)) throw new IssueControlError("会话已停止");
+      },
       ops: this.createSessionOps(live) ?? this.options.opsTools,
       dts: this.options.dts,
       platformUrl: this.options.platformUrl,
@@ -4139,7 +4185,10 @@ export class IssueFlowService {
         : undefined;
     const identity = this.options.gitCredential?.(live.state.account);
     for (const repo of issueRepoWorkspaces(live.state, live.root)) {
-      if (existsSync(join(repo.dir, ".git"))) await applyGitCommitIdentity(repo.dir, identity);
+      if (existsSync(join(repo.dir, ".git"))) {
+        excludeCodecheckArtifacts(repo.dir);
+        await applyGitCommitIdentity(repo.dir, identity);
+      }
     }
     const sessionOptions: import("../sessionDriver.ts").CloudSessionOptions = {
       taskId: live.id,
@@ -4188,7 +4237,7 @@ export class IssueFlowService {
         workspace: live.root,
         cwd: live.root,
         extraLedgerFiles: ["issue.json", "issue.json.tmp"],
-        extraLedgerDirs: ["skills", ".mae-flow-work/host-skills",
+        extraLedgerDirs: ["codecheck", "skills", ".mae-flow-work/host-skills",
           ".mae-flow-work/business-modules"],
         failClosed: false,
         log: (message) => this.log(`[issue-gate] ${message}`),

@@ -1,3 +1,7 @@
+import { runCodecheckPrepush, type CodecheckRunner, type CodecheckResult } from "./codecheckPrepush.ts";
+import { runCodecheckSkillSession } from "./codecheckSkillSession.ts";
+import { createContainerBashOperations } from "./issueFlow/containerBash.ts";
+import { assertNoCodecheckCommits, CodecheckArtifactCommitError } from "./codecheckArtifacts.ts";
 import { storeTaskAttachment, taskAttachment, taskAttachmentContext, materializeTaskAttachments } from "./taskAttachments.ts";
 import type { IncomingMessage } from "node:http";
 import { resolveBusinessModuleId, resolveBusinessModuleRef } from "./businessModuleIdentity.ts";
@@ -1199,6 +1203,8 @@ export interface TaskSummary {
     /** Cloud 按需运行的独立编译/UT 会话，不是必经步骤或审批门禁。
      * 真实结果按 SHA + 工作区指纹记录，不由推送成功推断编译通过。 */
     prepush?: PrePushVerificationState;
+    /** 推送前上传 Skill 的实际结果，不参与任务阶段转换。 */
+    codecheck?: CodecheckResult;
     /** 读侧活性事实，不落盘。prepush.state=preparing 只表示领域阶段，
      * 不能再被页面误当成当前进程确实持有 runner/容器。 */
     prepush_runtime?: {
@@ -1414,6 +1420,8 @@ export interface TaskServiceOptions {
     /** 专员会话墙钟预算,超时如实记 infrastructure_failure(默认 25 分钟)。 */
     attemptTimeoutMs?: number;
   };
+  /** 上传 Skill 的固定调用；runner 仅用于执行器替换和定向测试。 */
+  codecheck?: { runner?: CodecheckRunner };
   /** 按需调用的 Cloud-native 编译/UT Agent；enabled 仅表示能力可用，
    * 不在交付前自动执行。Agent/责任人主动请求时使用独立 Pi 会话；
    * 基线预热由 warmup 独立启用，二者结果不互相替代。 */
@@ -13818,6 +13826,8 @@ export class TaskService {
         assertActive: () => { if (!this.current(task, actionEpoch) || task.pauseRequested) throw new TaskControlError("任务执行权已变化"); } },
         operation, branch => this.absorbForeignRemoteCommits(task, branch, false), async () => {
           await this.syncTargetBeforePush(task, operation.target_branch!, actionEpoch);
+          await this.checkCodecheckBeforePush(task, actionEpoch, operation.target_branch);
+          if (!this.current(task, actionEpoch) || task.pauseRequested) throw new TaskControlError("任务执行权已变化");
           if (await this.reconcileDeliveryPlatformBoundary(task) === "blocked") {
             throw new TaskControlError(task.summary.detail ?? "无法清理平台本地目录");
           }
@@ -13849,7 +13859,10 @@ export class TaskService {
       }, operation, () => {
         if (!this.current(task, actionEpoch) || task.pauseRequested) throw new TaskControlError("任务执行权已变化");
       }),
-      push: (branch, sha) => this.pushFromHost(task, branch, sha),
+      push: async (branch, sha) => {
+        await assertNoCodecheckCommits(task.cwd!, await frozenTaskBaseline(task.cwd!));
+        return this.pushFromHost(task, branch, sha);
+      },
       verify: async () => {
         if (!this.options.prepush?.enabled) throw new TaskControlError("未配置宿主验证；可在任务容器内直接运行编译和 UT");
         const state = JSON.parse(readFileSync(join(task.cwd!, ".mae-flow.json"), "utf8"));
@@ -16481,6 +16494,7 @@ export class TaskService {
     ] : [];
     const context = [
       "**请检视当前已提交的改动。确认后将推送并创建或更新 MR。**",
+      ...(task.summary.delivery?.codecheck ? [`CodeCheck 自查：${task.summary.delivery.codecheck.summary}`] : []),
       `**${pushReview.title}：${pushReview.file_count} 个文件，+${pushReview.additions} / -${pushReview.deletions}。**`,
       ...reviewContext,
       // 名字必须与界面一字不差:页签叫「交付材料」、按钮叫「工作区
@@ -16761,6 +16775,64 @@ export class TaskService {
     return false;
   }
 
+  private async checkCodecheckBeforePush(task: TaskState, epoch: number, target?: string): Promise<void> {
+    if (!task.cwd || !this.current(task, epoch)) return;
+    const head = (await this.prePushRevision(task)).sha;
+    if (task.summary.delivery?.git_push?.sha === head) return;
+    const result = await runCodecheckPrepush({
+      repo: task.cwd, workspace: task.cwd,
+      recordRoot: join(task.summary.workspace, "codecheck"),
+      sourceRoot: taskHostSkillsDir(this.options.dataDir, task.summary),
+      moduleDataDir: this.options.dataDir,
+      context: task.summary.host_skills_pinned ? undefined : {
+        repositories: task.summary.repositories ?? [],
+        technologies: [...new Set((task.summary.repository_profiles ?? []).flatMap(p => p.technologies))],
+        businessModuleIds: (task.summary.business_modules ?? []).map(module => module.id),
+      },
+      base: await frozenTaskBaseline(task.cwd),
+      target: task.summary.delivery?.target_branch ?? target,
+      ticket: task.summary.ticket,
+      commitConvention: this.effectiveCommitConvention(),
+      log: this.options.log,
+      run: this.options.codecheck?.runner ?? (async request => {
+        if (!this.options.isolation) throw new Error("CodeCheck 需要任务执行容器，未回退到宿主运行");
+        if (!this.current(task, epoch)) throw new TaskControlError("任务已停止");
+        await abortAuxiliarySessions(task);
+        if (!this.current(task, epoch)) throw new TaskControlError("任务已停止");
+        if (interruptWarmupReceipt(task.summary.baseline_build)) this.persist(task);
+        const agentDir = join(task.summary.workspace, "pi-agent");
+        mkdirSync(agentDir, { recursive: true });
+        const models = this.sessionModels(task);
+        writeFileSync(join(agentDir, "models.json"), JSON.stringify(models.json));
+        repairContainerMutationOwnership({ workspace: task.cwd!, path: join(request.repo, ".codecheckcli"), user: this.options.isolation?.user });
+        task.summary.detail = "正在执行上传的 CodeCheck Skill，完成后继续推送";
+        this.persist(task);
+        return runCodecheckSkillSession(task, request, {
+          taskId: `${task.summary.id}:codecheck`, workspace: task.cwd!, agentDir,
+          provider: models.choice?.provider ?? this.options.provider,
+          model: models.choice?.model ?? this.options.model,
+          eventLog: new EventLog(join(task.summary.workspace, "codecheck", "events.jsonl")),
+          transcript: new TranscriptStore(join(task.summary.workspace, "codecheck", "transcript.jsonl"), "codecheck"),
+          humanGate: task.humanGate, streamBashOutput: true,
+          onTokenUsage: sample => this.recordTaskTokenUsage(task, sample),
+          bashOperations: { exec: async (command, dir, options) => {
+            if (!this.current(task, epoch)) throw new TaskControlError("任务已停止");
+            const container = await this.activeTaskContainer(task);
+            if (!this.current(task, epoch)) throw new TaskControlError("任务已停止");
+            return createContainerBashOperations(() => container).exec(command, dir, options);
+          } },
+          afterFileMutation: path => { repairContainerMutationOwnership({ workspace: task.cwd!, path,
+            user: this.options.isolation?.user }); },
+          log: this.options.log,
+        });
+      }),
+    });
+    if (!this.current(task, epoch)) return;
+    task.summary.delivery = { ...task.summary.delivery, codecheck: result };
+    this.persist(task);
+    this.options.log?.(`任务 ${task.summary.id}：${result.summary}`);
+  }
+
   /** Git 交付(§10):任务收轮并释放 Agent 后,由宿主推送并反查远端
    * SHA，再建 MR——不信任务自己的说法，也不让 Agent 接触 token。
    * MR 成功≠完成:流水线过了才"等待合入",否则停在"验证中"。
@@ -16882,6 +16954,8 @@ export class TaskService {
       if (baselineGate === "blocked") return;
       // 清理历史目录限制卡，继续现有验证和交付确认。
       if (!await this.deliveryScopeAllowsPush(task)) return;
+      await this.checkCodecheckBeforePush(task, epoch, baseline);
+      if (!this.current(task, epoch)) return;
       // 平台注入目录不能发布；业务文件按本轮需求修复，不受旧勾选限制。
       if (await this.reconcileDeliveryPlatformBoundary(task) === "blocked") return;
       if (!await this.agentPlatformChangesAllowPush(task)) return;
@@ -16963,11 +17037,13 @@ export class TaskService {
         === "人工重跑,待重新验证";
       const pushReceipt = existingPushReceipt ?? await pushWithFreshBranch(async () => {
         if (!await this.existingMergeRequestAllowsDelivery(task, epoch)) return undefined;
+        await assertNoCodecheckCommits(task.cwd!, await frozenTaskBaseline(task.cwd!));
         return this.pushFromHost(task, branch, expectedPushSha);
       }, async () => {
         if (!await this.existingMergeRequestAllowsDelivery(task, epoch)) return false;
         if (await this.absorbForeignRemoteCommits(task, branch) === "blocked") return false;
         await this.syncTargetBeforePush(task, task.summary.delivery?.target_branch ?? baseline, epoch);
+        await this.checkCodecheckBeforePush(task, epoch, baseline);
         if (!this.current(task, epoch) || await this.reconcileDeliveryPlatformBoundary(task) === "blocked") return false;
         if (await this.reconcileFrozenBaselineAncestry(task, false) === "blocked") return false;
         if (task.summary.delivery?.loop?.kind === "review" && task.summary.delivery.loop.review_source === "platform") {
@@ -17106,6 +17182,8 @@ export class TaskService {
           ? { loop: task.summary.delivery.loop } : {}),
         ...(task.summary.delivery?.prepush
           ? { prepush: task.summary.delivery.prepush } : {}),
+        ...(task.summary.delivery?.codecheck
+          ? { codecheck: task.summary.delivery.codecheck } : {}),
         // 外来提交是**分支**的既成事实,不是这一轮的过程状态:这份台账
         // 一丢,下一轮的重组锚就会退回更老的 SHA,把人推的提交抹掉。
         ...(task.summary.delivery?.foreign_commits
@@ -17128,6 +17206,9 @@ export class TaskService {
     } catch (error) {
       if (!this.current(task, epoch)) return;
       // 嵌套的 "Error: Error: …" 前缀对人是噪声,剥掉再进卡片/日志。
+      if (error instanceof CodecheckArtifactCommitError) {
+        this.markVerificationStalled(task, error.message, "contract"); return;
+      }
       if (error instanceof RemoteBranchBusyError) {
         this.markVerificationStalled(task, error.message, "safety"); return;
       }

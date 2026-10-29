@@ -26,7 +26,7 @@ function fixture(t: TestContext) {
   const service: any = new TaskService({ dataDir: join(root, "data"), provider: "test",
     model: "test", modelsJson: {}, maxConcurrent: 0 });
   const summary = service.create("推送前同步基准分支");
-  t.after(async () => { await service.shutdown(); rmSync(root, { recursive: true, force: true }); });
+  t.after(async () => { await service.shutdown(); execFileSync("chmod", ["-R", "u+rwX", root]); rmSync(root, { recursive: true, force: true }); });
   const remote = join(root, "remote.git"), cwd = join(summary.workspace, "repo");
   git(root, "init", "--bare", "-q", remote);
   git(root, "init", "-q", "-b", "main", cwd);
@@ -87,6 +87,46 @@ test("首次及再次 push 都包含最新基准分支；新 SHA 可登记到真
     assert.deepEqual(manifest.files.map((file: any) => file.path), round === 1 ? ["feature.ts"] : ["upstream2.ts"],
       "首次只列目标分支之外的变化；再次合入上游时列出本次任务分支实际新增变化，不重复历史文件");
   }
+});
+
+test("宿主工具 push 同步后调用上传 CodeCheck，确认与推送使用修复后的提交", async t => {
+  const f = fixture(t);
+  const skillDir = join(f.service.options.dataDir, "skills", "codecheck-prepush");
+  mkdirSync(skillDir, { recursive: true });
+  writeFileSync(join(skillDir, "SKILL.md"), "---\nname: codecheck-prepush\ndescription: 推送前检查\nknowledge_nature: engineering\ntechnologies: [agnostic]\n---\n完成本次检查。\n");
+  f.task.summary.host_skills_pinned = false;
+  f.task.summary.ticket = "T559";
+  f.service.options.commitConvention = "本部署使用 [T559][fix] 描述";
+  writeFileSync(join(f.cwd, "feature.ts"), "export const feature = true;\n");
+  git(f.cwd, "add", "feature.ts"); git(f.cwd, "commit", "-qm", "[T559][feat] feature");
+  f.upstream("synced.ts", "export const upstream = true;\n");
+  let calls = 0;
+  f.service.options.codecheck = { runner: async (request: any) => {
+    calls++;
+    assert.equal(request.base, f.base);
+    assert.match(request.prompt, /当前分支：feature/);
+    assert.match(request.prompt, /本部署使用 \[T559\]\[fix\] 描述/);
+    assert.ok(existsSync(join(request.repo, "synced.ts")), "先同步目标分支再检查");
+    writeFileSync(join(request.repo, "checked.ts"), "export const checked = true;\n");
+    git(request.repo, "add", "checked.ts"); git(request.repo, "commit", "-qm", "[T559][fix] checked");
+    return "CodeCheck 通过";
+  } };
+  const host = f.service.taskHostRuntime(f.task);
+  host.allowPush = async () => true;
+  host.confirmPush = async (operation: any) => {
+    assert.equal(calls, 1);
+    assert.equal(operation.sha, git(f.cwd, "rev-parse", "HEAD"));
+    assert.ok(existsSync(join(f.cwd, "checked.ts")), "确认前已完成检查修复");
+    return true;
+  };
+  await queueTaskHostOperation(host, "checked-push", { action: "push", reason: "推送当前修改" });
+  await finishTaskHostOperation(host);
+  const operation = new TaskHostLedger(f.task.summary).read().operations.find(op => op.id === "checked-push")!;
+  assert.equal(operation.state, "succeeded", operation.result);
+  assert.equal(git(f.remote, "show", "feature:checked.ts"), "export const checked = true;");
+  assert.equal(git(f.remote, "rev-parse", "feature"), operation.sha);
+  assert.equal((await f.push("repeat-checked-push")).state, "succeeded");
+  assert.equal(calls, 1, "同一提交重推不会重启检查");
 });
 
 test("每次真实 push 前留下增量清单：重复修改、删除、重命名和外来提交均按远端起点计算", async t => {

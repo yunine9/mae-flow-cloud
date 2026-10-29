@@ -113,6 +113,9 @@ export interface IssueToolContext {
   dataRoot: string;
   /** 状态变更的持久化钩子(服务保证落盘)。 */
   persist(): void;
+  /** 推送前固定执行上传的 Skill；没有此回调的离线工具环境保持原行为。 */
+  beforePush?(repo: { dir: string; url: string }): Promise<string>;
+  assertActive?(): void;
   ops?: IssueOpsTools;
   dts?: DtsGateway;
   /** 交付平台适配层地址(--platform);MR 创建走公共 mrClient。 */
@@ -884,6 +887,8 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     // 脏工作区熔断(2026-08-28 真实环境事故):AI 改了文件没 commit,
     // push 推的是 clone 时的旧 HEAD,MR 没有 diff。与其让空 MR 静默
     // 出厂,不如在这里点破并给出该做的事。
+    const codecheck = await ctx.beforePush?.(repo);
+    ctx.assertActive?.();
     const dirty = await dirtyWorktree(repo.dir);
     const receipt = await pushFromIssueWorkspace({
       dataDir: ctx.dataRoot,
@@ -911,7 +916,8 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     ctx.onBranchPushed?.(repo.url);
     return ok(`已推送 ${receipt.branch} @ ${receipt.sha.slice(0, 12)}`
       + `(仓 ${repo.url})${receipt.forced ? "(强制覆盖远端同名分支)" : ""}`
-      + `${dirty.length ? `；工作区另有 ${dirty.length} 条未提交改动，未包含在本次推送` : ""}`);
+      + `${dirty.length ? `；工作区另有 ${dirty.length} 条未提交改动，未包含在本次推送` : ""}`
+      + (codecheck ? `\n${codecheck}` : ""));
   };
   tools.push(defineTool({
     name: "push_branch",

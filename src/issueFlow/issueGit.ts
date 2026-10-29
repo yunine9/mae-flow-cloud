@@ -1,3 +1,4 @@
+import { excludeCodecheckArtifacts, CODECHECK_PATHSPECS, assertNoCodecheckCommits } from "../codecheckArtifacts.ts";
 import { applyGitCommitIdentity } from "../gitCommitIdentity.ts";
 /**
  * 问题流的 Git 边界:克隆加固 + 宿主唯一一次传输。
@@ -234,6 +235,7 @@ export async function cloneRepository(options: {
 }
 
 export async function hardenCloneAsync(repoDir: string): Promise<void> {
+  excludeCodecheckArtifacts(repoDir);
   const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
   const configArgs = (...args: string[]) =>
     ["config", "--file", join(repoDir, ".git", "config"), ...args];
@@ -292,7 +294,7 @@ export async function currentBranch(repoDir: string): Promise<string> {
 export async function dirtyWorktree(repoDir: string): Promise<string[]> {
   const view = createSafeGitView(repoDir);
   try {
-    const outcome = await runGit(["status", "--porcelain"], {
+    const outcome = await runGit(["status", "--porcelain", "--", ".", ...CODECHECK_PATHSPECS], {
       cwd: repoDir,
       env: view.environment(),
       timeoutMs: 10_000,
@@ -392,6 +394,7 @@ export async function pushFromIssueWorkspace(options: {
   if (!existsSync(join(options.repoDir, ".git"))) {
     throw new Error(`代码克隆不存在: ${options.repoDir}`);
   }
+  await assertNoCodecheckCommits(options.repoDir);
   const remoteUrl = validateRepoUrl(options.repoUrl);
   const sandbox = prepareSandbox(options.dataDir, options.credential,
     options.repoDir);

@@ -10,6 +10,7 @@
  * 注入资产被 `git add .` 带走，同时不妨碍仓库已有 Skill 保持原样。
  */
 export const AGENT_PLATFORM_ROOTS = [
+  ".codecheckcli",
   ".agents",
   ".pi",
   ".claude",

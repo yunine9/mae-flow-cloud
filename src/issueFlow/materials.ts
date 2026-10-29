@@ -1,3 +1,4 @@
+import { isCodecheckPath } from "../codecheckArtifacts.ts";
 /**
  * 问题会话工作区材料(交付材料页签的数据面)。
  *
@@ -155,7 +156,7 @@ function diffChunks(text: string): Array<{ path: string; text: string }> {
     .filter(Boolean)
     .flatMap((chunk) => {
       const header = chunk.match(/^diff --git a\/(.+?) b\/(.+)$/m);
-      return header ? [{ path: header[2], text: chunk }] : [];
+      return header && !isCodecheckPath(header[2]) ? [{ path: header[2], text: chunk }] : [];
     });
 }
 
@@ -212,7 +213,7 @@ function collectRepoDiff(
   const untracked = status.split("\n")
     .filter((line) => line.startsWith("??"))
     .map(porcelainPath)
-    .filter(Boolean);
+    .filter(path => path && !isCodecheckPath(path));
   const tracked = new Set<string>();
   const sections: string[] = [];
   const baseline = repoBaseline(repoDir, baselineBranch);
@@ -244,8 +245,9 @@ function collectRepoDiff(
       [ORIGIN_HEADING.staged, staged],
       [ORIGIN_HEADING.unstaged, unstaged],
     ] as Array<[string, string]>) {
-      if (!text) continue;
-      sections.push(`## ${heading}\n\n${text}`);
+      const filtered = diffChunks(text).map(chunk => chunk.text).join("\n\n");
+      if (!filtered) continue;
+      sections.push(`## ${heading}\n\n${filtered}`);
       for (const chunk of diffChunks(text)) tracked.add(chunk.path);
     }
   }
@@ -304,7 +306,7 @@ export function listWorkspaceChanges(
     const seen = new Set<string>();
     const rows: WorkspaceChange[] = [];
     const push = (path: string) => {
-      if (!path || seen.has(path)) return;
+      if (!path || isCodecheckPath(path) || seen.has(path)) return;
       seen.add(path);
       const entry = statuses.get(path);
       const stat = statByName.get(path);
@@ -346,6 +348,7 @@ export function workspaceFileDiff(
   rel: string,
   baselineBranch?: string,
 ): string {
+  if (isCodecheckPath(rel)) return "";
   const abs = insideRoot(repoDir, rel);
   if (!abs || rel.split(/[\\/]/).includes(".git")) {
     throw new Error("路径越界");

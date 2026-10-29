@@ -1,3 +1,4 @@
+import { isCodecheckPath } from "./codecheckArtifacts.ts";
 import { decodeGitQuotedPath, gitNullPaths, gitStatusPaths } from "./gitPaths.ts";
 import { currentStoryFile, OVERALL_STORY_ARTIFACT } from "./overallStoryStore.ts";
 /**
@@ -83,8 +84,7 @@ function isFlowControlPath(path: string): boolean {
     || normalized.startsWith(".mae-flow/")
     || normalized === ".mae-flow-work"
     || normalized.startsWith(".mae-flow-work/")
-    || normalized === ".codecheckcli"
-    || normalized.startsWith(".codecheckcli/")
+    || isCodecheckPath(normalized)
     // 平台自己写的现场文件(下单事实/跨仓方案/仓库预设):正常路在
     // .git/info/exclude 里挡着,这里兜"exclude 没登记上的旧克隆"。
     || normalized === ".mae-flow-order.json"

@@ -44,7 +44,7 @@ function timeoutNote(timeoutSeconds: number): string {
  * 自己的容器内 timeout(或自然完成)收尾;用户主动打断走主会话,
  * Abort 语义不变。 */
 export function createContainerBashOperations(
-  getContainer: () => TaskContainer | undefined,
+  getContainer: () => Pick<TaskContainer, "exec"> | undefined,
   options: { forwardAbort?: boolean; buildBudget?: PrePushExecutionBudget } = {},
 ): BashOperations {
   const forwardAbort = options.forwardAbort ?? true;
