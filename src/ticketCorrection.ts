@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, lstatSync, symlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createSafeGitView, runSafeWorktreeGitAsync, type SafeGitCommitIdentity } from "./safeGit.ts";
+import { preserveGitAiNotes } from "./gitAiNotes.ts";
 
 export interface TicketCorrection {
   id: string; old_ticket: string; ticket: string; title: string; actor: string;
@@ -75,10 +76,13 @@ export async function prepareTicketRewrite(cwd: string, oldTicket: string, ticke
   return { old_branch: oldBranch, branch, old_head: oldHead, head: mapping[oldHead] ?? oldHead, base, sha_map: mapping };
 }
 
-export async function applyTicketRewrite(cwd: string, plan: TicketRewrite): Promise<void> {
+export async function applyTicketRewrite(cwd: string, plan: TicketRewrite, log?: (message: string) => void): Promise<void> {
   const current = await git(cwd, ["symbolic-ref", "--short", "HEAD"]);
   const head = await git(cwd, ["rev-parse", "HEAD"]);
-  if (current === plan.branch && head === plan.head) return;
+  if (current === plan.branch && head === plan.head) {
+    await preserveGitAiNotes(cwd, new Map(Object.entries(plan.sha_map)), log);
+    return;
+  }
   if (current !== plan.old_branch || head !== plan.old_head) throw new Error("纠正期间代码现场发生变化，未覆盖现场；请保留当前现场后重试");
   const previous = await runSafeWorktreeGitAsync(cwd, ["rev-parse", "--verify", `refs/heads/${plan.branch}`]);
   if (previous.status === 0 && previous.stdout.trim() !== plan.head) throw new Error("新分支被其他操作占用，未覆盖");
@@ -91,6 +95,7 @@ export async function applyTicketRewrite(cwd: string, plan: TicketRewrite): Prom
     writeFileSync(lock, `ref: refs/heads/${plan.branch}\n`, { flag: "wx" });
     renameSync(lock, path);
   } finally { view.cleanup(); }
+  await preserveGitAiNotes(cwd, new Map(Object.entries(plan.sha_map)), log);
 }
 
 /** 只迁移活动投影的精确引用；历史事件、测试原始日志不重写。 */

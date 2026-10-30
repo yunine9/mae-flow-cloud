@@ -896,6 +896,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       repoUrl: repo.url,
       branch,
       credential: ctx.gitCredential?.(),
+      log: ctx.log,
       ...(force ? { force: true } : {}),
     });
     // 按仓记账(一仓一分支):重推同仓覆盖旧账,不同仓各记各的。

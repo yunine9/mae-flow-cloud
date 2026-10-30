@@ -1,4 +1,5 @@
 import { pendingDecisionsPrompt } from "./pendingDecisionsPrompt.ts";
+import { GitAiSession, gitAiEnabled } from "./gitAi.ts";
 import { SessionCompaction } from "./sessionCompaction.ts";
 import { saveAnalysisContextSnapshot } from "./analysisContextSnapshot.ts";
 export { looksLikeContextOverflow, compactionInstructions } from "./sessionCompaction.ts";
@@ -1181,6 +1182,9 @@ export class CloudSession {
       ...(this.options.humanFacing && config.sessionId === this.sessionId
         ? [HUMAN_FACING_STYLE, pendingDecisionsPrompt(workspace)] : []),
     ];
+    const gitAi = gitAiEnabled() && this.options.bashOperations
+      ? new GitAiSession(this.options.bashOperations, workspace, this.options.log)
+      : undefined;
     const loader = new DefaultResourceLoader({
       cwd: workspace,
       agentDir,
@@ -1218,9 +1222,13 @@ export class CloudSession {
             if (memoryContext) pi.on("context", async (event: any) => ({
               messages: await memoryContext(event.messages),
             }));
-            pi.on("tool_call", async (event: any) =>
-              this.onToolCall(config.sessionId, event));
+            pi.on("tool_call", async (event: any, ctx: any) => {
+              const decision = await this.onToolCall(config.sessionId, event);
+              if (!decision?.block) await gitAi?.before(event, ctx);
+              return decision;
+            });
             pi.on("tool_result", async (event: any) => {
+              await gitAi?.after(event);
               const componentNote = await this.options.componentKnowledge?.afterTool(
                 TOOL_NAME_MAP[event.toolName] ?? event.toolName, event.input ?? {},
               ).catch(error => `组件使用检查未完成：${String(error)}`);
@@ -1320,7 +1328,7 @@ export class CloudSession {
     const isolatedTools = this.options.bashOperations
       ? [createWorkspaceBashToolDefinition(
           workspace,
-          this.options.bashOperations,
+          gitAi?.operations() ?? this.options.bashOperations,
           {
             // 每个主/子/prepush 会话各有自己的受控日志目录。所有命令仍由
             // 原容器 backend 执行；这层只镜像输出并把可达相对路径交给 Pi。

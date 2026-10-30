@@ -5,6 +5,9 @@
 Node 18.16.1/npm 9.5.1，以及 JavaScript、Java、C++ 仓需要的常见本地
 工具链。
 
+可选的需求与问题单 AI 代码归因见 [Git AI 接入](git-ai.md)。该能力不增加
+交付状态或审批，也不以归因成败决定代码能否推送。
+
 ## 镜像契约（不是一次性 `docker commit` 清单）
 
 Cloud 把镜像当作 `mae-flow-task-builder/1` 使用。任何内部基础镜像都必须

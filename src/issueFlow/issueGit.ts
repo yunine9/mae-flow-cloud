@@ -24,6 +24,7 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { createSafeGitView } from "../safeGit.ts";
+import { publishGitAiNotes } from "../gitAiNotes.ts";
 
 export interface GitCredential {
   username: string;
@@ -390,6 +391,7 @@ export async function pushFromIssueWorkspace(options: {
   branch: string;
   credential?: GitCredential;
   force?: boolean;
+  log?: (message: string) => void;
 }): Promise<PushReceipt> {
   if (!existsSync(join(options.repoDir, ".git"))) {
     throw new Error(`代码克隆不存在: ${options.repoDir}`);
@@ -480,6 +482,8 @@ export async function pushFromIssueWorkspace(options: {
       throw new Error(`远端 SHA 复核失败: 本地 ${sha.slice(0, 12)},`
         + `远端 ${remoteSha ? remoteSha.slice(0, 12) : "缺失"}`);
     }
+    await publishGitAiNotes({ cwd: options.repoDir, sha, remote: remoteUrl, staging,
+      args: sandbox.args, env: { ...sandbox.env, ...objectEnv }, log: options.log });
     return {
       branch: options.branch, sha, url: remoteUrl,
       ...(options.force === true ? { forced: true } : {}),

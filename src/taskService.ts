@@ -546,6 +546,7 @@ import {
   type CommitSubjectRecord,
 } from "./commitPolicy.ts";
 import { HostGitSandbox, runGitProcess } from "./hostGitSandbox.ts";
+import { preserveGitAiNotes, publishGitAiNotes } from "./gitAiNotes.ts";
 import { archiveContinuationRuntime, continuationInstructions, continuationPending, resetContinuationBranch, snapshotContinuation, type TaskContinuation, type TaskDeliveryHistory } from "./taskContinuation.ts";
 import { TaskBranchSync, type BranchSyncRequest } from "./taskBranchSync.ts";
 import {
@@ -12653,7 +12654,7 @@ export class TaskService {
     if (cwd && plan && !journal.local) {
       correction.can_cancel = false;
       save("正在切换本地分支");
-      await applyTicketRewrite(cwd, plan);
+      await applyTicketRewrite(cwd, plan, this.options.log);
       journal.local = true;
       save("本地分支已切换，代码和未提交内容保持不变");
     }
@@ -15295,6 +15296,7 @@ export class TaskService {
     if (after.sha !== nextHead) {
       throw new CommitMessagePolicyError("提交说明已重建但任务分支未指向新提交，请人工检查现场");
     }
+    await preserveGitAiNotes(task.cwd!, rewritten, this.options.log);
     return { after, repaired, tree: oldTree };
   }
 
@@ -16638,6 +16640,7 @@ export class TaskService {
       return stall("按定格基线重放后复核未通过(树不一致或祖先关系仍断);"
         + "已回到原 HEAD 停下,请人工确认。");
     }
+    await preserveGitAiNotes(task.cwd!, new Map([[head, replayed]]), this.options.log);
     this.options.log?.(`任务 ${task.summary.id} 提交历史曾脱离定格基线 ${
       frozen.slice(0, 7)},已机械重放净改动(${head.slice(0, 7)} → ${
       replayed.slice(0, 7)}),树内容未变。`);
@@ -16761,6 +16764,7 @@ export class TaskService {
             ...targetPaths.filter(path => !afterPaths.includes(path))])}；原提交、索引与工作区均未修改`);
       }
       await run(["update-ref", "HEAD", commit, head], "接续整理后的提交");
+      await preserveGitAiNotes(cwd, new Map([[head, commit]]), this.options.log);
       // 仅撤出已明确排除的暂存项；其他文件的 staged/unstaged 状态保持原样。
       if (restorePaths.length) await run(["restore", "--source", commit, "--staged", "--",
         ...restorePaths.map(path => `:(literal)${path}`)], "更新排除项索引");
@@ -20240,9 +20244,9 @@ export class TaskService {
           `远端 SHA 复核失败: 本地 ${sha.slice(0, 12)}，远端 `
           + `${remoteSha ? remoteSha.slice(0, 12) : "缺失"}`);
       }
-      return {
-        sha, ref, remote: "origin", url: this.cleanRemoteUrl(remoteUrl),
-      };
+      await publishGitAiNotes({ cwd: task.cwd, sha, remote: remoteUrl, staging,
+        args: sandbox.args, env: { ...sandbox.env, ...objectEnv }, log: this.options.log });
+      return { sha, ref, remote: "origin", url: this.cleanRemoteUrl(remoteUrl) };
     } finally {
       gitView?.cleanup();
       this.cleanupHostGitCredential(sandbox);
