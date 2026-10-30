@@ -24,6 +24,7 @@ import { TaskService } from "../src/taskService.ts";
 import { createTaskServer } from "../src/server.ts";
 import { ScriptedModelServer } from "../src/scriptedModel.ts";
 import { resolveModelConfig } from "../src/modelResolution.ts";
+import { saveKnowledgeDocument } from "../src/knowledgeDocuments.ts";
 
 const PERSONAL_KEY = "sk-personal-abcd4321";
 
@@ -421,6 +422,58 @@ test("任务链路:个人网关命中即整体换装,model_choice 让位,通道�
     assert.equal(service.get(li)!.model_lane, "platform");
     assert.ok(platform.requests.length > 0, "没配的人照旧走平台网关");
   } finally {
+    await platform.stop();
+    await personal.stop();
+  }
+});
+
+test("知识问答:个人网关用户的问答解析到个人通道的 provider/model/json", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-personal-qa-"));
+  const platform = new ScriptedModelServer([{ text: "平台不该被问到" }], "scripted-v1");
+  // 回答阶段的唯一终结工具(submit_knowledge_answer):引用第一手
+  // 证据 ev-1 的第 1 行原文。
+  const personal = new ScriptedModelServer([{
+    tool: { name: "submit_knowledge_answer", input: { points: [{
+      kind: "answer",
+      basis: [{ evidence_id: "ev-1", start_line: 1, end_line: 1 }],
+      body: "当前测试规则见[规则原文](#evidence-ev-1)。",
+    }] } },
+  }], "personal-max");
+  await platform.start();
+  await personal.start();
+  // document_id 直读小文档,检索不依赖向量索引。
+  const document = saveKnowledgeDocument(dataDir, {
+    title: "示例规则", content: "# 规则\n当前测试规则",
+  }, "zhang");
+  const service = new TaskService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: platform.modelsJson(),
+    personalModels: (account) => account === "zhang"
+      ? personalConfig({ url: personal.baseUrl }) : undefined,
+  });
+  const answers = service.getKnowledgeAnswers();
+  try {
+    const { record } = answers.create(
+      { question: "当前测试规则是什么？", context: { document_id: document.id } },
+      "zhang");
+    let final = record;
+    for (let n = 0; n < 300; n++) {
+      await new Promise(resolve => setTimeout(resolve, 20));
+      final = answers.get(record.id, "zhang");
+      if (["done", "failed", "cancelled"].includes(final.status)) break;
+    }
+    // Beta 期旧伤的钉子:choice 的 provider/model 取平台通道时,pi 在
+    // 个人现场 json(只有 maeflow-personal 一个 provider)里查不到所选
+    // 模型,问答当场失败——必须三件套同源走到个人网关。
+    assert.equal(final.status, "done", final.error);
+    assert.ok(personal.requests.length > 0, "知识问答必须打到个人网关");
+    assert.ok(personal.requests.every(body => body.model === "personal-max"),
+      "个人通道问答的模型名以个人网关配置为准");
+    assert.equal(platform.requests.length, 0,
+      "配了个人网关的人,知识问答不该打平台网关");
+  } finally {
+    await answers.shutdown();
+    await service.shutdown();
     await platform.stop();
     await personal.stop();
   }

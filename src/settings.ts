@@ -79,6 +79,26 @@ export interface ModelsSettings {
   vision?: { provider: string; model: string };
 }
 
+/** models.json 同形内容里挖 providers 目录;缺席给空目录。读侧共用
+ *  这一个口径(settings 视图/校验、auth 掩码视图、网关解析、连通
+ *  检查)——散落的第 4 份拷贝出现时收拢于此(ADR-0068 双轴评审)。 */
+export function jsonProviders(
+  json: Record<string, unknown> | undefined,
+): Record<string, any> {
+  return (json as { providers?: Record<string, any> } | undefined)
+    ?.providers ?? {};
+}
+
+/** 模型网关四字段表单(地址/密钥/模型/接口格式)的请求形状:平台
+ *  网关(管理页)与个人网关(ADR-0068,个人设置)同一套表单。值收
+ *  unknown,由合并/校验端逐字段 String 化并当场拒绝坏值。 */
+export interface ModelsFormPatch {
+  url?: unknown;
+  api_key?: unknown;
+  model?: unknown;
+  api?: unknown;
+}
+
 export interface ExecutionPolicySettings {
   blocked_repository_resources?: string[];
   /** 新任务采用并固定；运行中与历史任务不漂移。编译为 workflow_profile
@@ -136,12 +156,10 @@ function upsertModel(
  *  不认识当场拒绝。current 是已存的同形配置,没有就传 {}。 */
 export function mergeModelsForm(
   current: ModelsSettings,
-  patch: { url?: unknown; api_key?: unknown; model?: unknown; api?: unknown },
+  patch: ModelsFormPatch,
   fallbackProvider: string,
 ): { json: Record<string, unknown>; provider: string; model: string } {
-  const existingProviders = (current.json as {
-    providers?: Record<string, any>;
-  } | undefined)?.providers ?? {};
+  const existingProviders = jsonProviders(current.json);
   const provider = current.provider
     || Object.keys(existingProviders).find((name) =>
       name !== current.vision?.provider)
@@ -311,13 +329,9 @@ export class RuntimeSettings {
    *  接口格式(用户拍板 2026-08-26):表单默认 OpenAI Chat,可选 Anthropic;
    *  json 通路仍支持 pi 的全部格式,这里只校验表单送进来的那两种。
    *  四字段表单的合并与校验与个人网关(auth 侧)共用 mergeModelsForm。 */
-  updateModels(patch: {
+  updateModels(patch: ModelsFormPatch & {
     json?: unknown;
     provider?: unknown;
-    model?: unknown;
-    url?: unknown;
-    api_key?: unknown;
-    api?: unknown;
   }): void {
     const current = this.models();
     // 管理页只暴露地址、密钥、模型名、接口格式;内部仍转换成 pi 需要的
@@ -356,8 +370,7 @@ export class RuntimeSettings {
     if ((provider || model) && json === undefined && current.json === undefined) {
       throw new SettingsError("先提供 models.json 内容,再指定 provider/model");
     }
-    const providers = (json as { providers?: Record<string, any> } | undefined)
-      ?.providers ?? {};
+    const providers = jsonProviders(json);
     const vision = current.vision
       && providers[current.vision.provider]?.models?.some(
         (item: { id?: string }) => item?.id === current.vision?.model)
@@ -367,20 +380,15 @@ export class RuntimeSettings {
 
   /** 图片识别模型独立角色配置。可与主模型共用 provider，也可使用独立
    * provider；保存时保留其他模型/provider，API Key 留空表示保留。 */
-  updateVision(patch: {
-    url?: unknown;
-    api_key?: unknown;
-    model?: unknown;
-    api?: unknown;
+  updateVision(patch: ModelsFormPatch & {
     /** 部署层 models.json 仅由服务端补入，浏览器不负责也看不到。 */
     base_json?: unknown;
     base_vision?: unknown;
   }): void {
     const current = this.models();
     const sourceJson = current.json ?? patch.base_json;
-    const providers = (sourceJson as {
-      providers?: Record<string, any>;
-    } | undefined)?.providers ?? {};
+    const providers = jsonProviders(
+      sourceJson as Record<string, unknown> | undefined);
     const baseVision = patch.base_vision && typeof patch.base_vision === "object"
       ? patch.base_vision as { provider?: unknown; model?: unknown } : undefined;
     const provider = current.vision?.provider
@@ -444,22 +452,16 @@ export class RuntimeSettings {
                 url?: string; api?: string; key_hint?: string } };
   } {
     const models = this.models();
-    const providers = Object.entries(
-      (models.json as { providers?: Record<string, any> } | undefined)
-        ?.providers ?? {},
-    ).map(([name, spec]) => ({
+    const providerIndex = jsonProviders(models.json);
+    const providers = Object.entries(providerIndex).map(([name, spec]) => ({
       name,
       models: ((spec?.models ?? []) as Array<{ id?: string }>)
         .map((item) => String(item?.id ?? "")).filter(Boolean),
       key_hint: spec?.apiKey ? mask(String(spec.apiKey)) : undefined,
     }));
     const selectedProvider = models.provider || providers[0]?.name;
-    const selectedSpec = ((models.json as {
-      providers?: Record<string, any>;
-    } | undefined)?.providers ?? {})[selectedProvider ?? ""];
-    const visionSpec = ((models.json as {
-      providers?: Record<string, any>;
-    } | undefined)?.providers ?? {})[models.vision?.provider ?? ""];
+    const selectedSpec = providerIndex[selectedProvider ?? ""];
+    const visionSpec = providerIndex[models.vision?.provider ?? ""];
     return {
       runtime: this.runtime(),
       execution_policy: this.executionPolicy(),

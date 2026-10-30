@@ -25,7 +25,12 @@ import {
   scryptSync,
   timingSafeEqual,
 } from "node:crypto";
-import { mergeModelsForm, type ModelsSettings } from "./settings.ts";
+import {
+  jsonProviders,
+  mergeModelsForm,
+  type ModelsFormPatch,
+  type ModelsSettings,
+} from "./settings.ts";
 
 export type UserRole = "admin" | "developer";
 
@@ -402,13 +407,7 @@ export class LocalAuth {
    *  网关。只写不读:明文只住本文件,界面拿到的只有掩码视图。 */
   setPersonalModels(
     username: string,
-    patch: {
-      url?: unknown;
-      api_key?: unknown;
-      model?: unknown;
-      api?: unknown;
-      clear?: unknown;
-    },
+    patch: ModelsFormPatch & { clear?: unknown },
   ): void {
     const stored = this.users.get(username);
     if (!stored) throw new Error(`账号 ${username} 不存在`);
@@ -438,9 +437,7 @@ export class LocalAuth {
   /** 个人网关的掩码视图:是否已配、url/model/api 明文与密钥末 4 位。 */
   personalModelsView(username: string): PersonalModelsView {
     const config = this.users.get(username)?.personal_models;
-    const providers = (config?.json as {
-      providers?: Record<string, any>;
-    } | undefined)?.providers ?? {};
+    const providers = jsonProviders(config?.json);
     const provider = config?.provider || Object.keys(providers)[0];
     const spec = providers[provider ?? ""] ?? {};
     return {

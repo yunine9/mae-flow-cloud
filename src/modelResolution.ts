@@ -20,7 +20,7 @@
  * 日志;运行期的网关故障不中途换道,靠下次会话启动的现算自愈。
  */
 
-import type { ModelsSettings } from "./settings.ts";
+import { jsonProviders, type ModelsSettings } from "./settings.ts";
 
 /** 设置侧最小接口:RuntimeSettings 与各服务的 options.settings 子集
  *  类型都满足它,解析器不认完整类。 */
@@ -57,7 +57,9 @@ export interface DeploymentModels {
 export function resolveModelConfig(input: {
   settings?: ModelSettingsSource;
   deployment: DeploymentModels;
-  /** 归属人的个人网关配置(调用点从账号库现取);缺席=未配,走平台。 */
+  /** 归属人的个人网关配置(调用点从账号库现取);缺席=未配,走平台。
+   *  多认一个 null:auth.json 被手改成 "personal_models": null 时,
+   *  运行期会真出现 null(账号库只 JSON.parse 不清洗),按未配处理。 */
   personal?: ModelsSettings | null;
   operator?: string;
   log?: (message: string) => void;
@@ -90,10 +92,18 @@ function laneProvider(lane: ModelsSettings): string | undefined {
     || Object.keys(jsonProviders(lane.json))[0] || undefined;
 }
 
-function jsonProviders(json: Record<string, unknown> | undefined):
-  Record<string, any> {
-  return (json as { providers?: Record<string, any> } | undefined)
-    ?.providers ?? {};
+/** 个人通道命中时优先采用的主模型选择(唯一的让位判定,ADR-0068 承
+ *  Beta 旧例):lane=personal 且 provider/model 完整时返回之,调用点
+ *  用它顶掉任务级 model_choice/平台现选——模型以个人网关配置为准。
+ *  未命中或残缺返回 undefined,调用点落回自己的平台口径。
+ *  lane=personal 由 laneUsable 保证 provider/model 完整,兜底
+ *  undefined 只是类型收口的保险。 */
+export function personalLaneChoice(
+  resolved: ResolvedModelConfig | undefined,
+): { provider: string; model: string } | undefined {
+  return resolved?.lane === "personal" && resolved.provider && resolved.model
+    ? { provider: resolved.provider, model: resolved.model }
+    : undefined;
 }
 
 /** 个人网关配置是否完整可用:providers 里能解析出带 baseUrl+apiKey

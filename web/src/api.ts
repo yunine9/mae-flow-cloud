@@ -369,17 +369,24 @@ export async function testLubanConnection(): Promise<{
   return parseJson(response);
 }
 
-/** 保存/更换个人模型网关(ADR-0068):四字段与平台网关同一套合并
- * 口径——api_key 留空=沿用已存(界面永远不回填明文),其余字段缺席
- * 沿用已存。谁登录配谁的;回的只有掩码视图。 */
-export async function putPersonalModels(body: {
+/** 模型网关四字段表单(地址/密钥/模型/接口格式):平台网关(管理页)与
+ * 个人网关(ADR-0068,个人设置)同一套口径——api_key 留空=沿用已存
+ * (界面永远不回填明文),其余字段缺席=沿用已存。 */
+export interface ModelsFormFields {
   url?: string;
   api_key?: string;
   model?: string;
   api?: string;
-  /** true=删除个人网关,名下任务回落平台网关。 */
-  clear?: boolean;
-}): Promise<PersonalModelsView> {
+}
+
+/** 保存/更换个人模型网关(ADR-0068):四字段与平台网关同一套合并
+ * 口径。谁登录配谁的;回的只有掩码视图。 */
+export async function putPersonalModels(
+  body: ModelsFormFields & {
+    /** true=删除个人网关,名下任务回落平台网关。 */
+    clear?: boolean;
+  },
+): Promise<PersonalModelsView> {
   const response = await fetch("/auth/me/models", {
     method: "PUT",
     body: JSON.stringify(body),
@@ -396,12 +403,9 @@ export function clearPersonalModels(): Promise<PersonalModelsView> {
 /** 个人网关连通性测试:测当前表单草稿,密钥留空时服务端沿用已存,
  * 与保存同一口径。个人通道没有部署层兜底——没配又没草稿时服务端
  * 明说"没得测",不拿平台网关凑数。 */
-export async function postPersonalModelsCheck(body: {
-  url?: string;
-  api_key?: string;
-  model?: string;
-  api?: string;
-}): Promise<SystemCheckResult> {
+export async function postPersonalModelsCheck(
+  body: ModelsFormFields,
+): Promise<SystemCheckResult> {
   const response = await fetch("/auth/me/models/check", {
     method: "POST",
     body: JSON.stringify(body),
@@ -3535,23 +3539,17 @@ export function putExecutionPolicySettings(body: {
   return putSettings("execution-policy", body);
 }
 
-export function putModelsSettings(body: {
-  url: string;
-  api_key: string;
-  model?: string;
-  api?: string;
-}): Promise<SettingsView> {
+export function putModelsSettings(
+  body: ModelsFormFields & { url: string; api_key: string },
+): Promise<SettingsView> {
   return putSettings("models", body);
 }
 
 /** 模型网关连通性测试:发送一条真实问答请求,返回网络连通/模型问答
  * 两项结论。字段留空 = 服务端沿用已存配置(密钥不回传明文)。 */
-export async function postModelsCheck(body: {
-  url?: string;
-  api_key?: string;
-  model?: string;
-  api?: string;
-}): Promise<SystemCheckResult> {
+export async function postModelsCheck(
+  body: ModelsFormFields,
+): Promise<SystemCheckResult> {
   const response = await fetch("/settings/models/check", {
     method: "POST",
     body: JSON.stringify(body),

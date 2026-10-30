@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { Type } from "typebox";
 import { readArtifact } from "./artifacts.ts";
 import { createKnowledgeAnswerModel, type KnowledgeAnswerModelOptions } from "./knowledgeAnswerModel.ts";
-import { resolveModelConfig } from "./modelResolution.ts";
+import { personalLaneChoice, resolveModelConfig } from "./modelResolution.ts";
 import { currentStoryFile } from "./overallStoryStore.ts";
 import { isMainTaskDelivery } from "./requirementDecisionContract.ts";
 import { readTaskDemoSnapshot } from "./taskDemoSnapshot.ts";
@@ -90,8 +90,9 @@ export async function generateTaskDemoCard(service: DemoCardSource, id: string, 
     model: service.options.model, vision: service.options.vision,
   }, operator: task.luban_account,
   personal: service.options.personalModels?.(task.luban_account) });
-  // 个人网关命中时任务级 model_choice 让位(ADR-0068,承 Beta 旧例)。
-  const choice = resolved.lane === "personal" ? resolved : task.model_choice ?? resolved;
+  // 个人网关命中时任务级 model_choice 让位(判定收在 personalLaneChoice,
+  // ADR-0068,承 Beta 旧例)。
+  const choice = personalLaneChoice(resolved) ?? task.model_choice ?? resolved;
   if (!choice.provider || !choice.model) throw new TaskDemoCardError("尚未配置可用模型，暂时无法补充阶段卡片");
   signal.throwIfAborted();
   let model: Awaited<ReturnType<typeof createKnowledgeAnswerModel>> | undefined;

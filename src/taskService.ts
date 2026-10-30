@@ -358,7 +358,7 @@ import type { ExternalAction, PgProjection } from "./projection.ts";
 import { SystemCheckTrace } from "./runtimeDiagnostics.ts";
 import { runDeploymentCheck } from "./deploymentSystemCheck.ts";
 import type { ModelsSettings, RuntimeSettings } from "./settings.ts";
-import { resolveModelConfig, type ResolvedModelConfig } from "./modelResolution.ts";
+import { personalLaneChoice, resolveModelConfig, type ResolvedModelConfig } from "./modelResolution.ts";
 import { ReviewStore, assertReviewCanComplete, type ReviewRequest } from "./reviews.ts";
 import {
   onlyUnfixableToolFailures,
@@ -5799,7 +5799,16 @@ export class TaskService {
     if (this.shuttingDown) throw new KnowledgeAnswerError(503, "问答服务正在停止，请稍后重试");
     return this.knowledgeAnswers ??= new KnowledgeAnswers(this.options.dataDir, createKnowledgeAnswerRunner({
       dataDir: this.options.dataDir,
-      model: owner => { const active = this.activeModelChoice(); return active ? { ...active, json: this.resolvedModels(owner).json } : undefined; },
+      // 知识问答在 ADR-0068 覆盖清单内,choice 三件套必须同源:pi 严格按
+      // provider/model 键查现场 json,平台键配个人现场 json 会当场
+      // 「找不到所选模型」(Beta 期旧伤,双轴评审修);未命中沿用平台
+      // 口径 activeModelChoice。
+      model: owner => {
+        const resolved = this.resolvedModels(owner);
+        const active = personalLaneChoice(resolved)
+          ?? this.activeModelChoice();
+        return active ? { ...active, json: resolved.json } : undefined;
+      },
       search: () => this.getKnowledgeSearch(),
     }));
   }
@@ -6983,13 +6992,12 @@ export class TaskService {
     /** 本部署要不要这两把个人令牌(由形态决定,见下方注释)。 */
     needs: { git_token: boolean; luban_token: boolean };
   } {
-    // 表单要展示的"这单会用谁跑":配了个人网关的成员显示其个人
-    // 网关模型(ADR-0068),其余人显示平台网关现选。仍是展示位,不给选。
+    // 表单要展示的"这单会用谁跑":配了个人网关的成员显示其个人网关
+    // 模型(ADR-0068,让位判定见 personalLaneChoice),其余人显示平台
+    // 网关现选。仍是展示位,不给选。
     const laneResolved = account ? this.resolvedModels(account) : undefined;
-    const active = laneResolved?.lane === "personal" && laneResolved.provider
-      && laneResolved.model
-      ? { provider: laneResolved.provider, model: laneResolved.model }
-      : this.activeModelChoice();
+    const active = personalLaneChoice(laneResolved)
+      ?? this.activeModelChoice();
     const blockers: Array<
       { key: string; label: string; where: "admin" | "me" }> = [];
     let businessModules: Array<{
@@ -7154,11 +7162,10 @@ export class TaskService {
   private sessionModels(task: TaskState, flavor: "plain" | "auto" = "plain"):
     ResolvedModelConfig & { choice?: { provider: string; model: string } } {
     const resolved = this.resolvedModels(task.summary.luban_account);
+    // 个人网关命中:任务级 model_choice 让位(判定收在 personalLaneChoice,
+    // ADR-0068,承 Beta 旧例),模型以个人网关配置为准。
     if (resolved.lane === "personal") {
-      return { ...resolved,
-        choice: resolved.provider && resolved.model
-          ? { provider: resolved.provider, model: resolved.model }
-          : undefined };
+      return { ...resolved, choice: personalLaneChoice(resolved) };
     }
     const choice = task.summary.model_choice
       ?? (flavor === "auto"
