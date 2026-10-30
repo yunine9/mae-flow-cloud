@@ -738,11 +738,11 @@ export function createTaskServer(
           response.setHeader("set-cookie", sessionCookie("", request, true));
           return json(response, 200, { ok: true });
         }
-        // 协作界面需要把账号翻译成人名。所有登录者只读取这两个公开
-        // 身份字段；角色、权限与个人配置仍只在管理员账号接口里出现。
+        // 协作界面需要把账号翻译成人名。只读这两个公开身份字段;角色、
+        // 权限与个人配置仍只在管理员账号接口里出现。免登录允许清单
+        // (ADR-0069):匿名可读——工号→姓名是协作界面的公开参考数据。
         if (request.method === "GET" && parts[1] === "people"
             && parts.length === 2) {
-          if (!viewer) return json(response, 401, { error: "尚未登录" });
           return json(response, 200, (options.auth?.listUsers() ?? [])
             .map(({ username, display_name }) => ({
               username,
@@ -1179,7 +1179,11 @@ export function createTaskServer(
         || url.pathname.startsWith("/memory-insights")
         || parts[0] === "reviews" || parts[0] === "repository-skills"
         || parts[0] === "repositories"
-        || parts[0] === "skills" || parts[0] === "business-modules"
+        || parts[0] === "skills"
+        // 免登录允许清单(ADR-0069,#566):只有模块目录的 GET 列表
+        // 匿名放行(本地无头客户端的参考数据);写与逐模块操作仍闸。
+        || (parts[0] === "business-modules"
+          && !(request.method === "GET" && parts.length === 1))
         || parts[0] === "component-knowledge" || parts[0] === "product-versions" || parts[0] === "component-repositories" || parts[0] === "component-research"
         || ["domain-extraction", "knowledge-materials", "knowledge-extraction", "knowledge-tasks", "knowledge-review"].includes(parts[0])
         || parts[0] === "knowledge-repo"

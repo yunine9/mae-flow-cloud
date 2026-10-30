@@ -12,6 +12,9 @@ import {
  * 即可,写(一切改变会话现场的动作)仅会话归属人——管理员也不写
  * ("管理员不处理问题单"同一角色边界)。SSE 事件尾随与任务侧同款
  * (300ms 轮询 + 字节偏移增量),只是终态判定换成问题域的状态集。
+ * 免登录允许清单(ADR-0069):GET /issues/dts、GET /issues/dts/:ticket、
+ * GET|PUT /issues/dts-bindings 匿名可达(函数开头的 anonymousAllowed),
+ * 其余路由登录闸照旧。
  *
  *   GET  /issues                      → 我的会话列表
  *   POST /issues                      → 登记(201 摘要)
@@ -337,11 +340,19 @@ export async function handleIssueRoutes(
     return true;
   }
   const viewer = routeOptions.viewer;
-  if (routeOptions.authEnabled && !viewer) {
+  const method = request.method ?? "GET";
+  // 免登录允许清单(ADR-0069,#566):拉单/单据详情/单号→模块绑定读写
+  // 这一撮与人无关的参考数据接口匿名可达,支撑无头本地客户端零凭据
+  // 集成。精确到 method+path,清单之外(含新增路由)默认仍在闸后。
+  const anonymousAllowed =
+    (method === "GET" && parts[1] === "dts" && parts.length === 2)
+    || (method === "GET" && parts[1] === "dts" && parts.length === 3)
+    || (method === "GET" && parts[1] === "dts-bindings" && parts.length === 2)
+    || (method === "PUT" && parts[1] === "dts-bindings" && parts.length === 3);
+  if (routeOptions.authEnabled && !viewer && !anonymousAllowed) {
     json(response, 401, { error: "请先登录" });
     return true;
   }
-  const method = request.method ?? "GET";
   const done = (status: number, body: unknown): true => {
     json(response, status, body);
     return true;
@@ -516,6 +527,14 @@ export async function handleIssueRoutes(
       // 列表读本就全员开放(?scope=all),这里同尺不另设闸。
       const owner = new URL(request.url ?? "", "http://x")
         .searchParams.get("owner")?.trim() ?? "";
+      // 匿名拉单(ADR-0069)owner 必填:鉴权开着的部署里没有登录态就
+      // 没有缺省视角,显式指名,不静默查空。无鉴权本地单人形态
+      // (authEnabled:false)维持原缺省——那不是匿名客户端。
+      if (!owner && !viewer && routeOptions.authEnabled) {
+        return done(400, {
+          error: "缺少 owner:匿名拉单必须在 ?owner= 显式指名查看谁名下的问题单",
+        });
+      }
       // 分支列数据源(ADR-0038):匹配在后端单点,列表逐单带出——
       // 前端纯展示,列显示与发起解析永不漂移。模块带出同一纪律
       // (ADR-0056):特性名与模块名强匹配,服务端单点逐单带出。
@@ -561,10 +580,19 @@ export async function handleIssueRoutes(
         || body.module_id === null
         || String(body.module_id).trim() === ""
         ? null : String(body.module_id).trim();
+      // 操作人(ADR-0069):登录态在场恒取登录身份,客户端改写不收
+      // (与 POST /issues 登记人同哲学);匿名改选由请求体 account
+      // 自报工号(内网信任调用方),缺席打回。
+      const updatedBy = viewer?.username
+        ?? String(body.account ?? "").trim();
+      if (!updatedBy) {
+        return done(400, {
+          error: "缺少操作人账号:匿名改选必须在请求体携带 account(工号)",
+        });
+      }
       try {
         const { previous } = setDtsModuleBinding(
-          issueFlow.dataDir, ticket, moduleId,
-          String(viewer?.username ?? ""));
+          issueFlow.dataDir, ticket, moduleId, updatedBy);
         return done(200, {
           ticket,
           ...(moduleId ? { module_id: moduleId } : { cleared: true }),
