@@ -298,7 +298,8 @@ export interface DtsTicketBrief {
   ticket: string;
   title: string;
   status?: string;
-  /** B 版本(DTS 字段 sProdBNoName);R 版本不用。 */
+  /** C 版本(DTS 字段 sProdCNoName,#564:自动化提的单不填 B 版字段,
+   * B 构建号也无机制消费,精确 B 版 DTS 门户可查);R 版本不用。 */
   version?: string;
   /** 分支匹配结果(ADR-0038):路由层按配置中心映射补齐,网关不产;
    * 未命中配置时不加字段,前端按「未配置分支」呈现。 */
@@ -375,6 +376,15 @@ function parseTicketList(raw: string): DtsTicketBrief[] {
   }).filter((item) => item.ticket);
 }
 
+/** 网关单据字段 → 有值字符串:null/undefined/空串/纯空白一律缺席
+ * (单据侧字段缺席回 JSON null 而非省键,String(null) 会产出字面量
+ * "null" 当版本用,#564 实测)。 */
+function fieldText(value: unknown): string | undefined {
+  const text = value === undefined || value === null
+    ? "" : String(value).trim();
+  return text ? text : undefined;
+}
+
 export class McpDtsGateway implements DtsGateway {
   constructor(private readonly gateway: McpGateway) {}
 
@@ -429,8 +439,7 @@ export class McpDtsGateway implements DtsGateway {
           title: String(item.briefDesc ?? ""),
           status: item.dtsStatusName === undefined
             ? undefined : String(item.dtsStatusName),
-          version: item.sProdBNoName !== undefined
-            ? String(item.sProdBNoName) : undefined,
+          version: fieldText(item.sProdCNoName),
           severity: item.serverityNoName !== undefined
             ? String(item.serverityNoName) : undefined,
           submitter: item.creator !== undefined
@@ -497,8 +506,7 @@ export class McpDtsGateway implements DtsGateway {
             description,
             severity: first.serverityNoName !== undefined
               ? String(first.serverityNoName) : undefined,
-            version: first.sProdBNoName !== undefined
-              ? String(first.sProdBNoName) : undefined,
+            version: fieldText(first.sProdCNoName),
             url: outerLink,
             submitter: first.creator !== undefined
               ? String(first.creator) : undefined,
