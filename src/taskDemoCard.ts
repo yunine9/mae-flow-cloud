@@ -88,8 +88,10 @@ export async function generateTaskDemoCard(service: DemoCardSource, id: string, 
   const resolved = resolveModelConfig({ settings: service.options.settings, deployment: {
     modelsJson: service.options.modelsJson, provider: service.options.provider,
     model: service.options.model, vision: service.options.vision,
-  }, operator: task.luban_account });
-  const choice = resolved.lane === "beta" ? resolved : task.model_choice ?? resolved;
+  }, operator: task.luban_account,
+  personal: service.options.personalModels?.(task.luban_account) });
+  // 个人网关命中时任务级 model_choice 让位(ADR-0068,承 Beta 旧例)。
+  const choice = resolved.lane === "personal" ? resolved : task.model_choice ?? resolved;
   if (!choice.provider || !choice.model) throw new TaskDemoCardError("尚未配置可用模型，暂时无法补充阶段卡片");
   signal.throwIfAborted();
   let model: Awaited<ReturnType<typeof createKnowledgeAnswerModel>> | undefined;

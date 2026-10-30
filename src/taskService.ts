@@ -357,7 +357,7 @@ import {
 import type { ExternalAction, PgProjection } from "./projection.ts";
 import { SystemCheckTrace } from "./runtimeDiagnostics.ts";
 import { runDeploymentCheck } from "./deploymentSystemCheck.ts";
-import type { RuntimeSettings } from "./settings.ts";
+import type { ModelsSettings, RuntimeSettings } from "./settings.ts";
 import { resolveModelConfig, type ResolvedModelConfig } from "./modelResolution.ts";
 import { ReviewStore, assertReviewCanComplete, type ReviewRequest } from "./reviews.ts";
 import {
@@ -1128,10 +1128,11 @@ export interface TaskSummary {
   /** 下单时选的模型;缺席=跟随服务当前默认(设置层/部署层)。
    * 记在任务上是为了两件事:重启续跑不漂移、页面能说清"谁跑的"。 */
   model_choice?: { provider: string; model: string };
-  /** 最近一次主会话启动解析到的网关通道(ADR-0039):platform=平台
-   * 网关,beta=Beta 网关(白名单成员)。fail-open 回落不回改本标记;
-   * 精确消耗看 token_usage 与网关侧账。 */
-  model_lane?: "platform" | "beta";
+  /** 最近一次主会话启动解析到的网关通道(ADR-0039/0068):platform=
+   *  平台网关,personal=归属人的个人网关;beta 是 Beta 网关时期的
+   *  历史事实(ADR-0068 退役),读取侧照常兼容。fail-open 回落不回改
+   *  本标记;精确消耗看 token_usage 与网关侧账。 */
+  model_lane?: "platform" | "personal" | "beta";
   /** 下单时的修复轮预算;缺席=跟随服务当前默认。0=本单关掉修复环。 */
   repair_rounds?: number;
   /** 代码仓执行约定已完成首次解析并固定进 workflow_profile.supplements;
@@ -1502,6 +1503,10 @@ export interface TaskServiceOptions {
   gitCredential?: (
     account?: string,
   ) => { username: string; password: string; email?: string } | undefined;
+  /** 个人模型网关查询口(ADR-0068,serve 接 LocalAuth.personalModels):
+   *  按任务归属人现取其自配的模型接入,配齐则名下任务的主模型调用
+   *  整体走它;缺席/未配=undefined,走平台网关。 */
+  personalModels?: (account?: string) => ModelsSettings | undefined;
   /** 月光模式(免审批)查询口:按任务归属人现读现判(serve 接
    * LocalAuth.moonlightEnabled)。开着时该用户任务的人工节点由
    * 系统代答放行,答复里写明预授权与复盘要求;随时可开可关。 */
@@ -6931,8 +6936,8 @@ export class TaskService {
    * `model` 字段仍然返回当前生效的那一个——不是给人选,是给界面显示
    * "这单会用谁跑",让人心里有数。 */
   launchOptions(account?: string): {
-    /** 当前生效的模型(展示用,下单表单不提供选择;白名单成员展示
-     * Beta 网关,ADR-0039)。 */
+    /** 当前生效的模型(展示用,下单表单不提供选择;配了个人网关的
+     * 成员展示个人网关,ADR-0068)。 */
     model?: { provider: string; model: string };
     /** 当前默认修复轮；缺省仍明确返回平台兜底 20。 */
     repair_rounds?: number;
@@ -6978,10 +6983,10 @@ export class TaskService {
     /** 本部署要不要这两把个人令牌(由形态决定,见下方注释)。 */
     needs: { git_token: boolean; luban_token: boolean };
   } {
-    // 表单要展示的"这单会用谁跑":白名单成员显示 Beta 网关的模型
-    // (ADR-0039),其余人显示平台网关现选。仍是展示位,不给选。
+    // 表单要展示的"这单会用谁跑":配了个人网关的成员显示其个人
+    // 网关模型(ADR-0068),其余人显示平台网关现选。仍是展示位,不给选。
     const laneResolved = account ? this.resolvedModels(account) : undefined;
-    const active = laneResolved?.lane === "beta" && laneResolved.provider
+    const active = laneResolved?.lane === "personal" && laneResolved.provider
       && laneResolved.model
       ? { provider: laneResolved.provider, model: laneResolved.model }
       : this.activeModelChoice();
@@ -7117,10 +7122,11 @@ export class TaskService {
     return provider && model ? { provider, model } : undefined;
   }
 
-  /** 网关解析咽喉(ADR-0039):「settings 压部署参数」的唯一合并点,
+  /** 网关解析咽喉(ADR-0039/0068):「settings 压部署参数」的唯一合并点,
    *  会话启动点一律从这拿现场 models.json 与 provider/model,不许再
    *  各自内联一条 fallback 链——散弹式漏站(主会话换了网关、摘要
-   *  还走老网关)就是这么来的。operator=任务归属人,缺席=平台口径。 */
+   *  还走老网关)就是这么来的。operator=任务归属人,按人取其个人
+   *  网关(配齐即整体换装);缺席=平台口径。 */
   private resolvedModels(operator?: string): ResolvedModelConfig {
     return resolveModelConfig({
       settings: this.options.settings,
@@ -7130,14 +7136,17 @@ export class TaskService {
         model: this.options.model,
         vision: this.options.vision,
       },
+      personal: operator
+        ? this.options.personalModels?.(operator) : undefined,
       operator,
       log: (message) => this.options.log?.(message),
     });
   }
 
   /** 本任务会话应用的整套模型配置:任务级 model_choice(下单冻结)>
-   *  解析咽喉;Beta 白名单命中时 model_choice 让位,模型以 Beta 配置
-   *  为准(ADR-0039)。原九处内联链有两种口味,这里保持各自等价:
+   *  解析咽喉;个人网关命中时 model_choice 让位,模型以个人网关配置
+   *  为准(ADR-0068,承 Beta 旧例)。原九处内联链有两种口味,这里保持
+   *  各自等价:
    *  - plain(主会话/预热/摘要起草/prepush/开发助手):字段链到底,
    *    设置层没配就用部署参数,不做 models.json 首项兜底;
    *  - auto(需求修订/整体 Story):沿用 activeModelChoice 的首项
@@ -7145,7 +7154,7 @@ export class TaskService {
   private sessionModels(task: TaskState, flavor: "plain" | "auto" = "plain"):
     ResolvedModelConfig & { choice?: { provider: string; model: string } } {
     const resolved = this.resolvedModels(task.summary.luban_account);
-    if (resolved.lane === "beta") {
+    if (resolved.lane === "personal") {
       return { ...resolved,
         choice: resolved.provider && resolved.model
           ? { provider: resolved.provider, model: resolved.model }
@@ -13957,8 +13966,8 @@ export class TaskService {
       // 在跑的会话不换血(管理页如实写明了这一条)。
       const modelBundle = this.sessionModels(task);
       if (task.summary.model_lane !== modelBundle.lane) {
-        // 网关标记记主会话的解析结果(ADR-0039);下次 persist 随
-        // task.json 落盘,排障与 Beta 配额审计的依据。
+        // 网关标记记主会话的解析结果(ADR-0039/0068);下次 persist 随
+        // task.json 落盘,排障与网关侧账目对拍的依据。
         task.summary.model_lane = modelBundle.lane;
       }
       writeFileSync(
@@ -14625,8 +14634,8 @@ export class TaskService {
         vision: this.taskVision(task),
         // 任务级选择 > 解析咽喉(设置层默认 > 部署默认);任务级的记在
         // summary 上,重启续跑/会话重建都不漂移(设置层后来改了也不影响
-        // 本单);Beta 白名单命中时模型以 Beta 为准,model_choice 让位
-        // (ADR-0039)。
+        // 本单);个人网关命中时模型以个人网关为准,model_choice 让位
+        // (ADR-0068,承 Beta 旧例)。
         provider: modelBundle.choice?.provider ?? this.options.provider,
         model: modelBundle.choice?.model ?? this.options.model,
         eventLog: new EventLog(

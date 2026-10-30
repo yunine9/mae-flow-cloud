@@ -135,6 +135,10 @@ test("个人配置:退出重登与账号库重载后仍在,且不同用户严格
       push_confirmation: true,
       // 按流剥离(2026-09-09):问题处理介入档位独立,缺省二档。
       issue_intervention_tier: "2",
+      // 自动接单(ADR-0061 修订):本人当前态,缺省关闭。
+      issue_auto_claim: false,
+      // 个人模型网关(ADR-0068):没配只剩"未配置"事实,不带任何密钥影子。
+      personal_models: { configured: false },
     });
     // 自由探索入口已下线(#97):会话视图不再携带 issue_flow 字段。
     assert.equal("issue_flow" in aliceView, false,
@@ -162,6 +166,8 @@ test("个人配置:退出重登与账号库重载后仍在,且不同用户严格
       moonlight: false,
       push_confirmation: true,
       issue_intervention_tier: "2",
+      issue_auto_claim: false,
+      personal_models: { configured: false },
     });
     assert.equal(bobView.git_email, "bob@example.com");
     assert.notEqual(bobView.git_email, aliceView.git_email);
