@@ -1,6 +1,6 @@
 # 问题域参考数据接口免登录允许清单:拉单/详情/绑定/模块目录/人员名单匿名可达
 
-2026-10-30 拍板(#566):鉴权开着的部署里,六条精确到 method+path 的参考数据接口允许匿名(不带会话 cookie)访问——`GET /issues/dts`(匿名必须显式 `?owner=` 指名,缺省即 400 打回)、`GET /issues/dts/:ticket`、`GET /issues/dts-bindings`、`PUT /issues/dts-bindings/:ticket`、`GET /business-modules`(仅列表;写与逐模块操作仍在闸后)、`GET /auth/people`。目的:支撑无头本地客户端(zcode-mae)零凭据最小集成——这些接口的数据本身与人无关,是团队共享事实,此前要求先持用户身份才能读,是周界姿态的副作用,不是数据契约的需要。
+2026-10-30 拍板(#566):鉴权开着的部署里,六条精确到 method+path 的参考数据接口允许匿名(不带会话 cookie)访问——`GET /issues/dts`(匿名必须显式 `?owner=` 指名,缺省即 400 打回)、`GET /issues/dts/:ticket`、`GET /issues/dts-bindings`、`PUT /issues/dts-bindings/:ticket`、`GET /business-modules`(仅列表;写与逐模块操作仍在闸后)、`GET /auth/people`。目的:支撑无头本地客户端(zcode-mae)零凭据最小集成——这些接口的数据本身与人无关,是团队共享事实,此前要求先持用户身份才能读,只是登录闸统管 `/issues/*` 全域带来的副作用,不是数据契约的需要。
 
 **理由**:`/issues/*` 全域挂在 `authEnabled && !viewer → 401` 一道闸后(routes.ts 顶部),对拉单、绑定映射、模块目录这类共享参考数据是过度约束。客户端为此要么持有用户会话 cookie(把个人身份塞给无头进程),要么整套 mock 自建。数据敏感性逐条核过:DTS 单据在 DTS 系统本就全员可见(平台是镜像),绑定映射与模块目录是团队共享配置,人员名单只有工号与姓名两个公开字段。放开这一小撮,客户端保持零凭据配置。
 
