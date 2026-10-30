@@ -66,6 +66,17 @@ export function statusText(task: {
 
 export type UserRole = "admin" | "developer";
 
+/** 个人模型网关(ADR-0068)的掩码视图:配没配齐、网关地址/模型名/
+ * 接口格式明文与密钥末 4 位——密钥本体永不回传,与服务端 auth.ts
+ * 的 PersonalModelsView 同形。 */
+export interface PersonalModelsView {
+  configured: boolean;
+  url?: string;
+  model?: string;
+  api?: string;
+  key_hint?: string;
+}
+
 export interface AuthUser {
   username: string;
   display_name?: string;
@@ -91,6 +102,10 @@ export interface AuthUser {
   /** 问题处理介入档位(ADR-0019 按流剥离):三档缺省二档,与需求侧
    * 两轴互不带动。 */
   issue_intervention_tier?: "1" | "2" | "3";
+  /** 个人模型网关(ADR-0068)的掩码视图:配齐后本人名下任务的主模型
+   * 调用整体走它,清空即回落平台网关。密钥只写不读,只回末 4 位。
+   * /auth/users 等公开视图不带这个字段,缺席=没配置。 */
+  personal_models?: PersonalModelsView;
 }
 
 /** 给协作界面显示姓名的最窄成员视图；不携带角色、权限或个人配置。 */
@@ -350,6 +365,51 @@ export async function testLubanConnection(): Promise<{
   message: string;
 }> {
   const response = await fetch("/auth/me/luban-test", { method: "POST" });
+  if (!response.ok) throw new Error(await errorText(response));
+  return parseJson(response);
+}
+
+/** 模型网关四字段表单(地址/密钥/模型/接口格式):平台网关(管理页)与
+ * 个人网关(ADR-0068,个人设置)同一套口径——api_key 留空=沿用已存
+ * (界面永远不回填明文),其余字段缺席=沿用已存。 */
+export interface ModelsFormFields {
+  url?: string;
+  api_key?: string;
+  model?: string;
+  api?: string;
+}
+
+/** 保存/更换个人模型网关(ADR-0068):四字段与平台网关同一套合并
+ * 口径。谁登录配谁的;回的只有掩码视图。 */
+export async function putPersonalModels(
+  body: ModelsFormFields & {
+    /** true=删除个人网关,名下任务回落平台网关。 */
+    clear?: boolean;
+  },
+): Promise<PersonalModelsView> {
+  const response = await fetch("/auth/me/models", {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return parseJson(response);
+}
+
+/** 清除个人模型网关:等价于 putPersonalModels({ clear: true })。 */
+export function clearPersonalModels(): Promise<PersonalModelsView> {
+  return putPersonalModels({ clear: true });
+}
+
+/** 个人网关连通性测试:测当前表单草稿,密钥留空时服务端沿用已存,
+ * 与保存同一口径。个人通道没有部署层兜底——没配又没草稿时服务端
+ * 明说"没得测",不拿平台网关凑数。 */
+export async function postPersonalModelsCheck(
+  body: ModelsFormFields,
+): Promise<SystemCheckResult> {
+  const response = await fetch("/auth/me/models/check", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
   if (!response.ok) throw new Error(await errorText(response));
   return parseJson(response);
 }
@@ -978,9 +1038,10 @@ export interface TaskSummary {
   last_progress_at?: string;
   completed_at?: string;
   token_usage?: TaskTokenUsage;
-  /** 最近一次主会话解析到的网关通道(ADR-0039):platform=平台网关,
-   * beta=Beta 网关(白名单成员);缺席=标记尚未写(老任务/未启动)。 */
-  model_lane?: "platform" | "beta";
+  /** 最近一次主会话解析到的网关通道(ADR-0068):platform=平台网关,
+   * personal=本人自配的个人网关;beta 是退役前历史任务的事实账,照读
+   * 不动。缺席=标记尚未写(老任务/未启动)。 */
+  model_lane?: "platform" | "personal" | "beta";
   /** 执行队列位次(1 起,服务端投影):排队的单要能回答"排到哪了"。 */
   queue_position?: number;
   /** 开发助手正占有主现场(paused 期间):恢复入口是"交还主任务"。 */
@@ -3350,18 +3411,6 @@ export interface SettingsView {
       key_hint?: string;
     };
   };
-  /** Beta 网关(ADR-0039):admin 配的第二套同形模型接入 + 人员白名单;
-   * enabled=false(名单为空)时配置保留但通道停用,全员走平台网关。 */
-  models_beta: {
-    configured: boolean;
-    enabled: boolean;
-    provider?: string;
-    model?: string;
-    url?: string;
-    api?: string;
-    key_hint?: string;
-    members: string[];
-  };
   /** 未设置覆盖时实际采用的服务默认值，不让管理员猜启动参数。 */
   defaults: {
     runtime: {
@@ -3466,7 +3515,7 @@ export async function reclaimUnusedBuildCaches(): Promise<BuildCacheReclaimResul
 }
 
 async function putSettings(
-  section: "runtime" | "models" | "models-beta" | "vision" | "execution-policy",
+  section: "runtime" | "models" | "vision" | "execution-policy",
   body: unknown,
 ): Promise<SettingsView> {
   const response = await fetch(`/settings/${section}`, {
@@ -3490,51 +3539,17 @@ export function putExecutionPolicySettings(body: {
   return putSettings("execution-policy", body);
 }
 
-export function putModelsSettings(body: {
-  url: string;
-  api_key: string;
-  model?: string;
-  api?: string;
-}): Promise<SettingsView> {
+export function putModelsSettings(
+  body: ModelsFormFields & { url: string; api_key: string },
+): Promise<SettingsView> {
   return putSettings("models", body);
-}
-
-/** Beta 网关保存(ADR-0039):连接四字段口径同平台网关(密钥留空=
- * 沿用已存),members 是白名单全量替换(空数组=通道停用)。 */
-export function putModelsBetaSettings(body: {
-  url?: string;
-  api_key?: string;
-  model?: string;
-  api?: string;
-  members?: string[];
-}): Promise<SettingsView> {
-  return putSettings("models-beta", body);
-}
-
-/** Beta 网关连通性测试(ADR-0039):只测 Beta 自己的配置,不回落
- * 部署默认;密钥留空沿用已存。 */
-export async function postModelsBetaCheck(body: {
-  url?: string;
-  api_key?: string;
-  model?: string;
-  api?: string;
-}): Promise<SystemCheckResult> {
-  const response = await fetch("/settings/models-beta/check", {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-  if (!response.ok) throw new Error(await errorText(response));
-  return parseJson(response);
 }
 
 /** 模型网关连通性测试:发送一条真实问答请求,返回网络连通/模型问答
  * 两项结论。字段留空 = 服务端沿用已存配置(密钥不回传明文)。 */
-export async function postModelsCheck(body: {
-  url?: string;
-  api_key?: string;
-  model?: string;
-  api?: string;
-}): Promise<SystemCheckResult> {
+export async function postModelsCheck(
+  body: ModelsFormFields,
+): Promise<SystemCheckResult> {
   const response = await fetch("/settings/models/check", {
     method: "POST",
     body: JSON.stringify(body),
@@ -3870,9 +3885,10 @@ export interface IssueSummary {
   id: string;
   /** 归属账号=问题责任人(ADR-0031):写操作与闸口通知的唯一对象。 */
   account: string;
-  /** 最近一次会话启动解析到的网关通道(ADR-0039):platform=平台
-   * 网关,beta=Beta 网关(责任人站在白名单);缺席=老会话/未启动。 */
-  model_lane?: "platform" | "beta";
+  /** 最近一次会话启动解析到的网关通道(ADR-0068):platform=平台
+   * 网关,personal=本人自配的个人网关;beta 是退役前历史会话的
+   * 事实账,照读不动。缺席=老会话/未启动。 */
+  model_lane?: "platform" | "personal" | "beta";
   /** 登记人(ADR-0031,通常是测试):登记完成即撒手只读跟踪;缺席=
    * 指派机制前的老会话(服务端读盘即补齐=归属)。 */
   reporter?: string;

@@ -47,6 +47,7 @@ import { TaskWorkspace } from "./TaskWorkspace";
 import { SettingsBoard } from "./SettingsView";
 import { GitTokenCard } from "./GitTokenCard";
 import { LubanTokenCard } from "./LubanTokenCard";
+import { PersonalModelsCard } from "./PersonalModelsCard";
 import {
   getMoonlightPreview,
   putMoonlight,
@@ -646,11 +647,14 @@ export function PersonalSettingsPage({
     <section aria-labelledby="personal-connections-title">
       <div className="mb-[11px] flex items-end justify-between gap-[18px] px-0.5 max-[760px]:flex-col max-[760px]:items-start max-[760px]:gap-[5px]">
         <div><h2 id="personal-connections-title" className="mt-[5px] text-[19px] leading-[1.2] tracking-[-0.025em] text-(--text-strong)">个人接入</h2></div>
-        <p className="m-0 text-sm text-(--muted)">配置一次，后续任务自动使用你的代码身份和消息通知。</p>
+        <p className="m-0 text-sm text-(--muted)">配置一次，后续任务自动使用你的代码身份、消息通知和模型接入。</p>
       </div>
       <div className="grid grid-cols-2 items-start gap-[11px] max-[760px]:grid-cols-1">
         <GitTokenCard session={session} onChanged={onSessionPatch} />
         <LubanTokenCard session={session} onChanged={onSessionPatch} />
+        {/* 个人模型网关(ADR-0068):四字段表单比令牌卡宽,占满整行。
+            配齐即名下任务主模型调用整体走本人接入,清空回落平台网关。 */}
+        <PersonalModelsCard session={session} onChanged={onSessionPatch} />
       </div>
     </section>
   </div>;

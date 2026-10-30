@@ -17,7 +17,7 @@ import type {
   SystemCheckResult,
   SystemCheckStatus,
 } from "./taskService.ts";
-import type { ModelsSettings } from "./settings.ts";
+import { jsonProviders, type ModelsFormPatch, type ModelsSettings } from "./settings.ts";
 
 export class GatewayCheckError extends Error {}
 
@@ -35,19 +35,15 @@ export interface GatewayTarget {
  * 同口径:留空=沿用已存,界面永远不回填明文。三层拼完仍缺项就如实
  * 拒绝——测试打不出去的配置,报"没得测"比编造假结果诚实。 */
 export function resolveGatewayTarget(
-  body: { url?: unknown; api_key?: unknown; model?: unknown; api?: unknown },
+  body: ModelsFormPatch,
   stored: ModelsSettings | undefined,
   deployment: Record<string, unknown> | undefined,
 ): GatewayTarget {
-  const storedProviders =
-    (stored?.json as { providers?: Record<string, any> } | undefined)
-      ?.providers ?? {};
+  const storedProviders = jsonProviders(stored?.json);
   const storedProvider = stored?.provider
     || Object.keys(storedProviders)[0];
   const storedSpec = storedProviders[storedProvider ?? ""] ?? {};
-  const deploymentProviders =
-    (deployment as { providers?: Record<string, any> } | undefined)
-      ?.providers ?? {};
+  const deploymentProviders = jsonProviders(deployment);
   const deploymentSpec = deploymentProviders[Object.keys(deploymentProviders)[0] ?? ""] ?? {};
   const baseUrl = String(body.url ?? "").trim()
     || String(storedSpec.baseUrl ?? "").trim()

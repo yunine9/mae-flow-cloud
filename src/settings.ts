@@ -79,16 +79,24 @@ export interface ModelsSettings {
   vision?: { provider: string; model: string };
 }
 
-/** Beta 网关(ADR-0039):admin 配的第二套同形模型接入 + 人员白名单。
- *  白名单成员名下任务的模型调用整体走这套;没有 vision 角色绑定
- *  (视觉恒走平台网关,解析器把平台 vision 的 provider 条目并进
- *  Beta 现场 json,保证 Beta 会话照样能解析视觉模型)。 */
-export interface ModelsBetaSettings {
-  json?: Record<string, unknown>;
-  provider?: string;
-  model?: string;
-  /** 白名单成员(账号名)。空数组/缺席=Beta 通道停用,全员走平台。 */
-  members?: string[];
+/** models.json 同形内容里挖 providers 目录;缺席给空目录。读侧共用
+ *  这一个口径(settings 视图/校验、auth 掩码视图、网关解析、连通
+ *  检查)——散落的第 4 份拷贝出现时收拢于此(ADR-0068 双轴评审)。 */
+export function jsonProviders(
+  json: Record<string, unknown> | undefined,
+): Record<string, any> {
+  return (json as { providers?: Record<string, any> } | undefined)
+    ?.providers ?? {};
+}
+
+/** 模型网关四字段表单(地址/密钥/模型/接口格式)的请求形状:平台
+ *  网关(管理页)与个人网关(ADR-0068,个人设置)同一套表单。值收
+ *  unknown,由合并/校验端逐字段 String 化并当场拒绝坏值。 */
+export interface ModelsFormPatch {
+  url?: unknown;
+  api_key?: unknown;
+  model?: unknown;
+  api?: unknown;
 }
 
 export interface ExecutionPolicySettings {
@@ -102,7 +110,6 @@ export interface ExecutionPolicySettings {
 interface Stored {
   runtime?: RuntimeKnobs;
   models?: ModelsSettings;
-  models_beta?: ModelsBetaSettings;
   execution_policy?: ExecutionPolicySettings;
 }
 
@@ -110,17 +117,6 @@ export class SettingsError extends Error {}
 
 function mask(secret: string): string {
   return secret.length <= 4 ? "••••" : `••••${secret.slice(-4)}`;
-}
-
-/** Beta 白名单成员归一:trim、去空、去重;非数组一律空(通道停用)。 */
-function normalizeMembers(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  const seen = new Set<string>();
-  for (const item of value) {
-    const name = String(item ?? "").trim();
-    if (name) seen.add(name);
-  }
-  return [...seen];
 }
 
 /** 数值项校验:只收非负有限数。"无限等待"不是合法取值——预算的
@@ -151,6 +147,65 @@ function upsertModel(
   if (index < 0) return [...items, value];
   items[index] = value;
   return items;
+}
+
+/** 表单四字段(url/api_key/model/api)→pi models.json 形状的合并。
+ *  平台网关(管理页)与个人网关(ADR-0068,个人设置)共用同一套口径:
+ *  api_key 留空=沿用已存密钥(界面永远不回填明文),其余字段缺席=
+ *  沿用已存值,接口格式默认 OpenAI Chat;三要素不齐/URL 非法/格式
+ *  不认识当场拒绝。current 是已存的同形配置,没有就传 {}。 */
+export function mergeModelsForm(
+  current: ModelsSettings,
+  patch: ModelsFormPatch,
+  fallbackProvider: string,
+): { json: Record<string, unknown>; provider: string; model: string } {
+  const existingProviders = jsonProviders(current.json);
+  const provider = current.provider
+    || Object.keys(existingProviders).find((name) =>
+      name !== current.vision?.provider)
+    || fallbackProvider;
+  const existing = existingProviders[provider] ?? {};
+  const url = patch.url === undefined
+    ? String(existing.baseUrl ?? "").trim()
+    : String(patch.url).trim();
+  const suppliedKey = patch.api_key === undefined
+    ? "" : String(patch.api_key).trim();
+  const apiKey = suppliedKey || String(existing.apiKey ?? "").trim();
+  const model = patch.model === undefined
+    ? String(current.model ?? existing.models?.[0]?.id ?? "").trim()
+    : String(patch.model).trim();
+  // 格式:表单送来的必须认识;没送就沿用已存(老配置/异种格式不惊扰),
+  // 都没有才落默认 OpenAI Chat。
+  const FORM_API = new Set(["openai-completions", "anthropic-messages"]);
+  let api = existing.api;
+  if (patch.api !== undefined) {
+    api = String(patch.api).trim();
+    if (!FORM_API.has(api)) {
+      throw new SettingsError(
+        "接口格式只能是 OpenAI Chat 或 Anthropic Messages");
+    }
+  }
+  if (api === undefined || api === null || api === "") {
+    api = "openai-completions";
+  }
+  if (!url || !apiKey || !model) {
+    throw new SettingsError("请完整填写模型网关地址、API Key 和模型名称");
+  }
+  try { void new URL(url); } catch {
+    throw new SettingsError(`模型网关地址不是合法 URL: ${url}`);
+  }
+  const previousModel = (existing.models ?? []).find(
+    (item: { id?: string }) => item?.id === model) ?? {};
+  const configuredModels = upsertModel(existing.models, model,
+    { ...previousModel, id: model });
+  const json = { providers: { ...existingProviders, [provider]: {
+    ...existing,
+    baseUrl: url,
+    api,
+    apiKey,
+    models: configuredModels,
+  } } };
+  return { json, provider, model };
 }
 
 export class RuntimeSettings {
@@ -191,77 +246,6 @@ export class RuntimeSettings {
 
   executionPolicy(): ExecutionPolicySettings {
     return this.load().execution_policy ?? {};
-  }
-
-  /** Beta 网关(ADR-0039)。缺席=没配过。 */
-  modelsBeta(): ModelsBetaSettings {
-    return this.load().models_beta ?? {};
-  }
-
-  /** Beta 网关保存。连接四字段与 updateModels 同口径(留空=沿用已存,
-   *  校验同款);members 是白名单全量替换,空数组=通道停用但配置保留。 */
-  updateModelsBeta(patch: {
-    url?: unknown;
-    api_key?: unknown;
-    model?: unknown;
-    api?: unknown;
-    members?: unknown;
-  }): void {
-    const current = this.modelsBeta();
-    const members = "members" in patch
-      ? normalizeMembers(patch.members)
-      : current.members;
-    if (patch.url === undefined && patch.api_key === undefined
-        && patch.model === undefined && patch.api === undefined) {
-      this.save({ ...this.load(), models_beta: { ...current, members } });
-      return;
-    }
-    const existingProviders = (current.json as {
-      providers?: Record<string, any>;
-    } | undefined)?.providers ?? {};
-    const provider = current.provider || Object.keys(existingProviders)[0]
-      || "maeflow-beta";
-    const existing = existingProviders[provider] ?? {};
-    const url = patch.url === undefined
-      ? String(existing.baseUrl ?? "").trim() : String(patch.url).trim();
-    const suppliedKey = patch.api_key === undefined
-      ? "" : String(patch.api_key).trim();
-    const apiKey = suppliedKey || String(existing.apiKey ?? "").trim();
-    const model = patch.model === undefined
-      ? String(current.model ?? existing.models?.[0]?.id ?? "").trim()
-      : String(patch.model).trim();
-    const FORM_API = new Set(["openai-completions", "anthropic-messages"]);
-    let api = existing.api;
-    if (patch.api !== undefined) {
-      api = String(patch.api).trim();
-      if (!FORM_API.has(api)) {
-        throw new SettingsError(
-          "接口格式只能是 OpenAI Chat 或 Anthropic Messages");
-      }
-    }
-    if (api === undefined || api === null || api === "") {
-      api = "openai-completions";
-    }
-    if (!url || !apiKey || !model) {
-      throw new SettingsError("请完整填写 Beta 网关地址、API Key 和模型名称");
-    }
-    try { void new URL(url); } catch {
-      throw new SettingsError(`Beta 网关地址不是合法 URL: ${url}`);
-    }
-    const previousModel = (existing.models ?? []).find(
-      (item: { id?: string }) => item?.id === model) ?? {};
-    const configuredModels = upsertModel(existing.models, model,
-      { ...previousModel, id: model });
-    const json = { providers: { ...existingProviders, [provider]: {
-      ...existing,
-      baseUrl: url,
-      api,
-      apiKey,
-      models: configuredModels,
-    } } };
-    this.save({ ...this.load(), models_beta: {
-      ...current, json, provider, model, members,
-    } });
   }
 
   updateExecutionPolicy(patch: Record<string, unknown>): void {
@@ -341,71 +325,22 @@ export class RuntimeSettings {
   }
 
   /** 模型网关。管理页使用地址/API Key/模型名/接口格式四个简单字段；
-   * 旧的 JSON 参数只为兼容已有调用与落盘数据，provider/model 必须真实存在。
-   * 接口格式(用户拍板 2026-08-26):表单默认 OpenAI Chat,可选 Anthropic;
-   * json 通路仍支持 pi 的全部格式,这里只校验表单送进来的那两种。 */
-  updateModels(patch: {
+   *  旧的 JSON 参数只为兼容已有调用与落盘数据，provider/model 必须真实存在。
+   *  接口格式(用户拍板 2026-08-26):表单默认 OpenAI Chat,可选 Anthropic;
+   *  json 通路仍支持 pi 的全部格式,这里只校验表单送进来的那两种。
+   *  四字段表单的合并与校验与个人网关(auth 侧)共用 mergeModelsForm。 */
+  updateModels(patch: ModelsFormPatch & {
     json?: unknown;
     provider?: unknown;
-    model?: unknown;
-    url?: unknown;
-    api_key?: unknown;
-    api?: unknown;
   }): void {
     const current = this.models();
     // 管理页只暴露地址、密钥、模型名、接口格式;内部仍转换成 pi 需要的
     // models.json 形状。api_key 留空表示保留现有密钥。
     if (patch.url !== undefined || patch.api_key !== undefined) {
-      const existingProviders = (current.json as {
-        providers?: Record<string, any>;
-      } | undefined)?.providers ?? {};
-      const provider = current.provider
-        || Object.keys(existingProviders).find((name) =>
-          name !== current.vision?.provider)
-        || "maeflow";
-      const existing = existingProviders[provider] ?? {};
-      const url = patch.url === undefined
-        ? String(existing.baseUrl ?? "").trim()
-        : String(patch.url).trim();
-      const suppliedKey = patch.api_key === undefined
-        ? "" : String(patch.api_key).trim();
-      const apiKey = suppliedKey || String(existing.apiKey ?? "").trim();
-      const model = patch.model === undefined
-        ? String(current.model ?? existing.models?.[0]?.id ?? "").trim()
-        : String(patch.model).trim();
-      // 格式:表单送来的必须认识;没送就沿用已存(老配置/异种格式不惊扰),
-      // 都没有才落默认 OpenAI Chat。
-      const FORM_API = new Set(["openai-completions", "anthropic-messages"]);
-      let api = existing.api;
-      if (patch.api !== undefined) {
-        api = String(patch.api).trim();
-        if (!FORM_API.has(api)) {
-          throw new SettingsError(
-            "接口格式只能是 OpenAI Chat 或 Anthropic Messages");
-        }
-      }
-      if (api === undefined || api === null || api === "") {
-        api = "openai-completions";
-      }
-      if (!url || !apiKey || !model) {
-        throw new SettingsError("请完整填写模型网关地址、API Key 和模型名称");
-      }
-      try { void new URL(url); } catch {
-        throw new SettingsError(`模型网关地址不是合法 URL: ${url}`);
-      }
-      const previousModel = (existing.models ?? []).find(
-        (item: { id?: string }) => item?.id === model) ?? {};
-      const configuredModels = upsertModel(existing.models, model,
-        { ...previousModel, id: model });
-      const json = { providers: { ...existingProviders, [provider]: {
-        ...existing,
-        baseUrl: url,
-        api,
-        apiKey,
-        models: configuredModels,
-      } } };
+      const merged = mergeModelsForm(current, patch, "maeflow");
       this.save({ ...this.load(), models: {
-        ...current, json, provider, model,
+        ...current, json: merged.json, provider: merged.provider,
+        model: merged.model,
       } });
       return;
     }
@@ -435,8 +370,7 @@ export class RuntimeSettings {
     if ((provider || model) && json === undefined && current.json === undefined) {
       throw new SettingsError("先提供 models.json 内容,再指定 provider/model");
     }
-    const providers = (json as { providers?: Record<string, any> } | undefined)
-      ?.providers ?? {};
+    const providers = jsonProviders(json);
     const vision = current.vision
       && providers[current.vision.provider]?.models?.some(
         (item: { id?: string }) => item?.id === current.vision?.model)
@@ -446,20 +380,15 @@ export class RuntimeSettings {
 
   /** 图片识别模型独立角色配置。可与主模型共用 provider，也可使用独立
    * provider；保存时保留其他模型/provider，API Key 留空表示保留。 */
-  updateVision(patch: {
-    url?: unknown;
-    api_key?: unknown;
-    model?: unknown;
-    api?: unknown;
+  updateVision(patch: ModelsFormPatch & {
     /** 部署层 models.json 仅由服务端补入，浏览器不负责也看不到。 */
     base_json?: unknown;
     base_vision?: unknown;
   }): void {
     const current = this.models();
     const sourceJson = current.json ?? patch.base_json;
-    const providers = (sourceJson as {
-      providers?: Record<string, any>;
-    } | undefined)?.providers ?? {};
+    const providers = jsonProviders(
+      sourceJson as Record<string, unknown> | undefined);
     const baseVision = patch.base_vision && typeof patch.base_vision === "object"
       ? patch.base_vision as { provider?: unknown; model?: unknown } : undefined;
     const provider = current.vision?.provider
@@ -512,7 +441,7 @@ export class RuntimeSettings {
   }
 
   /** 给界面的视图:密钥全部掩码。这里是"只写不读"的读半边——
-   * 谁在这个函数里返回明文,谁就在给未来的泄漏签字。 */
+   *  谁在这个函数里返回明文,谁就在给未来的泄漏签字。 */
   view(): {
     runtime: RuntimeKnobs;
     execution_policy: ExecutionPolicySettings;
@@ -521,37 +450,18 @@ export class RuntimeSettings {
               providers: Array<{ name: string; models: string[]; key_hint?: string }>;
               vision: { configured: boolean; provider?: string; model?: string;
                 url?: string; api?: string; key_hint?: string } };
-    models_beta: { configured: boolean; enabled: boolean;
-              provider?: string; model?: string;
-              url?: string; api?: string; key_hint?: string;
-              members: string[] };
   } {
     const models = this.models();
-    const providers = Object.entries(
-      (models.json as { providers?: Record<string, any> } | undefined)
-        ?.providers ?? {},
-    ).map(([name, spec]) => ({
+    const providerIndex = jsonProviders(models.json);
+    const providers = Object.entries(providerIndex).map(([name, spec]) => ({
       name,
       models: ((spec?.models ?? []) as Array<{ id?: string }>)
         .map((item) => String(item?.id ?? "")).filter(Boolean),
       key_hint: spec?.apiKey ? mask(String(spec.apiKey)) : undefined,
     }));
     const selectedProvider = models.provider || providers[0]?.name;
-    const selectedSpec = ((models.json as {
-      providers?: Record<string, any>;
-    } | undefined)?.providers ?? {})[selectedProvider ?? ""];
-    const visionSpec = ((models.json as {
-      providers?: Record<string, any>;
-    } | undefined)?.providers ?? {})[models.vision?.provider ?? ""];
-    const beta = this.modelsBeta();
-    const betaProviders = (beta.json as {
-      providers?: Record<string, any>;
-    } | undefined)?.providers ?? {};
-    const betaProvider = beta.provider
-      || Object.keys(betaProviders)[0];
-    const betaSpec = betaProviders[betaProvider ?? ""] ?? {};
-    const betaConfigured = !!betaSpec?.baseUrl && !!betaSpec?.apiKey
-      && !!beta.model;
+    const selectedSpec = providerIndex[selectedProvider ?? ""];
+    const visionSpec = providerIndex[models.vision?.provider ?? ""];
     return {
       runtime: this.runtime(),
       execution_policy: this.executionPolicy(),
@@ -576,17 +486,6 @@ export class RuntimeSettings {
           key_hint: visionSpec?.apiKey
             ? mask(String(visionSpec.apiKey)) : undefined,
         },
-      },
-      models_beta: {
-        configured: betaConfigured,
-        enabled: betaConfigured && (beta.members?.length ?? 0) > 0,
-        provider: betaProvider || undefined,
-        model: beta.model,
-        url: betaSpec?.baseUrl ? String(betaSpec.baseUrl) : undefined,
-        api: betaSpec?.api ? String(betaSpec.api) : undefined,
-        key_hint: betaSpec?.apiKey
-          ? mask(String(betaSpec.apiKey)) : undefined,
-        members: [...(beta.members ?? [])],
       },
     };
   }

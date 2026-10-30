@@ -25,6 +25,12 @@ import {
   scryptSync,
   timingSafeEqual,
 } from "node:crypto";
+import {
+  jsonProviders,
+  mergeModelsForm,
+  type ModelsFormPatch,
+  type ModelsSettings,
+} from "./settings.ts";
 
 export type UserRole = "admin" | "developer";
 
@@ -54,6 +60,16 @@ export function isIssueInterventionTier(
   return value === "1" || value === "2" || value === "3";
 }
 
+/** 个人模型网关的掩码形态(给界面确认"配过了、是哪个"):是否已配、
+ *  url/model/api 明文与密钥末 4 位——密钥本体永不回传。 */
+export interface PersonalModelsView {
+  configured: boolean;
+  url?: string;
+  model?: string;
+  api?: string;
+  key_hint?: string;
+}
+
 /** 登录后交给界面的本人视图。密钥原文永不离开服务端，只暴露能让
  * 用户确认“已经配置、末四位是什么”的掩码。 */
 export interface AuthSessionUser extends AuthUser {
@@ -66,6 +82,8 @@ export interface AuthSessionUser extends AuthUser {
   issue_intervention_tier: IssueInterventionTier;
   /** 自动接单开关(ADR-0061 修订):本人当前态,个人设置显示与翻转。 */
   issue_auto_claim: boolean;
+  /** 个人模型网关(ADR-0068)的掩码形态。 */
+  personal_models: PersonalModelsView;
 }
 
 /** 跨仓分工只暴露“能不能接活”和缺项名称，绝不暴露任何令牌提示或
@@ -114,6 +132,11 @@ interface StoredUser extends AuthUser {
    *  已开启,名下符合条件的新 DTS 单由平台定时自动发起。缺省关闭,
    *  稀疏存储:缺席=关闭。管理员账号在 setIssueAutoClaim 拒收。 */
   issue_auto_claim?: boolean;
+  /** 个人模型网关(ADR-0068):成员自配的模型接入(地址/密钥/模型/
+   *  接口格式),配齐则名下任务的主模型调用整体走它。形态与 settings
+   *  的 models 同构,json 里含 apiKey 明文——所以与个人令牌同纪律:
+   *  只住 0600 的本文件,永不进公开视图/日志,界面只看掩码。 */
+  personal_models?: ModelsSettings;
 }
 
 interface UserFile {
@@ -378,6 +401,55 @@ export class LocalAuth {
     return maskToken(this.users.get(username)?.luban_token);
   }
 
+  /** 设置/更换/清空个人模型网关(ADR-0068)。表单四字段与平台网关共用
+   *  同一套合并口径(mergeModelsForm:api_key 留空=沿用已存,其余缺席
+   *  沿用已存值);四字段全空或显式 clear=删除配置,名下任务回落平台
+   *  网关。只写不读:明文只住本文件,界面拿到的只有掩码视图。 */
+  setPersonalModels(
+    username: string,
+    patch: ModelsFormPatch & { clear?: unknown },
+  ): void {
+    const stored = this.users.get(username);
+    if (!stored) throw new Error(`账号 ${username} 不存在`);
+    const blank = (value: unknown) =>
+      value === undefined || value === null || String(value).trim() === "";
+    if (patch.clear === true
+        || (blank(patch.url) && blank(patch.api_key)
+          && blank(patch.model) && blank(patch.api))) {
+      delete stored.personal_models;
+      this.persist();
+      return;
+    }
+    stored.personal_models = mergeModelsForm(
+      stored.personal_models ?? {}, patch, "maeflow-personal");
+    this.persist();
+  }
+
+  /** 消费口(唯一允许碰明文的出口):会话启动解析模型网关时按归属人
+   *  现取。停用账号不给——与 gitCredential/lubanToken 同纪律。 */
+  personalModels(username: string | undefined): ModelsSettings | undefined {
+    if (!username) return undefined;
+    const stored = this.users.get(username);
+    if (!stored || stored.disabled) return undefined;
+    return stored.personal_models;
+  }
+
+  /** 个人网关的掩码视图:是否已配、url/model/api 明文与密钥末 4 位。 */
+  personalModelsView(username: string): PersonalModelsView {
+    const config = this.users.get(username)?.personal_models;
+    const providers = jsonProviders(config?.json);
+    const provider = config?.provider || Object.keys(providers)[0];
+    const spec = providers[provider ?? ""] ?? {};
+    return {
+      configured: !!spec?.baseUrl && !!spec?.apiKey && !!config?.model,
+      ...(spec?.baseUrl ? { url: String(spec.baseUrl) } : {}),
+      ...(config?.model ? { model: config.model } : {}),
+      ...(spec?.api ? { api: String(spec.api) } : {}),
+      ...(spec?.apiKey
+        ? { key_hint: maskToken(String(spec.apiKey)) } : {}),
+    };
+  }
+
   /** 消费口(唯一碰明文的出口):发送通知时按发起人取发送令牌。
    * 停用账号不给——离职/停权的人不该继续以他的身份发消息。 */
   lubanToken(username: string | undefined): string | undefined {
@@ -496,6 +568,7 @@ export class LocalAuth {
       push_confirmation: this.pushConfirmationEnabled(username),
       issue_intervention_tier: this.issueInterventionTier(username),
       issue_auto_claim: this.issueAutoClaimEnabled(username),
+      personal_models: this.personalModelsView(username),
     };
   }
 

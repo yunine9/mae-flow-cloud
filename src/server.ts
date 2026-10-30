@@ -698,6 +698,41 @@ export function createTaskServer(
             message: "测试消息已发送，请在小鲁班中确认是否收到。",
           });
         }
+        // 个人模型网关(ADR-0068):成员自助配模型接入,四字段与平台
+        // 网关同一套表单。谁登录配谁的;密钥只写不读,写完只回掩码。
+        // 四字段全空或 clear=true=删除配置,名下任务回落平台网关。
+        if (request.method === "PUT" && parts[1] === "me"
+            && parts[2] === "models" && parts.length === 3) {
+          if (!viewer) return json(response, 401, { error: "尚未登录" });
+          const body = await readBody(request);
+          try {
+            options.auth!.setPersonalModels(viewer.username, body);
+          } catch (error) {
+            return json(response, 400, { error: humanError(error) });
+          }
+          return json(response, 200,
+            options.auth!.personalModelsView(viewer.username));
+        }
+        // 个人网关连通测试:表单草稿 > 本人已存配置(密钥留空=沿用,
+        // 与保存同口径)。个人通道没有部署层兜底——没配又没草稿就
+        // 明说"没得测",不拿平台网关凑数。
+        if (request.method === "POST" && parts[1] === "me"
+            && parts[2] === "models" && parts[3] === "check"
+            && parts.length === 4) {
+          if (!viewer) return json(response, 401, { error: "尚未登录" });
+          const body = await readBody(request);
+          let target;
+          try {
+            target = resolveGatewayTarget(
+              body, options.auth!.personalModels(viewer.username), undefined);
+          } catch (error) {
+            if (error instanceof GatewayCheckError) {
+              return json(response, 400, { error: error.message });
+            }
+            throw error;
+          }
+          return json(response, 200, await checkModelGateway(target));
+        }
         if (request.method === "POST" && parts[1] === "logout") {
           options.auth?.endSession(sessionToken);
           response.setHeader("set-cookie", sessionCookie("", request, true));
@@ -935,12 +970,6 @@ export function createTaskServer(
             settings.updateModels(await readBody(request));
             return json(response, 200, settingsView());
           }
-          // Beta 网关(ADR-0039):admin 配的第二套同形模型接入 + 白名单。
-          // members 全量替换,空数组=通道停用但配置保留;密钥留空=沿用。
-          if (request.method === "PUT" && parts[1] === "models-beta") {
-            settings.updateModelsBeta(await readBody(request));
-            return json(response, 200, settingsView());
-          }
           // 模型网关连通性测试:表单草稿优先,留空回落已存配置/部署
           // 默认(密钥"留空=沿用"与保存同口径)。与部署自检的分工:
           // 自检只读不外发;这里管理员主动发起一次真实外发请求。
@@ -949,15 +978,6 @@ export function createTaskServer(
             const body = await readBody(request);
             const target = resolveGatewayTarget(body, settings.models(),
               service.options.modelsJson as Record<string, unknown> | undefined);
-            return json(response, 200, await checkModelGateway(target));
-          }
-          // Beta 网关连通性测试(ADR-0039):只测 Beta 自己的配置,
-          // 不回落部署默认——"没得测"就该明说,不拿平台网关凑数。
-          if (request.method === "POST" && parts[1] === "models-beta"
-              && parts[2] === "check") {
-            const body = await readBody(request);
-            const target = resolveGatewayTarget(body, settings.modelsBeta(),
-              undefined);
             return json(response, 200, await checkModelGateway(target));
           }
           if (request.method === "PUT" && parts[1] === "vision") {
@@ -1081,8 +1101,8 @@ export function createTaskServer(
         if (options.auth && !viewer) {
           return json(response, 401, { error: "请先登录" });
         }
-        // 表单展示的"这单会用谁跑"按登录人解析:白名单成员显示 Beta
-        // 网关(ADR-0039);无认证部署 viewer 缺席=平台口径。
+        // 表单展示的"这单会用谁跑"按登录人解析:配了个人网关的成员
+        // 显示其个人网关(ADR-0068);无认证部署 viewer 缺席=平台口径。
         const launch = service.launchOptions(viewer?.username);
         return json(response, 200, {
           ...launch,

@@ -687,6 +687,10 @@ export interface IssueFlowOptions {
   userRole?: (username: string) => "admin" | "developer" | undefined;
   gitCredential?: (account: string) =>
     (GitCredential & { email?: string }) | undefined;
+  /** 个人模型网关查询口(ADR-0068,serve 接 LocalAuth.personalModels):
+   *  按会话责任人现取其自配的模型接入,配齐则问题会话的主模型调用
+   *  整体走它;缺席/未配=undefined,走平台网关。 */
+  personalModels?: (account?: string) => ModelsSettings | undefined;
   opsTools?: IssueOpsTools;
   /** ops 二进制目录(宿主 assets/ops-tools);有 isolation 时按会话
    * 构造容器内执行的 ops 工具,比全局 opsTools 更优先。 */
@@ -3549,8 +3553,8 @@ export class IssueFlowService {
         String(error)}`));
   }
 
-  /** 网关解析咽喉(ADR-0039,需求侧同款):settings 压部署参数;
-   *  operator=问题责任人(归属账号),白名单命中时整体换装 Beta。
+  /** 网关解析咽喉(ADR-0039/0068,需求侧同款):settings 压部署参数;
+   *  operator=问题责任人(归属账号),配了可用的个人网关时整体换装。
    *  不传 operator=平台口径(视觉校验等平台职能用它)。 */
   private modelChoice(operator?: string): {
     lane: ModelLane;
@@ -3566,6 +3570,8 @@ export class IssueFlowService {
         model: this.options.model,
         vision: this.options.vision,
       },
+      personal: operator
+        ? this.options.personalModels?.(operator) : undefined,
       operator,
       log: (message) => this.log(`[issue-flow] ${message}`),
     });

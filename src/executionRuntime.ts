@@ -914,6 +914,8 @@ async function main(): Promise<void> {
     // 只停在分析报告,一档全自动;缺省二档。
     interventionTier: (account) => auth.issueInterventionTier(account),
     gitCredential: (account) => auth.gitCredential(account),
+    // 个人模型网关(ADR-0068):问题会话按责任人现取,配齐即整体换装。
+    personalModels: (account) => auth.personalModels(account),
     // 登记指派校验(ADR-0031):责任人是存在的普通开发账号才放行——
     // 管理员不写问题会话,指派即造死会话。
     userRole: (username) => auth.roleOf(username),
@@ -992,6 +994,9 @@ async function main(): Promise<void> {
     // 个人 Git 令牌(界面只写不读):任务启动时按归属人取,经
     // credential helper 注入;没配的用户走部署级访问方式。
     gitCredential: (account) => auth.gitCredential(account),
+    // 个人模型网关(ADR-0068,个人设置自助配):会话启动解析时按归属人
+    // 现取,配齐则名下任务的主模型调用整体走它;没配走平台网关。
+    personalModels: (account) => auth.personalModels(account),
     platformGitCredential: () => {
       const tokenFile = flag("--codehub-token-file");
       if (!tokenFile) return undefined;
