@@ -4,6 +4,11 @@ import type { StoryViewCoverage } from "../../src/storyViewCoverage";
 import phaseCatalog from "../../kernel/flow/phases.json";
 
 export const TASK_DEMO_ANALYSIS_PHASE = phaseCatalog.placeholders.analysis;
+/** 演示的「写代码」段:名字取内核词表占位,组件不写阶段字面量。 */
+export const TASK_DEMO_BUILD_PHASE = phaseCatalog.placeholders.delivering;
+/** 演示的「检视与验证」段:按所属步骤从内核词表取名,组件不写阶段字面量。 */
+export const TASK_DEMO_REVIEW_PHASE = phaseCatalog.phases
+  .find((phase) => phase.steps.includes("delivery_review"))!.name;
 
 export interface TaskDemoSnapshot {
   schema: "mae-flow-demo-snapshot/1";

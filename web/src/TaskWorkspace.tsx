@@ -49,7 +49,7 @@ import { StagePlanDialog } from "./StagePlanDialog";
 import { TaskDemoFrame } from "./TaskDemoFrame";
 import { TaskDemoGuide } from "./TaskDemoGuide";
 import { getTaskDemoGuideContent, taskDemoPhaseTitle } from "./taskDemoGuideContent";
-import { TASK_DEMO_ANALYSIS_PHASE } from "./taskDemoTypes";
+import { TASK_DEMO_ANALYSIS_PHASE, TASK_DEMO_BUILD_PHASE, TASK_DEMO_REVIEW_PHASE } from "./taskDemoTypes";
 import type { TaskDemoControls } from "./taskDemoTypes";
 import { resolveTaskDemoAsset } from "./taskDemoSandbox";
 import { OverlayDialog, WarmupBadge, WarmupPanel } from "./WarmupPanel";
@@ -641,7 +641,7 @@ export function TaskWorkspace({
     ? "需求拆分" : taskDemoPhaseTitle(phase);
   const demoContent = demo ? getTaskDemoGuideContent(demo.phase) : undefined;
   const demoCompleted = demo?.phase === "已合入";
-  const demoReviewReport = demo?.phase === "检视与验证"
+  const demoReviewReport = demo?.phase === TASK_DEMO_REVIEW_PHASE
     ? items?.find(item => item.kind === "doc" && item.name === DEMO_DELIVERY_REPORT) : undefined;
   const demoReportOpen = Boolean(demoReviewReport && materialView === "doc" && active === demoReviewReport.name);
   const deliveryAnalysisQuery = new URLSearchParams({ deliveryAnalysis: "1", deliveryTask: demo?.sourceTaskId ?? task.id });
@@ -830,7 +830,7 @@ export function TaskWorkspace({
     setStreamFilter("all"); setStreamThread(undefined);
     const document = demoReviewReport ?? items.find(item => item.kind === "doc"
       && demoContent?.artifactPatterns.some(pattern => pattern.test(item.name)));
-    const code = demo.phase === "写代码" ? items.find(item => item.kind === "diff") : undefined;
+    const code = demo.phase === TASK_DEMO_BUILD_PHASE ? items.find(item => item.kind === "diff") : undefined;
     setWorkspaceView(demoCompleted && !document ? "knowledge" : "materials");
     setDemoDiagram(demoAnalysis ? "decomposition" : "architecture");
     setMaterialView(demoAnalysis ? "chain" : code ? "diff" : document ? "doc" : "source");
@@ -2133,7 +2133,7 @@ export function TaskWorkspace({
                     <span>架构图</span>
                   </TabsTrigger>}
                   <TabsTrigger value="diff"
-                    className={`h-auto flex-none${materialTabOn("diff") ? " on" : ""}${demo?.phase === "写代码" ? " task-demo-artifact" : ""}`}
+                    className={`h-auto flex-none${materialTabOn("diff") ? " on" : ""}${demo?.phase === TASK_DEMO_BUILD_PHASE ? " task-demo-artifact" : ""}`}
                     title={untrackedDirectoryCount
                       ? `${changeFileCount} 个文件，另有 ${untrackedDirectoryCount} 个未跟踪目录`
                       : `${changeFileCount} 个文件`}
