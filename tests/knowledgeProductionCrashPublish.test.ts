@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { DomainKnowledgeExtraction } from "../src/domainKnowledgeExtraction.ts";
 import { listKnowledgeDocuments } from "../src/knowledgeDocuments.ts";
+import { readDomainArchiveProgress } from "../src/domainArchiveProgress.ts";
 import type { DomainKnowledgeJob, DomainPublication } from "../src/domainKnowledgeTypes.ts";
 
 async function within<T>(work: Promise<T>, timeoutMs: number, message: string): Promise<T> {
@@ -39,9 +40,9 @@ let jobId,stopped=false;
 const rename=fs.renameSync;
 fs.renameSync=function(from,to){
   const result=rename.apply(this,arguments);
-  if(!stopped&&String(to).endsWith('/job.json')){
+  if(!stopped&&String(to).endsWith('/archive-progress.json')){
     const record=JSON.parse(fs.readFileSync(to,'utf8'));
-    const batch=record.archive_batches?.find(batch=>batch.publications.some(publication=>publication.state==='opened'));
+    const batch=record.batches?.find(batch=>batch.publications.some(publication=>publication.state==='opened'));
     if(batch){
       stopped=true;
       const receipt=batch.publications.find(publication=>publication.state==='opened');
@@ -92,10 +93,13 @@ finally{clearTimeout(startup)}
 
     const checkpoint = JSON.parse(readFileSync(marker, "utf8")) as { job_id: string; batch_id: string; receipt: DomainPublication };
     assert.deepEqual(listKnowledgeDocuments(dir), [], "MR 回执写成也不提前写正式知识库");
-    const path = join(dir, "domain-extraction", checkpoint.job_id, "job.json"), disk = JSON.parse(readFileSync(path, "utf8")) as DomainKnowledgeJob;
+    const path = join(dir, "domain-extraction", checkpoint.job_id, "job.json"),
+      disk = readDomainArchiveProgress(path, JSON.parse(readFileSync(path, "utf8")) as DomainKnowledgeJob);
     const original = disk.archive_batches!.find(batch => batch.id === checkpoint.batch_id)!;
     assert.equal(original.state, "running");
-    assert.deepEqual(original.publications, [checkpoint.receipt], "必须真正杀在两个目标之间，仅首个 MR 回执已生效");
+    // 检查点把正文换成摘要引用,回执按身份字段比(还原读的实际正文另行核对)。
+    const receiptKey = (publication: DomainPublication) => [publication.target_id, publication.state, publication.url, publication.branch, publication.documents.map(document => document.id)];
+    assert.deepEqual(original.publications.map(receiptKey), [receiptKey(checkpoint.receipt)], "必须真正杀在两个目标之间，仅首个 MR 回执已生效");
     assert.equal(checkpoint.receipt.target_id, "domain"); assert.equal(checkpoint.receipt.documents[0].id, "one");
     assert.deepEqual(disk.documents.map(document => document.id), ["one", "two"], "两份候选均保留");
     assert.ok(disk.documents.every(document => !document.knowledge_document_id));
@@ -111,13 +115,14 @@ finally{clearTimeout(startup)}
     await new Promise<void>(resolve => setImmediate(resolve));
     assert.equal(seen.length, 0, "重启不能自动启动 Git/MR");
     const recovered = service.get(checkpoint.job_id), batch = recovered.archive_batches!.find(batch => batch.id === checkpoint.batch_id)!;
-    assert.equal(batch.state, "failed"); assert.deepEqual(batch.publications[0], checkpoint.receipt);
+    assert.equal(batch.state, "failed"); assert.deepEqual(receiptKey(batch.publications[0]), receiptKey(checkpoint.receipt));
+    assert.equal(batch.publications[0].documents[0].content, disk.documents[0].content, "检查点还原出完整正文");
     assert.deepEqual(recovered.documents, disk.documents, "恢复不会重新生成或覆盖候选");
     await service.retryArchive(checkpoint.job_id, "alice", { batch_id: checkpoint.batch_id });
     assert.equal(researchCalls, 0); assert.equal(seen.length, 1);
     assert.equal(seen[0].target, "repo-1"); assert.deepEqual(seen[0].documents.map(document => document.id), ["two"]);
     const completed = service.get(checkpoint.job_id).archive_batches!.find(batch => batch.id === checkpoint.batch_id)!;
-    assert.equal(completed.state, "done"); assert.deepEqual(completed.publications.find(publication => publication.target_id === "domain"), checkpoint.receipt);
+    assert.equal(completed.state, "done"); assert.deepEqual(receiptKey(completed.publications.find(publication => publication.target_id === "domain")!), receiptKey(checkpoint.receipt));
     await service.retryArchive(checkpoint.job_id, "alice", { batch_id: checkpoint.batch_id });
     assert.equal(seen.length, 1, "重试成功批次不能重复创建 MR");
     assert.deepEqual(listKnowledgeDocuments(dir), [], "恢复及补齐 MR 均不提前写入正式知识库");

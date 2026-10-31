@@ -124,8 +124,10 @@ function projectDomainCandidates(job: DomainKnowledgeJob): KnowledgeProductionVi
       : job.documents.length && !noChanges ? [link({ id: "review", label: "开始检视", view: "review" }), archiveAction] : [],
     knowledge_document_id: job.documents.find(document => document.knowledge_document_id)?.knowledge_document_id,
     platform_message: "任务文稿保留在当前任务中；MR 合入并同步后，正式知识库才会更新。",
-    navigation: { ready_message: inspecting ? "连续记录意见，结束检视后再统一修改。" : anyMerged ? allCurrentMerged ? "后续修改请从正式知识库开始新的检视。" : "已有 MR 合入；剩余失败仓可继续重试原批次，正文修改请从正式知识库开始新的检视。" : job.documents.length ? "可直接创建 MR，也可先检视文稿并继续修改。" : undefined,
-      ready_action_label: job.documents.length ? "查看文稿" : undefined },
+    // 过程文稿(skill-runs work)与任务文稿同样可读:候选任务只有过程稿时
+    // 也要给出阅读入口(2026-10-31 清存量红实锤:曾被 documents-only 判空抹掉)。
+    navigation: { ready_message: inspecting ? "连续记录意见，结束检视后再统一修改。" : anyMerged ? allCurrentMerged ? "后续修改请从正式知识库开始新的检视。" : "已有 MR 合入；剩余失败仓可继续重试原批次，正文修改请从正式知识库开始新的检视。" : job.documents.length ? "可直接创建 MR，也可先检视文稿并继续修改。" : job.work_documents?.length ? "已生成的过程文稿已保留，可先阅读后继续研究。" : undefined,
+      ready_action_label: job.documents.length || job.work_documents?.length ? "查看文稿" : undefined },
     review: { readonly: anyMerged, active_message: working ? "本轮正在执行，已有文稿与意见均保留。" : undefined, sections: [],
       turns: job.turns.map(turn => ({ id: turn.id, status_label: { queued: "等待处理", running: "正在处理", paused: "等待你的答复", done: "本轮已完成", failed: "本轮失败，文稿保留", cancelled: "本轮已停止，文稿保留" }[turn.status] })),
       capabilities: capabilities.map(capability => ({ id: capability.id, status_label: { pending: "待处理", researched: "已完成", blocked: "受阻" }[capability.state] })),
