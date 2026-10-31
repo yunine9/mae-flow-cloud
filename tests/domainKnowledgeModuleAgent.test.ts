@@ -17,8 +17,9 @@ test("模块目录及业务身份进入主子会话和压缩上下文，越界�
       const context = JSON.parse(prompt.split("本轮上下文：\n").at(-1)!);
       sessions.push(context.step?.id ?? "coordinator");
       for (const value of [context, JSON.parse(config.compactAnchor())]) {
-        assert.equal(value.module_id, "trade"); assert.equal(value.knowledge_layout, "module-v1");
-        assert.equal(value.archive_targets.find((target: any) => target.id === "repo-1").docs_path, "docs/knowledge/trade");
+        // 模块任务 13ff28b7 起默认 directory-v1:代码仓知识落 docs/<业务名>。
+        assert.equal(value.module_id, "trade"); assert.equal(value.knowledge_layout, "directory-v1");
+        assert.equal(value.archive_targets.find((target: any) => target.id === "repo-1").docs_path, "docs/交易");
       }
       const call = async (name: string, args: unknown, error = false) => {
         const tool = config.extraTools.find((tool: any) => tool.name === name);
@@ -35,12 +36,12 @@ test("模块目录及业务身份进入主子会话和压缩上下文，越界�
       } else {
         const document = { id: "trade-guide", title: "交易规则", target_id: "repo-1", layer: "repository",
           content: "# 交易规则\n\n只适用于交易模块的取消入口。", sources: "已核对的交易源码" };
-        for (const path of ["AGENTS.md", "docs/knowledge/trade/AGENTS.md", "docs/knowledge/payments/README.md", "docs/knowledge/trade/../payments/README.md"]) {
+        for (const path of ["AGENTS.md", "docs/交易/AGENTS.md", "docs/payments/README.md", "docs/交易/../payments/README.md"]) {
           await call("knowledge_draft", { action: "save", document: { ...document, path } }, true);
           assert.equal(sourceCalls, 0, "根文件和其他模块的路径在读取 Git 基线前被拒绝");
         }
         // 未配置知识仓时，领域宿主允许先保存草稿，不需要准备归档仓。
-        await call("knowledge_draft", { action: "save", document: { ...document, path: "docs/knowledge/trade/README.md" } });
+        await call("knowledge_draft", { action: "save", document: { ...document, path: "docs/交易/README.md" } });
         await call("knowledge_work_result", { summary: "保存本模块知识", document_ids: [document.id] });
       }
       return { status: "turn_finished" };
@@ -60,7 +61,7 @@ test("模块目录及业务身份进入主子会话和压缩上下文，越界�
       if (["done", "failed", "paused", "cancelled"].includes(current.status)) {
         assert.equal(current.status, "done", current.error);
         assert.equal(current.documents.length, 1);
-        assert.equal(current.documents[0].path, "docs/knowledge/trade/README.md");
+        assert.equal(current.documents[0].path, "docs/交易/README.md");
         assert.deepEqual(sessions, ["coordinator", "write-trade"]); assert.equal(sourceCalls, 0);
         return;
       }
