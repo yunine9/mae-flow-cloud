@@ -39,7 +39,9 @@ test("生产线验收3/8：人工归档嵌套单号、描述、MR链接及尝试
   const manager = new DomainKnowledgeExtraction(dir, async () => { throw new Error("这些记录不应研究"); });
   try {
     assert.deepEqual(new Set(manager.list().map(job => job.id)), new Set([good.id, pending.id]));
-    assert.equal(manager.get(pending.id).production?.archive.status_label, "已发布（未归档）", "F6无人工单号的发布恢复快照仍合法");
+    // 候选投影词表(13ff28b7):无人工单号的恢复快照在任务卡显示「待创建 MR」,
+    // 快照合法性(可列出、不误报损坏)才是本用例的主题。
+    assert.equal(manager.get(pending.id).production?.archive.status_label, "待创建 MR", "F6无人工单号的发布恢复快照仍合法");
     for (const item of bad) {
       assert.throws(() => manager.get(item.id), /不存在/); assert.equal(readFileSync(item.path, "utf8"), item.raw);
       assert.ok(manager.warnings().some(warning => warning.includes(`domain-extraction/${item.id}/job.json`)));
@@ -54,8 +56,9 @@ test("生产线验收3/8：正式文件损坏只影响对应归档预览，领�
   const manager = new DomainKnowledgeExtraction(dir, async () => "不应执行");
   try {
     assert.deepEqual(new Set(manager.list().map(job => job.id)), new Set([good.id, broken.id]));
-    assert.equal(manager.get(broken.id).production?.archive.visible, false); assert.equal(manager.get(good.id).production?.archive.visible, true);
-    assert.throws(() => manager.previewArchive(broken.id), new RegExp(`knowledge-documents/${broken.documents[0].knowledge_document_id}\\.json`));
+    // 13ff28b7 起独立候选任务的列表与预览不消费正式文件:损坏不再打挂预览,
+    // 由装载器点名告警(见末尾 center.warnings 断言),列表保留邻居。
+    assert.equal(manager.get(broken.id).production?.archive.visible, true); assert.equal(manager.get(good.id).production?.archive.visible, true);
     const center = listKnowledgeTasks({ dataDir: dir, domain: manager, component: { list: () => [], get: () => { throw new Error("无组件"); } }, skillExtractionJob: () => undefined });
     assert.equal(center.tasks.length, 2); assert.ok(center.warnings.some(warning => warning.includes(`knowledge-documents/${broken.documents[0].knowledge_document_id}.json`)));
     assert.equal(readFileSync(formalPath, "utf8"), "{broken");
@@ -68,9 +71,9 @@ test("生产线验收1/3/8：宕机人工归档记失败后详情、预览和回
   job.archive_batches = [interrupted]; job.publications = structuredClone(interrupted.publications); store(dir, job);
   const manager = new DomainKnowledgeExtraction(dir, async () => "不应执行");
   try {
-    assert.equal(manager.previewArchive(job.id).status_label, "归档失败");
-    assert.equal(manager.get(job.id).production?.archive.publications[0].status_label, "归档失败");
-    assert.ok(manager.get(job.id).production?.archive.batches[0].publications.every(publication => publication.status_label === "归档失败"));
+    assert.equal(manager.previewArchive(job.id).status_label, "MR 创建失败");
+    assert.equal(manager.get(job.id).production?.archive.publications[0].status_label, "MR 创建失败");
+    assert.ok(manager.get(job.id).production?.archive.batches[0].publications.every(publication => publication.status_label === "MR 创建失败"));
     assert.deepEqual(manager.previewArchive(job.id).targets[0].actions.map(action => action.id), ["retry-archive"]);
   } finally { await manager.shutdown(); rmSync(dir, { recursive: true, force: true }); }
 });
