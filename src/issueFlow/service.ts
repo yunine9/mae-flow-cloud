@@ -4201,6 +4201,16 @@ export class IssueFlowService {
       },
       gitCredential: () =>
         this.options.gitCredential?.(live.state.account),
+      // 基线同步冲突现场交回容器前修属主(ADR-0071):宿主 merge 以宿主
+      // 身份写文件,容器用户改不动;幂等 walk,非隔离部署零开销。
+      repairOwnership: (dir: string) => {
+        repairContainerCloneOwnership({
+          workspace: live.root,
+          dir,
+          user: this.options.isolation?.user,
+          runtime: this.options.ownershipRuntime,
+        });
+      },
       // 介入档位现值:build_deploy 随路 env_verify 卡的举卡条件(三档
       // 独有);env_needed 配置卡三档同举,不再随档位分叉(ADR-0019
       // 2026-10-31 增补)。
