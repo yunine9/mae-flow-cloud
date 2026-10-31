@@ -130,8 +130,9 @@ export interface IssueToolContext {
    * 继承后台密码的会话为 undefined(root 与后台密码相同,不重复出)。 */
   rootPassword?(): string | undefined;
   gitCredential?(): GitCredential | undefined;
-  /** 介入档位现值(ADR-0019,现读现判):env 闸的举卡条件——一/
-   * 二档不向用户索取环境,缺口写进分析报告;缺席按缺省二档。 */
+  /** 介入档位现值(ADR-0019,现读现判):build_deploy 随路 env_verify
+   * 卡的举卡条件(三档独有)。env_needed 配置卡已三档同举(2026-10-31
+   * 增补:环境是只有人拿得到的事实),不再随档位分叉。 */
   interventionTier?: () => IssueInterventionTier;
   /** skill 圈选闸已封存(ADR-0014):complete_stage 推进进 analyze 时
    * 调用,现在只做扫描留痕(发现清单进转移账),恒返回 false。回调
@@ -177,6 +178,21 @@ export interface IssueToolContext {
   /** 单卡互斥②(ADR-0024):有未决的 Agent 问题卡时 raise_gate 拒举。
    * 服务侧接 humanGate.pending();缺席按无卡(裸构造兼容缺省)。 */
   pendingAgentCard?: () => boolean;
+  /** 举卡即收口(票 #573,ADR-0019 2026-10-31 增补·六卡一规则):读
+   *  「本回合是否已举过卡」(平台闸或 Agent 问题卡任一)。置位后同
+   *  回合再调平台工具一律机械拦下——回执是纠偏,不是报错口吻。标记
+   *  是回合内存态:举卡时置位,回合启动/收口清零,进程重启天然归零,
+   *  不落盘;绝不按「闸在场」跨回合拦(检视分诊送达开的回合、收口后
+   *  返工的回合照常用平台工具)。缺席(裸构造)=未举卡,不拦。 */
+  turnCardRaised?: () => boolean;
+  /** 举卡的置位口:平台闸举起后由工具层调用;Agent 问题卡落卡由服务
+   *  侧接线置位(见 service 的 beforeHumanQuestion)。 */
+  markTurnCardRaised?: () => void;
+  /** 对话选环境(票 #574,spec #571):用户在对话中明确给出环境 IP
+   *  时,服务端按环境管理台账主 IP 精确匹配并复用挂载路径(快照解密
+   *  进 vault、覆盖允许、清环境卡、解锢、开平台回合);返回回执文本
+   *  ——只含事实,密码永不进模型可见面。缺席(裸构造)由工具如实打回。 */
+  selectEnvironmentByIp?: (ip: string) => string;
   log?: (message: string) => void;
 }
 
@@ -188,44 +204,32 @@ function fail(text: string): never {
   throw new Error(text);
 }
 
-/** 缺网管环境时的平台闸(拉日志/换库现场补配,2026-08-28):举闸后
- * 工具如实失败,让模型结束回合——不再让 AI 空口向用户要密码
- * (秘密纪律:密码只走 /environment 表单进 vault,不进对话)。
- * 硬拒绝在先(票 93):用户已在 env_needed 卡上裁定这一用途不需要
- * 环境,则不再举闸纠缠——工具如实失败收口,把"用户已裁定"原样递给
- * 模型;配置环境成功即整册解锢(attachEnvironment)。 */
+/** 缺网管环境时的平台闸(拉日志/换库现场补配,2026-08-28):举卡后
+ * 成功收口、回执叫模型立即结束本回合——不再让 AI 空口向用户要密码
+ * (秘密纪律:密码只走 /environment 表单进 vault,不进对话)。任何
+ * 介入档位都举(2026-10-31,ADR-0019 增补:环境是只有人拿得到的事实,
+ * 归入「办不到」而非「询问」)。硬拒绝在先(票 93):用户已在
+ * env_needed 卡上裁定这一用途不需要环境,则不再举闸纠缠——工具
+ * 如实失败收口,把"用户已裁定"原样递给模型;配置环境成功即整册
+ * 解锢(attachEnvironment)。 */
 function raiseEnvNeededGate(
   ctx: IssueToolContext,
   scope: IssueGateScope,
 ): string {
   // 硬拒绝在先(票 93):用户已在 env_needed 卡上裁定这一用途不需要
-  // 环境——具体的用户意志赢过档位的一般策略,任何档位都不再举闸纠缠。
+  // 环境——具体的用户意志赢过一切一般策略,任何档位都不再举闸纠缠。
   if (ctx.state.env_declined?.scopes.includes(scope)) {
     fail(promptCopy("receipts", "env.hard_declined",
       { scope: ENV_SCOPE_LABELS[scope] }));
   }
-  // 介入档位旁路(ADR-0019):一/二档不向用户索取环境——自动/仅报告
-  // 档用已有信息继续,缺口写进分析报告。这是档位免审批的硬边:提示词
-  // 劝不动的索取动作在工具层拦死。
-  if ((ctx.interventionTier?.() ?? "2") !== "3") {
-    // 缺口记台账(ADR-0019):现场可查"当时要过环境",报告里的说明有账可对。
-    recordTransition(ctx.state, {
-      source: "platform",
-      note: `介入档位不向用户索取环境(${ENV_SCOPE_LABELS[scope]}),AI 用已有信息继续`,
-    });
-    ctx.persist();
-    return scope === "deploy"
-      ? "当前介入档位不向用户索取环境信息,无法换库部署——继续其余工作"
-        + "(流水线验绿是交付终点),并在分析报告中说明未做换库部署验证"
-        + "及其影响。"
-      : `当前介入档位不向用户索取环境信息(${ENV_SCOPE_LABELS[scope]}),`
-        + "请用已有信息继续分析,并在分析报告的「置信度」说明这一证据局限。";
-  }
+  // 三档同举(2026-10-31,ADR-0019 增补):环境地址与密码是只有人拿到
+  // 的事实,归入「办不到」而非「询问」,任何介入档位都举卡——与
+  // 流水线人工事实闸同族,一档「全自动」也不例外。
   if (ctx.state.gate?.kind === "env_needed") {
     // 已有一张配置卡在等:幂等回报,不覆盖闸——覆盖会换 gate id,
     // 页面卡与手机通知都按 waiting_id 对账,换了就成第二张卡。
     return "已有一张网管环境配置卡在等用户填写,不要重复发起——"
-      + "等平台通知(用户填好或拒绝)后再继续。";
+      + "请结束本回合,等平台通知(用户补配或拒绝)后再继续。";
   }
   raiseGate(
     ctx.state,
@@ -235,13 +239,15 @@ function raiseEnvNeededGate(
     undefined,
     scope,
   );
+  ctx.markTurnCardRaised?.();
   ctx.persist();
   // 成功收口(不是 fail):发起配置请求是一次完成的工具执行,把它记成
   // 失败会让现场回执画 ✕、用户以为出错。模型侧语义靠文案自明:
-  // 等待期可继续不需要环境的工作,回合收口由平台闸接管。
-  return "已向用户发起网管环境配置请求,等待填写"
-    + "(用户在问题卡提交后,平台会通知你重试刚才的操作)。"
-    + "等待期间可继续不需要环境的工作。";
+  // 举卡即收口,等用户补配或拒绝后平台开新回合继续。
+  return `已向用户发起网管环境配置请求(${ENV_SCOPE_LABELS[scope]}),`
+    + "请立即结束本回合,等待用户补配或拒绝——用户补配后平台会通知你"
+    + "重试刚才的操作,拒绝后平台会开新回合告知你基于现有证据继续,"
+    + "在此之前不要自行继续。";
 }
 
 /** 分析报告的既定落点(prompt 行为契约要求 Agent 维护它,闸门以它
@@ -350,11 +356,13 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       : String(state.stage);
 
   const gateStage = (tool: string): void => {
-    // 存量 skill 圈选闸在场(ADR-0011 举起的历史卡;ADR-0014 起新卡
-    // 永不举):先等用户答完再干活。守卫放在所有阶段门禁之前——闸
-    // 举起后回执已叫 Agent 停回合,它若继续调平台工具,这里机械拦下。
-    if (state.gate?.kind === "skill_select") {
-      fail(promptCopy("receipts", "gate.skill_select_pending"));
+    // 举卡即收口(票 #573,六卡一规则):本回合已举过卡(平台闸或
+    // Agent 问题卡)——举卡回执已叫 Agent 结束回合,它若继续调平台
+    // 工具,这里机械拦下,回执是纠偏不是报错。守卫放在所有阶段门禁
+    // 之前。收编了 skill_select 旧专支:存量圈选闸的跨回合拦截改由
+    // 回合启动时的存量种子承担(service.beginTurn),六种卡一条规则。
+    if (ctx.turnCardRaised?.()) {
+      fail(promptCopy("receipts", "gate.turn_card_pending"));
     }
     const allowedStages = scenario ? stagesAllowingTool(scenario, tool) : [];
     if (scenario && stageAllowsTool(scenario, state.stage as FixedStage, tool)) {
@@ -380,16 +388,50 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     label: "Request Environment",
     description:
       "需要网管环境(抓日志等)而会话尚未配置时,调它向用户发起配置请求:"
-      + "平台举出配置卡(服务器地址+网管后台密码),用户填写后平台会通知你"
-      + "重试刚才的操作。登记元信息里已有网管环境(get_issue_meta 可查)"
-      + "就无需调用,按技能 fetch-logs 直接抓取。",
+      + "平台举出配置卡(服务器地址+网管后台密码),任何介入档位都会举"
+      + "——环境是只有人拿得到的事实。举卡后请立即结束本回合,等待用户"
+      + "补配或拒绝:补配后平台会通知你重试刚才的操作,拒绝后平台会开"
+      + "新回合让你基于现有证据继续。登记元信息里已有网管环境"
+      + "(get_issue_meta 可查)就无需调用,按技能 fetch-logs 直接抓取。",
     parameters: Type.Object({}),
     async execute() {
+      // 举卡即收口(票 #573):request_env 不走阶段门禁(全程可调),
+      // 但本回合已举过卡时同样拦下——六卡一规则不留例外口。
+      if (ctx.turnCardRaised?.()) {
+        fail(promptCopy("receipts", "gate.turn_card_pending"));
+      }
       if (ctx.environmentPassword?.()) {
         return ok("网管环境已配置(get_issue_meta 可查全量),无需请求——"
           + "按技能 fetch-logs 抓取日志即可。");
       }
       return ok(raiseEnvNeededGate(ctx, "logs"));
+    },
+  }));
+
+  tools.push(defineTool({
+    name: "select_environment",
+    label: "Select Environment",
+    description:
+      "用户在对话中明确给出网管环境 IP 时才调它:按环境管理台账的主 IP "
+      + "精确匹配,唯一命中即挂载(服务端解密快照,密码不经你手;按技能 "
+      + "fetch-logs 直接抓取)。会话已配环境时可覆盖——登记时选错了,"
+      + "用户给出正确 IP 即换。用户没给 IP 时不要自行巡游台账替用户挑"
+      + "环境;台账里没有的 IP 会如实打回,转告用户到「环境管理」补录。",
+    parameters: Type.Object({
+      ip: Type.String({ description: "用户给出的网管环境主 IP(台账唯一键)" }),
+    }, { additionalProperties: false }),
+    async execute(_toolCallId: string, params: any) {
+      // 举卡即收口(票 #573):全程可调工具不走阶段门禁,但本回合已举
+      // 过卡时同样拦下——六卡一规则不留例外口。
+      if (ctx.turnCardRaised?.()) {
+        fail(promptCopy("receipts", "gate.turn_card_pending"));
+      }
+      const ip = String(params?.ip ?? "").trim();
+      if (!ip) fail("ip 不能为空:用户在对话里给出的网管环境主 IP");
+      if (!ctx.selectEnvironmentByIp) {
+        fail("宿主未接线对话选环境回调,无法挂载——如实告知用户本路暂不可用");
+      }
+      return ok(ctx.selectEnvironmentByIp(ip));
     },
   }));
 
@@ -659,6 +701,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
           undefined,
           result.summary.split("\n")[0],
         );
+        ctx.markTurnCardRaised?.();
         ctx.persist();
         return ok(result.summary
           + "\n平台已举出验证卡,请结束本回合等待用户验证结果——不要自行继续。");
@@ -749,6 +792,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         }
         raiseGate(ctx.state, "env_verify",
           RAISE_GATE_QUESTIONS.env_verify, undefined, params.supplement);
+        ctx.markTurnCardRaised?.();
         ctx.persist();
         return ok("已举出环境验证卡,请结束本回合等待用户验证"
           + "(可不答——MR 全部合入即视为验证通过)——不要自行继续。");
@@ -765,6 +809,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       }
       raiseGate(ctx.state, kind, RAISE_GATE_QUESTIONS[kind], undefined,
         params.supplement, undefined, undefined, { repo, sha: watch.sha });
+      ctx.markTurnCardRaised?.();
       ctx.persist();
       return ok(kind === "pipeline_unfixable"
         ? "已举出流水线人工处理卡,请结束本回合等待用户在平台处理/"
@@ -1195,6 +1240,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
             proposal,
           );
         }
+        ctx.markTurnCardRaised?.();
         // 检视回合收口(ADR-0007):新一轮报告提交即举确认卡,检视
         // 入口随之恢复——in-flight 标记在此清除。
         delete ctx.state.review_active;

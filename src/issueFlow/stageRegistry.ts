@@ -108,7 +108,8 @@ export interface IssueStageSpec {
 
 /**
  * 阶段注册表。工具列 = 该阶段门禁实际放行的全集(含工读类:
- * request_env(缺网管环境举配置卡)全程可调、dts_get_ticket 任意阶段可重查、
+ * request_env(缺网管环境举配置卡)与 select_environment(用户对话
+ * 给出 IP 时按台账直选)全程可调、dts_get_ticket 任意阶段可重查、
  * get_issue_meta
  * 任意阶段可查登记元信息,2026-08-28 拍板"作业自由,门只守流程出口
  * 与出厂动作",所以它们每行都在)。
@@ -122,6 +123,7 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
       { name: "dts_get_ticket" },
       { name: "complete_stage" },
       { name: "request_env" },
+      { name: "select_environment" },
       { name: "get_issue_meta" },
     ],
   },
@@ -134,6 +136,7 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
       { name: "pull_repo" },
       { name: "complete_stage" },
       { name: "request_env" },
+      { name: "select_environment" },
       { name: "get_issue_meta" },
       { name: "dts_get_ticket" },
     ],
@@ -148,6 +151,7 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
   // 消失,ADR-0048)。
   tools: [
     { name: "request_env" },
+    { name: "select_environment", note: "用户对话给出 IP 直选" },
     { name: "get_issue_meta" },
     { name: "dts_get_ticket", note: "重查" },
     { name: "pull_repo", note: "补仓" },
@@ -164,6 +168,7 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
     exitAction: "complete_stage",
     tools: [
       { name: "request_env", note: "缺网管环境先要配置" },
+      { name: "select_environment", note: "用户对话给出 IP 直选" },
       { name: "get_issue_meta" },
       { name: "dts_get_ticket" },
       { name: "pull_repo", note: "补仓" },
@@ -182,6 +187,7 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
       { name: "create_mr" },
       { name: "complete_stage", note: "申报 MR 清单" },
       { name: "request_env" },
+      { name: "select_environment" },
       { name: "get_issue_meta" },
       { name: "dts_get_ticket" },
       { name: "pull_repo" },
@@ -195,6 +201,7 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
     // 等闸),本阶段不再放行它——工具列以门禁真相为准,简报不谎报。
     tools: [
       { name: "request_env" },
+      { name: "select_environment" },
       { name: "get_issue_meta" },
       { name: "dts_get_ticket" },
       { name: "pull_repo" },

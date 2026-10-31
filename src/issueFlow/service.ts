@@ -674,11 +674,13 @@ export interface IssueFlowOptions {
   resolveDiscussions?: boolean;
   /** 问题处理介入档位(ADR-0019,个人设置按流剥离):三档缺省二档,
    * 按会话归属人现读现判,闸策略/提示词节奏全部由档位派生——三档
-   * 「优先对齐」=guard 提示词+环境闸照旧;二档「优先报告」=唯一
-   * 停靠点是分析结论确认卡(检视循环),env 闸不举;一档「全自动」=
-   * 确认类闸代答(analysis_confirm 全量/conclude 高置信非问题)+纯选项
-   * 问答卡代答+env 闸不举。流水线人工事实闸任何档都等人。推送分支
-   * 任何档都直推(2026-09-17 推送过目退役,ADR-0009 增补)。
+   * 「优先对齐」=guard 提示词;二档「优先报告」=唯一停靠点是分析
+   * 结论确认卡(检视循环);一档「全自动」=确认类闸代答
+   * (analysis_confirm 全量/conclude 高置信非问题)+纯选项问答卡
+   * 代答。环境配置卡(env_needed)与流水线人工事实闸任何档位都举
+   * (2026-10-31 起,ADR-0019 增补:只有人拿得到的事实不算询问),
+   * 且永不代答;build_deploy 随路 env_verify 卡维持三档独有。推送
+   * 分支任何档都直推(2026-09-17 推送过目退役,ADR-0009 增补)。
    * 回调缺席=缺省二档(裸构造/测试形态与产品缺省一致)。 */
   interventionTier?: (account?: string) => IssueInterventionTier;
   /** 账号角色查询(ADR-0031 指派校验):账号不存在或已停用返回
@@ -773,6 +775,13 @@ interface LiveIssue {
   /** 本回合的审计关联 id(ADR-0053):beginTurn/beginContinuationTurn
    *  定格,canonical 行与回合内投递账共享;跨重启唯一(带时间戳)。 */
   auditTurnId?: string;
+  /** 举卡即收口的回合标记(票 #573,ADR-0019 2026-10-31 增补):本
+   *  回合内已举过卡(平台闸或 Agent 问题卡)。举卡置位,回合启动/
+   *  收口清零,重启天然归零——绝不按「闸在场」跨回合拦(检视分诊
+   *  送达开的回合、收口后返工的回合要用平台工具)。唯一例外:存量
+   *  skill_select 圈选闸在场时回合启动即置位——封存闸按在场跨回合拦
+   *  的旧语义原样保留(ADR-0014),新举的卡不吃这颗种子。 */
+  cardRaisedInTurn?: boolean;
 }
 
 export interface IssueMessage {
@@ -2171,6 +2180,50 @@ export class IssueFlowService {
     };
   }
 
+  /** 对话选环境(票 #574,spec #571):用户在对话中明确给出环境 IP
+   * 时,AI 经 select_environment 工具按台账主 IP 精确匹配,唯一命中即
+   * 挂载。挂载复用 attachEnvironment 同一条路径(快照解密进 vault、
+   * 覆盖允许、env_needed 卡清除、拒绝台账解锢、平台回合通知重试),
+   * 本方法只多做「按 IP 找台账条目」与回执事实行——回执只有事实,
+   * 密码永不进模型可见面(get_issue_meta 的明文例外是 ADR-0003 的事,
+   * 这条路不沾)。台账以主 IP 为唯一键,findByIp 至多命中一条,没有
+   * 多命中歧义分支可言。终态守卫与 C-H3 同口径:补配会开平台回合,
+   * 不能把已收口的会话复活成 running。 */
+  selectEnvironmentByIp(id: string, ip: string): string {
+    const live = this.require(id);
+    const { state } = live;
+    if (isTerminal(state.status)) {
+      throw new IssueControlError(
+        `会话已处于终态 ${state.status},不能补配环境`);
+    }
+    const entry = this.environmentRegistry.findByIp(ip);
+    if (!entry) {
+      throw new IssueControlError(
+        `环境管理里没有主 IP 为 ${ip} 的环境记录——请如实转告用户到`
+        + "「环境管理」补录后再选,不要猜测或手造环境信息");
+    }
+    // 事实行先采后挂:attachEnvironment 会改现场(覆盖/清卡/解锢)。
+    const replaced = Boolean(state.environment);
+    const unblocked = state.gate?.kind === "env_needed";
+    const ungated = Boolean(state.env_declined);
+    this.attachEnvironment(id, { environmentId: entry.id });
+    const lines = [
+      `网管环境已挂载:${entry.ip}`
+      + (entry.port ? `:${entry.port}` : "")
+      + `,形态${ENV_TYPE_LABELS[entry.form]}(环境管理台账快照)`
+      + "——按技能 fetch-logs 直接抓取即可",
+    ];
+    if (replaced) lines.push("已覆盖会话原有环境(登记时的选择被替换)");
+    if (unblocked) {
+      lines.push("挂着的网管环境配置卡已解除——平台已通知你重试刚才的操作");
+    }
+    if (ungated) {
+      lines.push("此前的环境拒绝记录已整册清除(解锢):同 scope 工具"
+        + "恢复举卡路径");
+    }
+    return lines.join("\n");
+  }
+
   /** 网管环境配置(问题卡 env_needed 闸的作答口,POST
    * /issues/:id/environment):登记时没配环境,拉日志/换库的工具现场
    * 举闸后,用户在这里补地址与网管后台密码。密码进 vault 后即清闸并开
@@ -2477,6 +2530,10 @@ export class IssueFlowService {
     this.turning.add(live.id);
     live.state.status = "running";
     live.state.nudges = 0;
+    // 举卡即收口的回合标记(票 #573):新回合清零;存量 skill_select
+    // 圈选闸在场时置位——封存闸按「在场」跨回合拦的旧语义,收编进
+    // 本标记的种子(其余五种卡绝不按在场跨回合拦)。
+    live.cardRaisedInTurn = live.state.gate?.kind === "skill_select";
     saveState(live.root, live.state);
     void this.runTurn(live, body, epoch).finally(() =>
       this.endTurnSlot(live, token));
@@ -2500,6 +2557,12 @@ export class IssueFlowService {
       nudges: live.state.nudges ?? 0,
     });
     this.turning.delete(live.id);
+    // 举卡即收口的回合标记(票 #573):回合槽位收口即清零——卡跨回合
+    // 挂起是常态(env_verify 可能等很久),下一回合(#350 分诊送达/
+    // 返工/作答续跑)平台工具必须照常可用。延续回合不走这里(代币
+    // 已接棒让位),标记随延续链传递,与催办续跑的「同一回合」语义
+    // 一致。
+    live.cardRaisedInTurn = false;
     void this.pump();
   }
 
@@ -3348,8 +3411,8 @@ export class IssueFlowService {
   /** 介入档位的闸代答(ADR-0006 口径,ADR-0019 收进一档「全自动」):
    * 只代答"确认类"闸——analysis_confirm 全量(推荐码表定死 confirm);
    * conclude 仅提案 non_issue 且自报高置信(闭环无下游闸,分级保守)。
-   * env_needed/env_verify 问的是用户的事实(环境配置/验证结果),一/
-   * 二档根本不举、三档等人,永不代答;pipeline_unfixable/pipeline_evidence
+   * env_needed/env_verify 问的是用户的事实(环境配置/验证结果),
+   * 任何档位都等人,永不代答;pipeline_unfixable/pipeline_evidence
    * 问的是"人是否已在交付平台处理/豁免"与"报错原文"——都是只有人
    * 拿得到的人工事实(票 03),任何档位永不代答。
    * 作答 defer 到回合收口(turning 释放)之后,走 answer() 同一裁决
@@ -4148,8 +4211,9 @@ export class IssueFlowService {
           runtime: this.options.ownershipRuntime,
         });
       },
-      // 介入档位现值:env 闸的举卡条件之一(一/二档不向用户索取环境,
-      // 缺口写进分析报告,见 tools 侧守卫)。
+      // 介入档位现值:build_deploy 随路 env_verify 卡的举卡条件(三档
+      // 独有);env_needed 配置卡三档同举,不再随档位分叉(ADR-0019
+      // 2026-10-31 增补)。
       interventionTier: () => this.tierOf(live),
       // skill 圈选入口闸(ADR-0011):complete_stage 推进进 analyze 时
       // 调用,service 现读现判决定举不举(见 raiseSkillSelectionGate)。
@@ -4189,6 +4253,16 @@ export class IssueFlowService {
       mrRecheck: (repo, sha) => service.recheckMrForSettle(live, repo, sha),
       // 单卡互斥②(ADR-0024):有未决 Agent 卡时 raise_gate 拒举。
       pendingAgentCard: () => live.humanGate.pending().length > 0,
+      // 举卡即收口(票 #573,六卡一规则):「本回合已举卡」内存标记,
+      // 见 LiveIssue.cardRaisedInTurn 注释(清零挂点=回合启动/收口)。
+      turnCardRaised: () => live.cardRaisedInTurn === true,
+      markTurnCardRaised: () => {
+        live.cardRaisedInTurn = true;
+      },
+      // 对话选环境(票 #574):用户在对话给出 IP 时按台账精确匹配挂载,
+      // 复用 attachEnvironment 全部语义(覆盖/清卡/解锢/开平台回合)。
+      selectEnvironmentByIp: (ip: string) =>
+        this.selectEnvironmentByIp(live.id, ip),
       log: (message) => this.log(message),
     };
     live.toolContext = context;
@@ -4263,10 +4337,16 @@ export class IssueFlowService {
       // 单卡互斥①(ADR-0024):平台闸在场时 AskUserQuestion 先问宿主,
       // 宿主拦下(纠偏文字作工具错误回给模型,不建卡不通知)——闸优先
       // 是作答分派的既有语义,两卡并存是 issue-53 撞车类 bug 的土壤。
-      beforeHumanQuestion: () => live.state.gate
-        ? "已有一张平台闸在等用户作答,不要再举问题卡——闸裁决后会开"
-          + "新回合,届时若仍需要向用户提问,再举问题卡。"
-        : undefined,
+      beforeHumanQuestion: () => {
+        if (live.state.gate) {
+          return "已有一张平台闸在等用户作答,不要再举问题卡——闸裁决后会开"
+            + "新回合,届时若仍需要向用户提问,再举问题卡。";
+        }
+        // 举卡即收口(票 #573):问题卡即将落地——置「本回合已举卡」
+        // 标记,同回合后续的平台工具调用一律机械拦下。
+        live.cardRaisedInTurn = true;
+        return undefined;
+      },
       // 子 Agent 派发开闸(2026-09-06):vendor 方法论技能(code-review
       // 并行评审/grilling 派子查证)原生可用。安全边界:
       // - 业务工具(complete_stage/push_branch 等)只在主会话——

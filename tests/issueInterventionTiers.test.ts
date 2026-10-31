@@ -30,6 +30,10 @@ import {
 import { promptCopy } from "../src/issueFlow/promptCopy.ts";
 import { askToolDescription } from "../src/sessionDriver.ts";
 import type { IssueSessionState } from "../src/issueFlow/state.ts";
+import {
+  createIssueTools,
+  type IssueToolContext,
+} from "../src/issueFlow/tools.ts";
 import { mfcTemp } from "./mfcTmp.ts";
 
 const TICKET = "DTS-2026-1001";
@@ -677,7 +681,8 @@ test("三档对齐:平台闸在场,Agent 问题卡被单卡互斥拒落,只有�
   const service = new IssueFlowService({
     ...baseOptions(dataDir, model),
     // opsTools 在场才会走到「缺网管环境举 env_needed 闸」这一步;
-    // 三档对齐 env 闸照举(一/二档不举,见 env 闸档位旁路)。
+    // env 配置卡三档同举(2026-10-31 起,ADR-0019 增补),此处沿用
+    // 该测试原有的三档前置。
     opsTools: {
       async buildDeploy() { return { summary: "测试假件" }; },
     },
@@ -707,6 +712,167 @@ test("三档对齐:平台闸在场,Agent 问题卡被单卡互斥拒落,只有�
     await service.shutdown().catch(() => undefined);
     await model.stop();
   }
+});
+
+// ---- 环境配置卡三档同举(2026-10-31,ADR-0019 增补:环境地址与密码是
+// 只有人拿得到的事实,归入「办不到」而非「询问」,任何档位都举卡) ----
+
+/** 直调工具用的最小会话状态(未配网管环境,analyze 阶段)。 */
+function envGateState(): IssueSessionState {
+  return {
+    id: "issue-env", account: "dev",
+    created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    title: "t", description: "", source: "dts", ticket: TICKET,
+    repo_url: "/tmp/x.git", scenario: "ticket", round: 1,
+    stage_states: ["done", "done", "in_progress", "pending", "pending"],
+    status: "running", stage: "analyze", stage_note: "",
+    stage_at: new Date().toISOString(),
+  } as unknown as IssueSessionState;
+}
+
+/** 直调上下文:档位可指定,环境恒未配置。 */
+function envGateCtx(
+  tier: "1" | "2" | "3",
+  state: IssueSessionState,
+): IssueToolContext {
+  return {
+    state, workspace: "/tmp/ws", dataRoot: "/tmp/data",
+    persist: () => undefined,
+    environmentPassword: () => undefined,
+    interventionTier: () => tier,
+    pullRepo: async (url) => ({
+      dir: `repo/${url.split("/").at(-1)}`, cloned: true, head: "a".repeat(12),
+    }),
+  };
+}
+
+test("环境配置卡三档同举:一/二/三档同剧本缺环境举卡等真人,旧降级回执退役", async () => {
+  // 同一份剧本跑三档:未配环境调 request_env → env_needed 卡举起,
+  // 会话定格 waiting_user。一/二档「缺口写进报告继续」的降级路径
+  // (回执+转移账留痕)整支退役;回执统一「请立即结束本回合等待」,
+  // 不再有「等待期间可继续不需要环境的工作」的例外。
+  for (const tier of ["1", "2", "3"] as const) {
+    const dataDir = mfcTemp(`mfc-issue-tier-env-${tier}-`);
+    const script: Scene[] = [
+      { tool: { name: "request_env", input: {} } },
+      { text: "已举配置卡,本回合到此。" },
+    ];
+    const model = new ScriptedModelServer(script, "scripted-v1",
+      { linear: true });
+    await model.start();
+    const service = new IssueFlowService({
+      ...baseOptions(dataDir, model),
+      interventionTier: () => tier,
+    });
+    try {
+      const created = service.create({
+        account: "dev", title: "登录超时", ticket: TICKET, source: "dts",
+      });
+      const waiting = await until(() => {
+        const issue = service.get(created.id);
+        if (issue.status === "failed") {
+          throw new Error(issue.error ?? "failed");
+        }
+        return issue.status === "waiting_user"
+          && issue.gate?.kind === "env_needed" ? issue : undefined;
+      }, `${tier} 档缺环境举环境配置卡`);
+      assert.equal(waiting.gate?.scope, "logs");
+      // 回执措辞(events 的 tool_finished 带工具回执原文)。
+      const events = eventsFile(dataDir, created.id);
+      assert.match(events, /请立即结束本回合,等待用户补配或拒绝/,
+        `${tier} 档:举卡回执统一收口措辞`);
+      assert.ok(!events.includes("等待期间可继续"),
+        `${tier} 档:「等待期间可继续」例外退役`);
+      assert.ok(!events.includes("介入档位不向用户索取环境"),
+        `${tier} 档:一/二档降级回执与转移账留痕退役`);
+      // 永不代答守卫不回归:环境配置卡任何档位不等代答,收口后原地
+      // 等真人(代答是收口后的旁路,睡过窗口还在等就是真等人)。
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      assert.equal(service.get(created.id).status, "waiting_user",
+        `${tier} 档:环境配置卡永不代答`);
+      assert.ok(!eventsFile(dataDir, created.id)
+        .includes("介入档位免审批"), `${tier} 档:无代答留痕`);
+    } finally {
+      await service.shutdown().catch(() => undefined);
+      await model.stop();
+    }
+  }
+});
+
+test("直调三档:request_env 回执同款收口措辞;硬拒绝(票 93)优先级不变", async () => {
+  for (const tier of ["1", "2", "3"] as const) {
+    const state = envGateState();
+    const tools = createIssueTools(envGateCtx(tier, state)) as Array<{
+      name: string;
+      execute: (id: string, params: any) => Promise<unknown>;
+    }>;
+    const requestEnv = tools.find((tool) => tool.name === "request_env")!;
+    const raised = await requestEnv.execute("x", {}) as {
+      content: Array<{ type: string; text: string }>;
+    };
+    const receipt = raised.content[0]?.text ?? "";
+    assert.equal(state.gate?.kind, "env_needed", `${tier} 档:卡已举起`);
+    assert.match(receipt, /请立即结束本回合,等待用户补配或拒绝/,
+      `${tier} 档:回执统一收口措辞`);
+    assert.doesNotMatch(receipt, /等待期间可继续|介入档位不向用户索取环境/,
+      `${tier} 档:旧措辞退役`);
+    assert.ok(!(state.transitions ?? []).some((entry) =>
+      entry.note.includes("介入档位不向用户索取环境")),
+    `${tier} 档:降级转移账留痕退役`);
+    // 幂等分支保留:卡已在场时再调不覆盖闸、不换 gate id。
+    const again = await requestEnv.execute("y", {}) as {
+      content: Array<{ type: string; text: string }>;
+    };
+    assert.match(again.content[0]?.text ?? "", /已有一张网管环境配置卡/,
+      `${tier} 档:幂等回报保留`);
+    assert.equal(state.gate?.kind, "env_needed");
+  }
+  // 硬拒绝在先(票 93):拒绝台账在场,任何档位照旧如实失败不举卡。
+  for (const tier of ["1", "2", "3"] as const) {
+    const state = envGateState();
+    state.env_declined = { scopes: ["logs"], at: new Date().toISOString() };
+    const tools = createIssueTools(envGateCtx(tier, state)) as Array<{
+      name: string;
+      execute: (id: string, params: any) => Promise<unknown>;
+    }>;
+    const requestEnv = tools.find((tool) => tool.name === "request_env")!;
+    await assert.rejects(
+      () => requestEnv.execute("x", {}),
+      /用户已确认无需此操作/,
+      `${tier} 档:硬拒绝赢过档位,不再举卡纠缠`);
+    assert.equal(state.gate, undefined, `${tier} 档:拒绝在场不举卡`);
+  }
+});
+
+test("提示层四段:一/二档开场与续聊改为举配置卡即停,三档文案不动", () => {
+  const state = {
+    id: "issue-1", scenario: "ticket", stage: "analyze",
+    title: "登录超时", description: "", account: "dev", ticket: TICKET,
+  } as unknown as IssueSessionState;
+  for (const tier of ["1", "2"] as const) {
+    const opening = issueFixedOpeningPrompt(state, {}, { tier });
+    assert.match(opening, /缺网管环境时调 request_env 举环境配置卡/,
+      `${tier} 档开场:举配置卡口径在场`);
+    assert.match(opening, /结束本回合等待用户补配或拒绝/,
+      `${tier} 档开场:举卡即停`);
+    assert.doesNotMatch(opening,
+      /环境缺口写进报告|不发起环境配置请求|不发起配置请求/,
+      `${tier} 档开场:旧劝阻口径退役`);
+    const resume = issueResumePrompt(state, "继续", {}, { tier });
+    assert.match(resume, /缺网管环境时调 request_env 举环境配置卡/,
+      `${tier} 档续聊:举配置卡口径在场`);
+    assert.match(resume, /结束本回合等待/,
+      `${tier} 档续聊:举卡即停`);
+    assert.doesNotMatch(resume,
+      /环境缺口写进报告|不发起环境配置请求|不发起配置请求/,
+      `${tier} 档续聊:旧劝阻口径退役`);
+  }
+  // 三档文案不动:对齐档的介入节奏不举配置卡口径(阶段简报的工具
+  // 清单与本断言无关——那里本来就列 request_env)。
+  assert.doesNotMatch(issueFixedOpeningPrompt(state, {}, { tier: "3" }),
+    /缺网管环境时调 request_env|环境配置卡/, "三档开场不受影响");
+  assert.doesNotMatch(issueResumePrompt(state, "继续", {}, { tier: "3" }),
+    /缺网管环境时调 request_env|环境配置卡/, "三档续聊不受影响");
 });
 
 test("档位中途切换:已挂起的卡不追溯代答(只在卡落地时判定)", async () => {
