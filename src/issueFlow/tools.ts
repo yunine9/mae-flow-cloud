@@ -174,6 +174,16 @@ export interface IssueToolContext {
   /** 单卡互斥②(ADR-0024):有未决的 Agent 问题卡时 raise_gate 拒举。
    * 服务侧接 humanGate.pending();缺席按无卡(裸构造兼容缺省)。 */
   pendingAgentCard?: () => boolean;
+  /** 举卡即收口(票 #573,ADR-0019 2026-10-31 增补·六卡一规则):读
+   *  「本回合是否已举过卡」(平台闸或 Agent 问题卡任一)。置位后同
+   *  回合再调平台工具一律机械拦下——回执是纠偏,不是报错口吻。标记
+   *  是回合内存态:举卡时置位,回合启动/收口清零,进程重启天然归零,
+   *  不落盘;绝不按「闸在场」跨回合拦(检视分诊送达开的回合、收口后
+   *  返工的回合照常用平台工具)。缺席(裸构造)=未举卡,不拦。 */
+  turnCardRaised?: () => boolean;
+  /** 举卡的置位口:平台闸举起后由工具层调用;Agent 问题卡落卡由服务
+   *  侧接线置位(见 service 的 beforeHumanQuestion)。 */
+  markTurnCardRaised?: () => void;
   log?: (message: string) => void;
 }
 
@@ -220,6 +230,7 @@ function raiseEnvNeededGate(
     undefined,
     scope,
   );
+  ctx.markTurnCardRaised?.();
   ctx.persist();
   // 成功收口(不是 fail):发起配置请求是一次完成的工具执行,把它记成
   // 失败会让现场回执画 ✕、用户以为出错。模型侧语义靠文案自明:
@@ -336,11 +347,13 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       : String(state.stage);
 
   const gateStage = (tool: string): void => {
-    // 存量 skill 圈选闸在场(ADR-0011 举起的历史卡;ADR-0014 起新卡
-    // 永不举):先等用户答完再干活。守卫放在所有阶段门禁之前——闸
-    // 举起后回执已叫 Agent 停回合,它若继续调平台工具,这里机械拦下。
-    if (state.gate?.kind === "skill_select") {
-      fail(promptCopy("receipts", "gate.skill_select_pending"));
+    // 举卡即收口(票 #573,六卡一规则):本回合已举过卡(平台闸或
+    // Agent 问题卡)——举卡回执已叫 Agent 结束回合,它若继续调平台
+    // 工具,这里机械拦下,回执是纠偏不是报错。守卫放在所有阶段门禁
+    // 之前。收编了 skill_select 旧专支:存量圈选闸的跨回合拦截改由
+    // 回合启动时的存量种子承担(service.beginTurn),六种卡一条规则。
+    if (ctx.turnCardRaised?.()) {
+      fail(promptCopy("receipts", "gate.turn_card_pending"));
     }
     const allowedStages = scenario ? stagesAllowingTool(scenario, tool) : [];
     if (scenario && stageAllowsTool(scenario, state.stage as FixedStage, tool)) {
@@ -373,6 +386,11 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       + "(get_issue_meta 可查)就无需调用,按技能 fetch-logs 直接抓取。",
     parameters: Type.Object({}),
     async execute() {
+      // 举卡即收口(票 #573):request_env 不走阶段门禁(全程可调),
+      // 但本回合已举过卡时同样拦下——六卡一规则不留例外口。
+      if (ctx.turnCardRaised?.()) {
+        fail(promptCopy("receipts", "gate.turn_card_pending"));
+      }
       if (ctx.environmentPassword?.()) {
         return ok("网管环境已配置(get_issue_meta 可查全量),无需请求——"
           + "按技能 fetch-logs 抓取日志即可。");
@@ -647,6 +665,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
           undefined,
           result.summary.split("\n")[0],
         );
+        ctx.markTurnCardRaised?.();
         ctx.persist();
         return ok(result.summary
           + "\n平台已举出验证卡,请结束本回合等待用户验证结果——不要自行继续。");
@@ -737,6 +756,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         }
         raiseGate(ctx.state, "env_verify",
           RAISE_GATE_QUESTIONS.env_verify, undefined, params.supplement);
+        ctx.markTurnCardRaised?.();
         ctx.persist();
         return ok("已举出环境验证卡,请结束本回合等待用户验证"
           + "(可不答——MR 全部合入即视为验证通过)——不要自行继续。");
@@ -753,6 +773,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       }
       raiseGate(ctx.state, kind, RAISE_GATE_QUESTIONS[kind], undefined,
         params.supplement, undefined, undefined, { repo, sha: watch.sha });
+      ctx.markTurnCardRaised?.();
       ctx.persist();
       return ok(kind === "pipeline_unfixable"
         ? "已举出流水线人工处理卡,请结束本回合等待用户在平台处理/"
@@ -1106,6 +1127,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
             proposal,
           );
         }
+        ctx.markTurnCardRaised?.();
         // 检视回合收口(ADR-0007):新一轮报告提交即举确认卡,检视
         // 入口随之恢复——in-flight 标记在此清除。
         delete ctx.state.review_active;

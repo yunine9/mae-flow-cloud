@@ -775,6 +775,13 @@ interface LiveIssue {
   /** 本回合的审计关联 id(ADR-0053):beginTurn/beginContinuationTurn
    *  定格,canonical 行与回合内投递账共享;跨重启唯一(带时间戳)。 */
   auditTurnId?: string;
+  /** 举卡即收口的回合标记(票 #573,ADR-0019 2026-10-31 增补):本
+   *  回合内已举过卡(平台闸或 Agent 问题卡)。举卡置位,回合启动/
+   *  收口清零,重启天然归零——绝不按「闸在场」跨回合拦(检视分诊
+   *  送达开的回合、收口后返工的回合要用平台工具)。唯一例外:存量
+   *  skill_select 圈选闸在场时回合启动即置位——封存闸按在场跨回合拦
+   *  的旧语义原样保留(ADR-0014),新举的卡不吃这颗种子。 */
+  cardRaisedInTurn?: boolean;
 }
 
 export interface IssueMessage {
@@ -2479,6 +2486,10 @@ export class IssueFlowService {
     this.turning.add(live.id);
     live.state.status = "running";
     live.state.nudges = 0;
+    // 举卡即收口的回合标记(票 #573):新回合清零;存量 skill_select
+    // 圈选闸在场时置位——封存闸按「在场」跨回合拦的旧语义,收编进
+    // 本标记的种子(其余五种卡绝不按在场跨回合拦)。
+    live.cardRaisedInTurn = live.state.gate?.kind === "skill_select";
     saveState(live.root, live.state);
     void this.runTurn(live, body, epoch).finally(() =>
       this.endTurnSlot(live, token));
@@ -2502,6 +2513,12 @@ export class IssueFlowService {
       nudges: live.state.nudges ?? 0,
     });
     this.turning.delete(live.id);
+    // 举卡即收口的回合标记(票 #573):回合槽位收口即清零——卡跨回合
+    // 挂起是常态(env_verify 可能等很久),下一回合(#350 分诊送达/
+    // 返工/作答续跑)平台工具必须照常可用。延续回合不走这里(代币
+    // 已接棒让位),标记随延续链传递,与催办续跑的「同一回合」语义
+    // 一致。
+    live.cardRaisedInTurn = false;
     void this.pump();
   }
 
@@ -4182,6 +4199,12 @@ export class IssueFlowService {
       mrRecheck: (repo, sha) => service.recheckMrForSettle(live, repo, sha),
       // 单卡互斥②(ADR-0024):有未决 Agent 卡时 raise_gate 拒举。
       pendingAgentCard: () => live.humanGate.pending().length > 0,
+      // 举卡即收口(票 #573,六卡一规则):「本回合已举卡」内存标记,
+      // 见 LiveIssue.cardRaisedInTurn 注释(清零挂点=回合启动/收口)。
+      turnCardRaised: () => live.cardRaisedInTurn === true,
+      markTurnCardRaised: () => {
+        live.cardRaisedInTurn = true;
+      },
       log: (message) => this.log(message),
     };
     live.toolContext = context;
@@ -4256,10 +4279,16 @@ export class IssueFlowService {
       // 单卡互斥①(ADR-0024):平台闸在场时 AskUserQuestion 先问宿主,
       // 宿主拦下(纠偏文字作工具错误回给模型,不建卡不通知)——闸优先
       // 是作答分派的既有语义,两卡并存是 issue-53 撞车类 bug 的土壤。
-      beforeHumanQuestion: () => live.state.gate
-        ? "已有一张平台闸在等用户作答,不要再举问题卡——闸裁决后会开"
-          + "新回合,届时若仍需要向用户提问,再举问题卡。"
-        : undefined,
+      beforeHumanQuestion: () => {
+        if (live.state.gate) {
+          return "已有一张平台闸在等用户作答,不要再举问题卡——闸裁决后会开"
+            + "新回合,届时若仍需要向用户提问,再举问题卡。";
+        }
+        // 举卡即收口(票 #573):问题卡即将落地——置「本回合已举卡」
+        // 标记,同回合后续的平台工具调用一律机械拦下。
+        live.cardRaisedInTurn = true;
+        return undefined;
+      },
       // 子 Agent 派发开闸(2026-09-06):vendor 方法论技能(code-review
       // 并行评审/grilling 派子查证)原生可用。安全边界:
       // - 业务工具(complete_stage/push_branch 等)只在主会话——
