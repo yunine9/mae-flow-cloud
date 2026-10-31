@@ -8,7 +8,9 @@
  *   ——单据状态「开发人员实施修改」、配置中心版本映射命中且标记参与
  *   自动接单、特性名强匹配业务模块(三道预筛与 DTS 列表发起同一单点
  *   判据),同账号+同单号非终态去重与责任人 Git 凭据门由 create 内
- *   硬闸原样兜底。任何一道不过即跳过本单:宁可漏发不可错发。
+ *   硬闸原样兜底;三道预筛之后另有第四道单级排除闸(ADR-0070):用户
+ *   点名排除的单跳过,只拦扫描器、不拦人工发起。任何一道不过即跳过
+ *   本单:宁可漏发不可错发。
  * - 静默跳过:发不了的单只落审计账(issue-auto-claim.jsonl,带原因),
  *   不通知任何人;版本未标记参与的老版本同此——按规则不归自动管。
  * - 唯一流控是回合并发额度(issue_max_turns 排队),单拍不限流,
@@ -21,6 +23,7 @@
 
 import { matchProductVersion } from "../configurationCenter.ts";
 import type { RuntimeKnobs } from "../settings.ts";
+import { readDtsAutoClaimExclusions } from "../dtsAutoClaimExclusions.ts";
 import { newRequestId, processAudit } from "./audit.ts";
 import type { DtsGateway } from "./gateways.ts";
 import type { IssueCreateInput, IssueSummary } from "./service.ts";
@@ -74,6 +77,7 @@ export async function runAutoClaimTick(deps: AutoClaimDeps): Promise<AutoClaimOu
   if (!accounts.length || !deps.dts) return outcome;
   const versionRows = configuredVersionRows(deps.issueFlow.dataDir);
   const moduleIndex = dtsFeatureModuleIndex(deps.issueFlow.dataDir);
+  const exclusions = readDtsAutoClaimExclusions(deps.issueFlow.dataDir);
   for (const account of accounts) {
     let briefs;
     try {
@@ -121,6 +125,15 @@ export async function runAutoClaimTick(deps: AutoClaimDeps): Promise<AutoClaimOu
       const moduleId = matchDtsModule(moduleIndex, brief.featureName);
       if (!moduleId) {
         skip("特性名未匹配到业务模块");
+        continue;
+      }
+      // 同尺第四闸:单级排除(ADR-0070)——用户点名这张单不自动接。
+      // 标记按单号全局生效(改派责任人后仍在),取消(条目删除)即
+      // 恢复;只拦扫描器,人工发起路径不受影响。因排除跳过与其他
+      // 跳过同待遇:静默 + 审计留痕,原因单列「用户排除」并带操作人。
+      const exclusion = exclusions[brief.ticket];
+      if (exclusion) {
+        skip(`用户排除:${exclusion.updated_by} 标记不自动接单`);
         continue;
       }
       // 发起:责任人自登记形态(ADR-0031),发起方式=自动标记进状态。

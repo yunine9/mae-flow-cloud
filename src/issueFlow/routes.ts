@@ -20,6 +20,11 @@ import {
  *   POST /issues                      → 登记(201 摘要)
  *   GET  /issues/dts                  → DTS 名下问题单(拉单)
  *   GET  /issues/dts/:ticket          → 单张问题单详情(拉单页签展开用)
+ *   PUT    /issues/dts-auto-claim-exclusions/:ticket → 标记这张单不自动
+ *                                      接单(ADR-0070;登录闸后,不在
+ *                                      免登录允许清单)
+ *   DELETE /issues/dts-auto-claim-exclusions/:ticket → 取消排除,恢复
+ *                                      自动接单(同上,登录闸后)
  *   GET  /issues/dts-file?path=…      → 描述内嵌图代理(后端带回二进制)
  *   GET  /issues/:id                  → 详情(状态 + 消息 + 问题卡)
  *   GET  /issues/:id/materials        → 材料清单(变更/日志/人工台账/推送记录)
@@ -85,6 +90,11 @@ import {
   readDtsModuleBindings,
   setDtsModuleBinding,
 } from "../dtsModuleBindings.ts";
+import {
+  DtsAutoClaimExclusionError,
+  readDtsAutoClaimExclusions,
+  setDtsAutoClaimExclusion,
+} from "../dtsAutoClaimExclusions.ts";
 import {
   bundleSessionLogs,
   IssueLogsArchiveTooLargeError,
@@ -326,6 +336,16 @@ function withDtsModule<T extends { featureName?: string }>(
   return moduleId ? { ...ticket, module_id: moduleId } : ticket;
 }
 
+/** 给单据补自动接单排除标记(ADR-0070):被标记排除的单带
+ *  auto_claim_excluded:true;缺省允许不加字段——前端两态下拉的
+ *  缺省值即「允许」。列表是前端渲染与扫描闸共读的同一份事实。 */
+function withAutoClaimExclusion<T extends { ticket: string }>(
+  exclusions: ReturnType<typeof readDtsAutoClaimExclusions>, row: T,
+): T {
+  return exclusions[row.ticket]
+    ? { ...row, auto_claim_excluded: true } : row;
+}
+
 /** 处理 /issues/* 请求;返回 false 表示与问题域无关。 */
 export async function handleIssueRoutes(
   request: IncomingMessage,
@@ -537,13 +557,15 @@ export async function handleIssueRoutes(
       }
       // 分支列数据源(ADR-0038):匹配在后端单点,列表逐单带出——
       // 前端纯展示,列显示与发起解析永不漂移。模块带出同一纪律
-      // (ADR-0056):特性名与模块名强匹配,服务端单点逐单带出。
+      // (ADR-0056):特性名与模块名强匹配,服务端单点逐单带出。自动
+      // 接单排除标记(ADR-0070)照此富集:排除表后端单点逐单带出。
       const versionRows = configuredVersionRows(issueFlow.dataDir);
       const moduleIndex = dtsFeatureModuleIndex(issueFlow.dataDir);
+      const exclusions = readDtsAutoClaimExclusions(issueFlow.dataDir);
       const tickets = (await requireDts(routeOptions.dts)
         .listByOwner(owner || String(viewer?.username ?? "")))
-        .map(ticket => withDtsModule(moduleIndex,
-          withDtsBranch(versionRows, ticket)));
+        .map(ticket => withAutoClaimExclusion(exclusions,
+          withDtsModule(moduleIndex, withDtsBranch(versionRows, ticket))));
       return done(200, { tickets, mock: routeOptions.dts?.mock === true });
     }
 
@@ -603,6 +625,40 @@ export async function handleIssueRoutes(
         // 其余照旧走尾部单点映射。
         if (error instanceof DtsModuleBindingError
             || error instanceof BusinessModuleError) {
+          return done(409, { error: error.message });
+        }
+        throw error;
+      }
+    }
+
+    // 自动接单单级排除(ADR-0070):PUT 落条目=排除、DELETE 删条目=
+    // 恢复允许,幂等。改写有操作人,不进免登录允许清单(ADR-0069
+    // 结构性默认:新增接口默认在闸后)——操作人恒取登录身份,客户端
+    // 改写不收;body.account 只留给无登录态的本地单人形态(与
+    // PUT dts-bindings 同哲学)。能看见这单就能改:团队共享事实,
+    // 人人可写,与单号→模块映射同尺。
+    if ((method === "PUT" || method === "DELETE")
+        && parts[1] === "dts-auto-claim-exclusions" && parts.length === 3) {
+      const ticket = decodeURIComponent(parts[2]);
+      const body = await readBody(request);
+      const updatedBy = viewer?.username
+        ?? String(body.account ?? "").trim();
+      if (!updatedBy) {
+        return done(400, {
+          error: "缺少操作人账号:请先登录,或在请求体携带 account(工号)",
+        });
+      }
+      try {
+        const { entry } = setDtsAutoClaimExclusion(
+          issueFlow.dataDir, ticket, method === "PUT", updatedBy);
+        return done(200, {
+          ticket,
+          excluded: method === "PUT",
+          ...(entry ? { updated_by: entry.updated_by, updated_at: entry.updated_at } : {}),
+        });
+      } catch (error) {
+        // 单号格式校验(与问题流服务端同一把尺)是人话打回 409。
+        if (error instanceof DtsAutoClaimExclusionError) {
           return done(409, { error: error.message });
         }
         throw error;
