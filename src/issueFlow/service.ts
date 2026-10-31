@@ -2180,6 +2180,50 @@ export class IssueFlowService {
     };
   }
 
+  /** 对话选环境(票 #574,spec #571):用户在对话中明确给出环境 IP
+   * 时,AI 经 select_environment 工具按台账主 IP 精确匹配,唯一命中即
+   * 挂载。挂载复用 attachEnvironment 同一条路径(快照解密进 vault、
+   * 覆盖允许、env_needed 卡清除、拒绝台账解锢、平台回合通知重试),
+   * 本方法只多做「按 IP 找台账条目」与回执事实行——回执只有事实,
+   * 密码永不进模型可见面(get_issue_meta 的明文例外是 ADR-0003 的事,
+   * 这条路不沾)。台账以主 IP 为唯一键,findByIp 至多命中一条,没有
+   * 多命中歧义分支可言。终态守卫与 C-H3 同口径:补配会开平台回合,
+   * 不能把已收口的会话复活成 running。 */
+  selectEnvironmentByIp(id: string, ip: string): string {
+    const live = this.require(id);
+    const { state } = live;
+    if (isTerminal(state.status)) {
+      throw new IssueControlError(
+        `会话已处于终态 ${state.status},不能补配环境`);
+    }
+    const entry = this.environmentRegistry.findByIp(ip);
+    if (!entry) {
+      throw new IssueControlError(
+        `环境管理里没有主 IP 为 ${ip} 的环境记录——请如实转告用户到`
+        + "「环境管理」补录后再选,不要猜测或手造环境信息");
+    }
+    // 事实行先采后挂:attachEnvironment 会改现场(覆盖/清卡/解锢)。
+    const replaced = Boolean(state.environment);
+    const unblocked = state.gate?.kind === "env_needed";
+    const ungated = Boolean(state.env_declined);
+    this.attachEnvironment(id, { environmentId: entry.id });
+    const lines = [
+      `网管环境已挂载:${entry.ip}`
+      + (entry.port ? `:${entry.port}` : "")
+      + `,形态${ENV_TYPE_LABELS[entry.form]}(环境管理台账快照)`
+      + "——按技能 fetch-logs 直接抓取即可",
+    ];
+    if (replaced) lines.push("已覆盖会话原有环境(登记时的选择被替换)");
+    if (unblocked) {
+      lines.push("挂着的网管环境配置卡已解除——平台已通知你重试刚才的操作");
+    }
+    if (ungated) {
+      lines.push("此前的环境拒绝记录已整册清除(解锢):同 scope 工具"
+        + "恢复举卡路径");
+    }
+    return lines.join("\n");
+  }
+
   /** 网管环境配置(问题卡 env_needed 闸的作答口,POST
    * /issues/:id/environment):登记时没配环境,拉日志/换库的工具现场
    * 举闸后,用户在这里补地址与网管后台密码。密码进 vault 后即清闸并开
@@ -4205,6 +4249,10 @@ export class IssueFlowService {
       markTurnCardRaised: () => {
         live.cardRaisedInTurn = true;
       },
+      // 对话选环境(票 #574):用户在对话给出 IP 时按台账精确匹配挂载,
+      // 复用 attachEnvironment 全部语义(覆盖/清卡/解锢/开平台回合)。
+      selectEnvironmentByIp: (ip: string) =>
+        this.selectEnvironmentByIp(live.id, ip),
       log: (message) => this.log(message),
     };
     live.toolContext = context;

@@ -184,6 +184,11 @@ export interface IssueToolContext {
   /** 举卡的置位口:平台闸举起后由工具层调用;Agent 问题卡落卡由服务
    *  侧接线置位(见 service 的 beforeHumanQuestion)。 */
   markTurnCardRaised?: () => void;
+  /** 对话选环境(票 #574,spec #571):用户在对话中明确给出环境 IP
+   *  时,服务端按环境管理台账主 IP 精确匹配并复用挂载路径(快照解密
+   *  进 vault、覆盖允许、清环境卡、解锢、开平台回合);返回回执文本
+   *  ——只含事实,密码永不进模型可见面。缺席(裸构造)由工具如实打回。 */
+  selectEnvironmentByIp?: (ip: string) => string;
   log?: (message: string) => void;
 }
 
@@ -396,6 +401,33 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
           + "按技能 fetch-logs 抓取日志即可。");
       }
       return ok(raiseEnvNeededGate(ctx, "logs"));
+    },
+  }));
+
+  tools.push(defineTool({
+    name: "select_environment",
+    label: "Select Environment",
+    description:
+      "用户在对话中明确给出网管环境 IP 时才调它:按环境管理台账的主 IP "
+      + "精确匹配,唯一命中即挂载(服务端解密快照,密码不经你手;按技能 "
+      + "fetch-logs 直接抓取)。会话已配环境时可覆盖——登记时选错了,"
+      + "用户给出正确 IP 即换。用户没给 IP 时不要自行巡游台账替用户挑"
+      + "环境;台账里没有的 IP 会如实打回,转告用户到「环境管理」补录。",
+    parameters: Type.Object({
+      ip: Type.String({ description: "用户给出的网管环境主 IP(台账唯一键)" }),
+    }, { additionalProperties: false }),
+    async execute(_toolCallId: string, params: any) {
+      // 举卡即收口(票 #573):全程可调工具不走阶段门禁,但本回合已举
+      // 过卡时同样拦下——六卡一规则不留例外口。
+      if (ctx.turnCardRaised?.()) {
+        fail(promptCopy("receipts", "gate.turn_card_pending"));
+      }
+      const ip = String(params?.ip ?? "").trim();
+      if (!ip) fail("ip 不能为空:用户在对话里给出的网管环境主 IP");
+      if (!ctx.selectEnvironmentByIp) {
+        fail("宿主未接线对话选环境回调,无法挂载——如实告知用户本路暂不可用");
+      }
+      return ok(ctx.selectEnvironmentByIp(ip));
     },
   }));
 
