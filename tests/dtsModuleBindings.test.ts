@@ -362,11 +362,11 @@ test("列表强匹配带出:特性名 trim 后与模块名完全相等且唯一�
   // 重名模块:命中歧义,按未匹配处理。
   createBusinessModule(dataDir, {
     id: "dup-a", name: "重复模块", description: "d", owner: "dev",
-    repositories: [origin],
+    repositories: [origin], knowledge_path: "dup-a",
   }, "tester");
   createBusinessModule(dataDir, {
     id: "dup-b", name: "重复模块", description: "d", owner: "dev",
-    repositories: [origin],
+    repositories: [origin], knowledge_path: "dup-b",
   }, "tester");
   const brief = (ticket: string, featureName?: string) => ({
     ticket, title: ticket,

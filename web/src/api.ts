@@ -667,6 +667,14 @@ export interface PrepushRuntime {
   message: string;
 }
 
+/** 推送前上传 Skill 的实际结果，不参与任务阶段转换。 */
+export interface CodecheckResult {
+  base: string;
+  head: string;
+  summary: string;
+  reused?: boolean;
+}
+
 export interface TaskTokenUsage {
   /** 均为模型提供方真实上报；服务端不做字符数估算。 */
   input_tokens: number;
@@ -1188,6 +1196,8 @@ export interface TaskSummary {
     skipped?: string;
     /** Cloud 原生 Build-Fix；缺席表示服务端尚未开始或不支持该能力。 */
     prepush?: PrepushVerification;
+    /** 推送前上传 Skill 的实际结果，不参与任务阶段转换。 */
+    codecheck?: CodecheckResult;
     /** 进程活性只看这里，不能再由旧存储字段 prepush.state=preparing 推断。 */
     prepush_runtime?: PrepushRuntime;
     /** 当前 push 检视的阅读导航，展示实际提交内容。 */
