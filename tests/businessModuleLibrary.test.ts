@@ -278,7 +278,10 @@ test("HTTP 权限：所有登录成员维护模块映射与知识；匿名不可
     return response.headers.get("set-cookie")!.split(";")[0];
   };
   try {
-    assert.equal((await fetch(`${base}/business-modules`)).status, 401);
+    // ADR-0069(#566):GET /business-modules 进匿名允许清单(无头客户端零凭据
+    // 读目录);写与逐模块操作仍在闸后。
+    assert.equal((await fetch(`${base}/business-modules`)).status, 200);
+    assert.equal((await fetch(`${base}/business-modules`, { method: "POST", body: "{}" })).status, 401, "匿名写仍拒绝");
     const boss = await login("boss", "administrator-pass");
     const owner = await login("owner", "developer-pass-1");
     const viewer = await login("viewer", "developer-pass-3");

@@ -160,7 +160,7 @@ test("领域 Skill 在真实 Pi 会话中读取固定源码和引用，保存两
     const job = service.create({ ...researchOnly, material_ids: [material.id] }, "expert");
     await until(() => ["done", "failed"].includes(service.get(job.id).status));
     const result = service.get(job.id); assert.equal(result.status, "done", result.error);
-    assert.equal(result.turns[0].research?.phase, "complete"); assert.match(JSON.stringify(model.requests), /执行结果尚未保存/);
+    assert.equal(result.turns[0].research?.phase, "complete"); assert.match(JSON.stringify(model.requests), /尚未收到 knowledge_work_result 的 saved:true/);
     assert.equal(result.documents.length, 2); assert.equal(result.documents[0].base_revision, ""); assert.equal(result.archive_configured, false); assert.equal(result.revisions["repo-1"], revision);
     assert.match(JSON.stringify(result.evidence), /latest-ready/); assert.notEqual(revision, staleRevision);
     assert.equal(result.turns[0].skill?.name, "generic-domain-fixture");

@@ -78,7 +78,7 @@ for (const available of [true, false]) {
     }) as any);
     const service = new DomainKnowledgeExtraction(f.root, input => {
       input.turn.previous_revisions = { "repo-1": baseline };
-      input.save({ id: "rules", title: "订单规则", target_id: "domain", path: "domains/rules.md", layer: "domain", content: "# 订单规则\n已有待审草稿", sources: "测试提供的业务规则" });
+      input.save({ id: "rules", title: "订单规则", target_id: "domain", path: "docs/订单/rules.md", layer: "domain", content: "# 订单规则\n已有待审草稿", sources: "测试提供的业务规则" });
       return runDomainKnowledge(input, { dataDir: f.root, model: () => ({ provider: "fixture", model: "fixture", json: {} }),
         source: async (_repo, operator, signal, baselineRevisions?: string[]) => {
           assert.equal(operator, "bob"); requests.push(baselineRevisions);

@@ -161,7 +161,7 @@ test("仅大小写不同的文件名和已有后缀也避让，保留实际路�
 test("文稿映射保留子目录，并拒绝目录穿越及不存在的目标", () => {
   const result = moduleKnowledgePaths([document("extra", "guide/nested/rules.md")], [target]);
   assert.equal(result.paths.get("extra"), "docs/orders/guide/nested/rules.md");
-  assert.throws(() => moduleKnowledgePaths([document("escape", "../other/rules.md")], [target]), /模块目录内/);
+  assert.throws(() => moduleKnowledgePaths([document("escape", "../other/rules.md")], [target]), /归档目录内的 Markdown/);
   assert.throws(() => moduleKnowledgePaths([document("unknown", "AGENTS.md", "unknown")], [target]), /归档目标不存在/);
   assert.throws(() => moduleKnowledgePaths([document("same", "docs/one.md"), document("same", "docs/two.md")], [target]), /编号不能重复/);
 });

@@ -806,7 +806,7 @@ test("MR 验绿门·状态查询带 mr:验绿门与监看器两路都不让模�
   }
 });
 
-test("push_branch 阶段性交付:未提交改动保留并明确告知，提交后推送新 SHA", async () => {
+test("push_branch 阶段性交付:脏工作区拒推(ADR-0071),提交后放行推新 SHA", async () => {
   const dataDir = mfcTemp("mfc-issue-exit-dirty-");
   const origin = bareOrigin(dataDir);
   const repoDir = join(dataDir, "repo", "origin");
@@ -822,16 +822,20 @@ test("push_branch 阶段性交付:未提交改动保留并明确告知，提交�
   state.repo_urls = [origin];
   state.repo_url = origin;
   const { byName, textOf } = directTools(state, dataDir);
-  // 阶段性推送只发布 HEAD，不能暗中提交其他在途工作。
-  writeFileSync(join(repoDir, "fix.txt"), "changed", "utf-8");
-  const partial = textOf(await byName("push_branch").execute("x", {}));
-  assert.match(partial, /未提交改动.*未包含/);
-  assert.equal((state.pushes ?? []).length, 1);
-  assert.equal(execFileSync("git", ["-C", repoDir, "status", "--porcelain"], { encoding: "utf8" }).trim(), "?? fix.txt");
-  // 提交后放行:真推到裸仓远端,推送账落位。
-  execFileSync("git", ["-C", repoDir, "add", "-A"], { env: GIT_ENV });
-  execFileSync("git", ["-C", repoDir, "commit", "-q", "-m", "[T] fix"],
+  // ADR-0071 脏工作区熔断:已跟踪文件有未提交改动即拒推——带脏推只会
+  // 推出旧 HEAD,基线合并也要求干净的树;未跟踪过程产物不拦。
+  writeFileSync(join(repoDir, "fix.txt"), "tracked", "utf-8");
+  execFileSync("git", ["-C", repoDir, "add", "fix.txt"], { env: GIT_ENV });
+  execFileSync("git", ["-C", repoDir, "commit", "-q", "-m", "seed tracked"],
     { env: GIT_ENV });
+  writeFileSync(join(repoDir, "fix.txt"), "changed", "utf-8");
+  await assert.rejects(byName("push_branch").execute("x", {}), /未提交改动/,
+    "已跟踪文件的脏改动必须拒推而不是带脏推旧 HEAD");
+  assert.equal((state.pushes ?? []).length, 0);
+  // 提交放行;未跟踪过程产物在场也不拦:真推到裸仓远端,推送账落位。
+  execFileSync("git", ["-C", repoDir, "commit", "-q", "-am", "[T] fix"],
+    { env: GIT_ENV });
+  writeFileSync(join(repoDir, "untracked.log"), "process artifact", "utf-8");
   const receipt = textOf(await byName("push_branch").execute("x", {}));
   assert.match(receipt, /已推送/);
   assert.equal(state.pushes?.length, 1);

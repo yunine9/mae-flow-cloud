@@ -11,7 +11,6 @@ import { DomainKnowledgeExtraction } from "../src/domainKnowledgeExtraction.ts";
 import { readDtsModuleBindings, setDtsModuleBinding } from "../src/dtsModuleBindings.ts";
 import { materializeHostSkills } from "../src/hostSkillRuntime.ts";
 import { listHostSkillShelf } from "../src/hostSkillShelf.ts";
-import { collectSearchableKnowledge, KnowledgeSearch } from "../src/knowledgeSearch.ts";
 import { MemoryStore } from "../src/taskMemory.ts";
 import { TaskService } from "../src/taskService.ts";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
@@ -72,7 +71,8 @@ test("整体迁移合并同名资产、历史版本和单号绑定，保留目�
     assert.deepEqual(readFileSync(join(dir, "knowledge-documents", `${doc.id}.json`)), before, "迁移不重写正式内容或版本");
     assert.equal(readDtsModuleBindings(dir)["DTS-123"].module_id, "new");
     assert.equal(new MemoryStore(dir).list().find(row => row.id === mem.id)?.module, "new");
-    assert.ok(collectSearchableKnowledge(dir, { repo: "", repositories: [], moduleIds: ["new"] }).assets.some(a => a.id === doc.id));
+    // 模块绑定文档按 13ff28b7 语义是任务草稿(withoutBoundModuleDrafts),
+    // 不进统一检索面;迁移后的模块归属由上方 module_ids 断言钉住。
     assert.equal(migrateBusinessModule(dir, "old", "new", "expert").assets.length, 2);
     assert.equal(businessModuleMigrations(dir).length, 1);
     publishBusinessKnowledgeAsset(dir, "new", { ...asset, id: imported.id, content: "# 迁移后修订" }, "expert");
@@ -139,11 +139,8 @@ test("运行中的萃取迁移后原轮次继续保存，重启后归属、正�
     assert.deepEqual(after.knowledge_target, before.knowledge_target);
     assert.deepEqual(after.repositories, before.repositories);
     assert.deepEqual(after.material_ids, before.material_ids);
-    await service.publish(job.id, "expert");
-    const published = service.get(job.id).documents[0];
-    assert.ok(published.knowledge_document_id);
-    assert.deepEqual(readKnowledgeDocument(dir, published.knowledge_document_id!).module_ids, ["new"]);
-    assert.equal(published.path, before.documents[0].path);
+    // 13ff28b7 起领域任务无「先发布」一步(publish 已成指路墓碑),
+    // 迁移后的模块归属由上方 readKnowledgeDocument 断言覆盖。
     await service.shutdown();
     restored = new DomainKnowledgeExtraction(dir, async () => { assert.fail("完成任务不能重跑"); });
     assert.equal(restored.get(job.id).module_id, "new");
@@ -210,7 +207,9 @@ test("旧知识引用、工作流固定资产与业务 Skill 在迁移后仍可�
       assert.equal(result.length, 1); assert.equal(result[0].state, "available", result[0].diagnostic);
       assert.equal(result[0].business_module_id, "old", "固定工作流的引用身份保留，正文位置解析到现有快照");
     }
-    assert.equal(new KnowledgeSearch(dir).read({ repo: "", repositories: [], moduleIds: ["new"] }, "module:old:rules")?.content, asset.content);
+    // 模块资产已退出统一检索面(业务正文统一从正式 Git 快照读取);固定
+    // 引用身份的保留由旧模块键直读资产钉住(与工作流解析同一语义)。
+    assert.equal(readBusinessKnowledgeAsset(dir, "old", "rules").content, asset.content);
     assert.deepEqual(listHostSkillShelf(dir).skills[0].business_module_ids, ["new"]);
     const loaded = materializeHostSkills({ moduleDataDir: dir, sourceRoot: join(dir, "skills"), workspaceRoot: workspace, snapshotRoot: join(workspace, "snapshot"),
       context: { repositories: [], technologies: [], businessModuleIds: ["new"] } });

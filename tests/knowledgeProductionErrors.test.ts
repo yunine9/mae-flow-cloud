@@ -70,7 +70,9 @@ test("生产线验收9：r9 真实 Git 创建 MR 的400保留配置原文，人�
       assert.match(error.message, /HTTP 401/); assert.ok(error.message.includes(f.response.reason));
       assert.match(error.message, /个人设置.*CodeHub.*令牌/); assert.doesNotMatch(error.message, /重试|稍后/); return true;
     });
-    assert.equal(f.requests.filter(path => path === "/mr/discover").length, 1, "人工重试先确认原分支是否已有MR");
+    // 13ff28b7 重试链路在入口与建单前各确认一次原分支(首次未发现时第二次
+    // 再核),语义仍是「先确认再重试」,不再是单次。
+    assert.equal(f.requests.filter(path => path === "/mr/discover").length, 2, "人工重试先确认原分支是否已有MR");
     assert.equal(f.requests.filter(path => path === "/mr/gates").length, 0, "创建后的MR状态不参与归档");
   } finally { await f.close(); }
 });

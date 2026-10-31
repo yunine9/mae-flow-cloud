@@ -29,7 +29,7 @@ test("来源工具由平台注册，主会话、调查、写作和独立评审�
     "guide/way.md": "只读调查后保存问答，由独立评审回读原始依据。", [sourcePath]: sourceMethod };
   const sourceReads: Array<{ role: string; content: string }> = [];
   const body = "# 已结算订单的取消\n\n上传资料要求已结算订单走冲正流程，并解释其目的是避免月底结算期间重复扣款。源码 cancel 返回 reverse。无线背景用于理解审计链概念，不能证明本系统的取消规则。";
-  const document = { id: "guide", title: "冲正", layer: "domain", target_id: "domain", path: "domains/answers/settlement.md", content: body, sources: "src/order.ts 的 cancel；business-decisions.txt 的结算限制和业务原因；无线豆包仅提供审计链概念背景" };
+  const document = { id: "guide", title: "冲正", layer: "domain", target_id: "domain", path: "docs/订单/settlement.md", content: body, sources: "src/order.ts 的 cancel；business-decisions.txt 的结算限制和业务原因；无线豆包仅提供审计链概念背景" };
   const intercepted = mock.method(CloudSession, "create", async (config: any) => {
     sessions.push(config);
     const call = async (name: string, args: any, error = false) => {
@@ -145,7 +145,7 @@ test("任务固定为单篇 Skill 即改变输出，不读取源码、不强制�
       for (const name of ["knowledge_material", "business_knowledge", "knowledge_evidence"]) assert.ok(config.allowedTools.includes(name), name);
       assert.equal((await read.execute("missing", { path: "references/business-sources.md" })).isError, true, "宿主不向任意固定包偷偷追加内置方法文件");
       const name = prompt.includes("VERSION_B") ? "faq" : "decision";
-      const document = { id: name, title: name, target_id: name === "faq" ? "domain" : "repo-1", layer: name === "faq" ? "domain" : "repository", path: name === "faq" ? `domains/${name}.md` : `docs/knowledge/${name}.md`, content: `# ${name}\n自由正文，没有固定章节或机器字段。`, sources: "用户提供的业务范围" };
+      const document = { id: name, title: name, target_id: name === "faq" ? "domain" : "repo-1", layer: name === "faq" ? "domain" : "repository", path: `docs/业务/${name}.md`, content: `# ${name}\n自由正文，没有固定章节或机器字段。`, sources: "用户提供的业务范围" };
       const saved = await config.extraTools.find((t: any) => t.name === "knowledge_draft").execute("save", { action: "save", document });
       assert.equal(!!saved.isError, false);
       const result = await config.extraTools.find((t: any) => t.name === "knowledge_work_result").execute("done", { summary: name, document_ids: [name] });

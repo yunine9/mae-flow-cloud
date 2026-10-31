@@ -68,7 +68,8 @@ test("知识萃取 HTTP 权限、上传关联、修订与 Git 正文管理边界
     for (let i = 0; i < 100 && domain.get(deferred.id).status !== "done"; i++) await new Promise(r => setTimeout(r, 5));
     assert.equal(domain.get(deferred.id).archive_configured, false); assert.equal(domain.get(deferred.id).source_repositories![0].branch, "release");
     const location = await request(`/domain-extraction/${deferred.id}/archive-targets`, dev, { base_revision: 0, targets: [{ id: "domain", repository: "https://example.test/archive.git", branch: "docs", docs_path: "new/domain" }] });
-    assert.equal(location.status, 200); assert.equal((await location.json() as any).documents[0].path, "new/domain/trade/rules.md");
+    // directory-v1:显式 docs_path 即最终目录,不再自动拼模块名子目录。
+    assert.equal(location.status, 200); assert.equal((await location.json() as any).documents[0].path, "new/domain/rules.md");
     const edited = await request(`/domain-extraction/${job.id}/edit`, dev, { document: { ...detail.documents[0], content: "人工核对后的规则" }, base_revision: 1 }); assert.equal(edited.status, 200);
     assert.equal((await request(`/domain-extraction/${job.id}/edit`, dev, { document: detail.documents[0], base_revision: 1 })).status, 400);
     const doc = saveKnowledgeDocument(root, { title: "领域规则", content: "Git 正文", scope: "platform", research_source: { job_id: job.id, repository: "https://example.test/knowledge.git", branch: "main", path: "domains/rules.md" }, source: { repository: "https://example.test/knowledge.git", branch: "main", path: "domains/rules.md", revision: "a".repeat(40) } }, "dev");
@@ -81,7 +82,9 @@ test("知识萃取 HTTP 权限、上传关联、修订与 Git 正文管理边界
     assert.equal((await request(`/domain-extraction/${job.id}`, dev)).status, 404);
     const remaining: any = await (await request("/domain-extraction", dev)).json();
     assert.ok(!remaining.records.some((r: any) => r.id === job.id));
-    assert.equal((await request(`/knowledge-documents/${doc.id}`, dev)).status, 200);
+// 13ff28b7:任务删除连带其绑定文稿(领域正文由 Git 保存,平台不留副本);
+    // 共享材料是任务无关资产,仍保留(下行)。
+    assert.equal((await request(`/knowledge-documents/${doc.id}`, dev)).status, 404);
     assert.equal((await request(`/knowledge-materials/${material.id}`, dev)).status, 200);
   } finally { await service.shutdown(); await new Promise<void>(resolve => server.close(() => resolve())); rmSync(root, { recursive: true, force: true }); }
 });

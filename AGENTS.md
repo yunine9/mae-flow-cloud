@@ -32,6 +32,8 @@
 
 默认不跑全量测试套件（`npm test` / `npm run test:full`）。验证按改动域定向：
 
+- 定向跑单文件的命令形态：`npx tsx --test --test-timeout=180000 --test-force-exit tests/<文件>.test.ts`（裸 `node --test` 跑不了仓内 TS，直接报 `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`）。
+- git worktree 里跑测试先软链主仓依赖（gitignored，不提交）：`ln -s <主仓>/node_modules node_modules && ln -s <主仓>/web/node_modules web/node_modules`。
 - 测试范围用 grep 枚举被改端点/组件/服务的调用方，只跑命中的测试文件，配合 typecheck；定向跑绿即视为验证完成。
 - 全量套件与聚合 gate（`npm run gate`）仅在用户点名要求时跑；已单项跑绿的检查不重跑聚合 gate。
-- 遇到与本次改动无关的存量测试失败：确认无关后按失败所在域报告即止，不追查、不做 stash 基线对照重跑。分支本身是红的时，全量红灯没有信息量。
+- 遇到与本次改动无关的存量测试失败：确认无关后按失败所在域报告即止，不追查、不做 stash 基线对照重跑。分支本身是红的时，全量红灯没有信息量。合入前看一眼 CI 红绿并与 main 基线比对失败集合（见 `.github/workflows/tests.yml` 的红绿对照 job）——「红不拦合入」的口径下，这是合入者自己的责任。
