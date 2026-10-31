@@ -477,6 +477,63 @@ test("DTS 列表所属模块列:强匹配带出/人工改选/显隐记忆/发起
     /module\.status === "active"\s*&&\s*module\.repositories\.length > 0/);
 });
 
+test("DTS 列表自动接单列:默认隐藏点名才开,两态「允许/排除」选即存失败回滚(ADR-0070)", () => {
+  const registration = readFileSync(
+    resolve("web/src/issues/Registration.tsx"), "utf-8");
+  const apiTypes = readFileSync(resolve("web/src/api.ts"), "utf-8");
+  // API 面:行字段镜像(在场=排除,缺席=允许)+ 单条改写——排除走 PUT
+  // 落条目、允许走 DELETE 删条目;接口在登录闸后,操作人取登录身份,
+  // 客户端改写不传账号。
+  assert.match(apiTypes, /auto_claim_excluded\?: boolean;/);
+  assert.match(apiTypes, /putDtsAutoClaimExclusion\(/);
+  assert.match(apiTypes,
+    /dts-auto-claim-exclusions\/\$\{encodeURIComponent\(ticket\)\}/);
+  assert.match(apiTypes, /method: excluded \? "PUT" : "DELETE"/);
+  // 列注册:进可显隐清单与列宽常量族(紧跟介入档位列收尾,少一列或
+  // 多一列即这里红)。
+  assert.match(registration,
+    /\{ key: "autoClaim", label: "自动接单" \}/);
+  assert.match(registration, /tier: 116, autoClaim: 116,/);
+  assert.match(registration,
+    /minSize: DTS_COL_MIN\.autoClaim, maxSize: DTS_COL_MAX\.autoClaim/);
+  assert.match(registration, /autoClaim: colShown\("autoClaim"\)/,
+    "新列必须接进引擎 columnVisibility");
+  // 显隐极性照介入档位列(ADR-0058):默认关、点名才开,tier 与
+  // autoClaim 同一张默认关的表、逐列单独一份按人记忆,不与其余数据列
+  // 「勾掉进集合」的极性混存。
+  assert.match(registration,
+    /\{ key: "tier", storage: "mae-flow:dts-tier-col" \}/);
+  assert.match(registration,
+    /\{ key: "autoClaim", storage: "mae-flow:dts-autoclaim-col" \}/);
+  assert.match(registration,
+    /localStorage\.getItem\(`\$\{col\.storage\}:\$\{viewer\.username\}`\) === "1"/);
+  // 格子:ui/ Select 两态「允许/排除」,值=乐观覆盖 ?? 行字段(缺席=
+  // 允许);所有行可改,不限发起状态与视角——格子不看进行中会话,也不
+  // 看协助视角(终态后防被重新接走的逃生门对谁都在)。
+  const claimColStart = registration.indexOf('id: "autoClaim"');
+  assert.ok(claimColStart > -1, "自动接单列 def 应在表列数组里");
+  const claimCol = registration.slice(
+    claimColStart, registration.indexOf("const table = useReactTable"));
+  assert.match(claimCol, /value=\{excluded \? "exclude" : "allow"\}/);
+  assert.match(claimCol, /\?\? ticket\.auto_claim_excluded === true/,
+    "字段缺席必须落到「允许」,不是空值");
+  assert.match(claimCol, /items=\{CLAIM_SELECT_ITEMS\}/);
+  assert.match(claimCol, /<SelectItem value="allow">允许<\/SelectItem>/);
+  assert.match(claimCol, /<SelectItem value="exclude">排除<\/SelectItem>/);
+  assert.match(claimCol, /aria-label=\{`\$\{ticket\.ticket\} 自动接单`\}/);
+  assert.doesNotMatch(claimCol, /assistMode|liveIssue|mineLive/,
+    "格子不得按发起状态或视角收闸——所有行可改(ADR-0070)");
+  // 选即存、失败回滚(照所属模块列):乐观更新,改写失败回滚为原值,
+  // 原因落在那一行。
+  assert.match(registration, /async function saveClaimExclusion\(/);
+  assert.match(registration, /putDtsAutoClaimExclusion\(ticketNo, excluded\)/);
+  assert.match(registration,
+    /if \(previous === undefined\) delete next\[ticketNo\];/,
+    "失败回滚必须能退回行字段事实(覆盖条目缺席)");
+  assert.match(claimCol,
+    /claimFail\?\.ticket === ticket\.ticket[\s\S]*?role="alert"/);
+});
+
 // ---- 问题会话查看模式(docs/issue-session-view-mode.md):非归属人只读
 // ---- 围观(四信息面完整、零操作控件),归属人照常操作;团队看板入口
 // ---- 行为不变。
