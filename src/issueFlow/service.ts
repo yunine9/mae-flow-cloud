@@ -674,11 +674,13 @@ export interface IssueFlowOptions {
   resolveDiscussions?: boolean;
   /** 问题处理介入档位(ADR-0019,个人设置按流剥离):三档缺省二档,
    * 按会话归属人现读现判,闸策略/提示词节奏全部由档位派生——三档
-   * 「优先对齐」=guard 提示词+环境闸照旧;二档「优先报告」=唯一
-   * 停靠点是分析结论确认卡(检视循环),env 闸不举;一档「全自动」=
-   * 确认类闸代答(analysis_confirm 全量/conclude 高置信非问题)+纯选项
-   * 问答卡代答+env 闸不举。流水线人工事实闸任何档都等人。推送分支
-   * 任何档都直推(2026-09-17 推送过目退役,ADR-0009 增补)。
+   * 「优先对齐」=guard 提示词;二档「优先报告」=唯一停靠点是分析
+   * 结论确认卡(检视循环);一档「全自动」=确认类闸代答
+   * (analysis_confirm 全量/conclude 高置信非问题)+纯选项问答卡
+   * 代答。环境配置卡(env_needed)与流水线人工事实闸任何档位都举
+   * (2026-10-31 起,ADR-0019 增补:只有人拿得到的事实不算询问),
+   * 且永不代答;build_deploy 随路 env_verify 卡维持三档独有。推送
+   * 分支任何档都直推(2026-09-17 推送过目退役,ADR-0009 增补)。
    * 回调缺席=缺省二档(裸构造/测试形态与产品缺省一致)。 */
   interventionTier?: (account?: string) => IssueInterventionTier;
   /** 账号角色查询(ADR-0031 指派校验):账号不存在或已停用返回
@@ -3348,8 +3350,8 @@ export class IssueFlowService {
   /** 介入档位的闸代答(ADR-0006 口径,ADR-0019 收进一档「全自动」):
    * 只代答"确认类"闸——analysis_confirm 全量(推荐码表定死 confirm);
    * conclude 仅提案 non_issue 且自报高置信(闭环无下游闸,分级保守)。
-   * env_needed/env_verify 问的是用户的事实(环境配置/验证结果),一/
-   * 二档根本不举、三档等人,永不代答;pipeline_unfixable/pipeline_evidence
+   * env_needed/env_verify 问的是用户的事实(环境配置/验证结果),
+   * 任何档位都等人,永不代答;pipeline_unfixable/pipeline_evidence
    * 问的是"人是否已在交付平台处理/豁免"与"报错原文"——都是只有人
    * 拿得到的人工事实(票 03),任何档位永不代答。
    * 作答 defer 到回合收口(turning 释放)之后,走 answer() 同一裁决
@@ -4138,8 +4140,9 @@ export class IssueFlowService {
       },
       gitCredential: () =>
         this.options.gitCredential?.(live.state.account),
-      // 介入档位现值:env 闸的举卡条件之一(一/二档不向用户索取环境,
-      // 缺口写进分析报告,见 tools 侧守卫)。
+      // 介入档位现值:build_deploy 随路 env_verify 卡的举卡条件(三档
+      // 独有);env_needed 配置卡三档同举,不再随档位分叉(ADR-0019
+      // 2026-10-31 增补)。
       interventionTier: () => this.tierOf(live),
       // skill 圈选入口闸(ADR-0011):complete_stage 推进进 analyze 时
       // 调用,service 现读现判决定举不举(见 raiseSkillSelectionGate)。

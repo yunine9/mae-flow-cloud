@@ -287,7 +287,7 @@ test("服务级冒烟:真实会话的协作流有回合回放,在场闸投影为
   const service = new IssueFlowService({
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
-    // 等 env 闸的管道测试:三档对齐 env 闸照举(一/二档不举)。
+    // 等 env 闸的管道测试:三档对齐(2026-10-31 起三档同举,ADR-0019 增补)。
     interventionTier: () => "3",
   });
   try {
