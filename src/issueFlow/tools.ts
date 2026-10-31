@@ -86,6 +86,7 @@ import {
   dirtyWorktree,
   pushFromIssueWorkspace,
   remoteBranchState,
+  syncBaselineBeforePush,
   type GitCredential,
 } from "./issueGit.ts";
 import { createMergeRequest } from "../mrClient.ts";
@@ -115,6 +116,9 @@ export interface IssueToolContext {
   persist(): void;
   /** 推送前固定执行上传的 Skill；没有此回调的离线工具环境保持原行为。 */
   beforePush?(repo: { dir: string; url: string }): Promise<string>;
+  /** 基线同步冲突现场交回容器前修复仓属主(ADR-0071):宿主 merge 以
+   * 宿主身份写文件,容器用户改不动;非隔离部署缺席即免修。 */
+  repairOwnership?(dir: string): void;
   assertActive?(): void;
   ops?: IssueOpsTools;
   dts?: DtsGateway;
@@ -880,16 +884,88 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       fail(promptCopy("receipts", "push.branch_mismatch",
         { expected, branch }));
     }
+    const ticket = state.ticket;
     // 强制覆盖意图(ADR-0063 修订):新命名下正常流程不会再撞远端同名
     // 分支,force 保留防平台侧罕见异动。覆盖前先现查远端同名分支当前
     // 位置(issueGit 侧),对不上即拒推——不盲盖。
     const force = params.force === true;
-    // 脏工作区熔断(2026-08-28 真实环境事故):AI 改了文件没 commit,
-    // push 推的是 clone 时的旧 HEAD,MR 没有 diff。与其让空 MR 静默
-    // 出厂,不如在这里点破并给出该做的事。
+    // 脏工作区熔断做实(2026-08-28 真实环境事故;ADR-0071):已跟踪
+    // 文件有未提交改动即拒推——push 推已提交历史,带脏改动推只会推出
+    // 旧 HEAD(MR 没 diff),基线合并也要求干净的树。未跟踪的过程产物
+    // 不拦(不改变推送内容;真与基线合并相撞时同步会如实报错让路)。
+    const dirty = (await dirtyWorktree(repo.dir))
+      .filter((line) => !line.startsWith("??"));
+    if (dirty.length) {
+      fail(promptCopy("receipts", "push.dirty", {
+        ticket, count: dirty.length, files: dirty.join("\n"),
+      }));
+    }
+    // 推送前基线同步(ADR-0071):基线有新提交先并进修复分支再推,MR
+    // 始终基于新鲜的基线;撞冲突当场交回 Agent 解决后重推。取不到基线
+    // 按 fail-open 照推留痕,传输故障不卡交付。
+    const baseline = state.baseline?.trim();
+    let syncedNote = "";
+    if (baseline) {
+      const sync = await syncBaselineBeforePush({
+        dataDir: ctx.dataRoot,
+        repoDir: repo.dir,
+        repoUrl: repo.url,
+        baseline,
+        ticket,
+        credential: ctx.gitCredential?.(),
+      });
+      if (sync.kind === "unavailable") {
+        recordTransition(state, {
+          source: "platform",
+          note: `推送前基线同步跳过(取基线失败): ${sync.reason};按原分支继续推送`,
+        });
+        ctx.persist();
+      } else if (sync.kind === "synced") {
+        // 按仓记账(一仓一分支):重推同仓覆盖旧账,不同仓各记各的。
+        const syncs = state.baseline_syncs ??= [];
+        const slot = syncs.findIndex((item) => item.repo === repo.url);
+        if (slot >= 0) syncs[slot] = sync.record; else syncs.push(sync.record);
+        recordTransition(state, {
+          source: "platform",
+          note: `推送前基线同步:${repo.url} ${sync.record.baseline} `
+            + `${sync.record.from.slice(0, 12)} → ${sync.record.to.slice(0, 12)},`
+            + `并入 ${sync.record.commits} 条新提交`,
+        });
+        ctx.persist();
+        // 宿主合并把基线变更以宿主身份写进工作区,交回容器前修属主,
+        // Agent 后续改得动(与冲突路径同一纪律);非隔离部署零开销。
+        ctx.repairOwnership?.(repo.dir);
+        syncedNote = `;已并入基线 ${sync.record.baseline} 的 `
+          + `${sync.record.commits} 条新提交`;
+      } else if (sync.kind === "conflict") {
+        const streak = (state.baseline_sync_conflicts ?? 0) + 1;
+        state.baseline_sync_conflicts = streak;
+        ctx.persist();
+        // 冲突现场交回容器前修属主:宿主 merge 以宿主身份写文件,不修
+        // 容器用户改不动(ADR-0071);非隔离部署/裸构造缺席即免修。
+        ctx.repairOwnership?.(repo.dir);
+        const escalate = streak >= 3
+          ? `\n\n基线持续变动:已连续 ${streak} 次推送撞上基线新提交的冲突,`
+            + "建议先与用户人工确认合并时机,再继续解决推送。"
+          : "";
+        fail(promptCopy("receipts", "push.sync_conflict", {
+          baseline, ticket,
+          count: sync.files.length,
+          files: sync.files.join("\n"),
+        }) + escalate);
+      } else if (sync.kind === "failed") {
+        fail(promptCopy("receipts", "push.sync_failed", { reason: sync.reason }));
+      }
+    } else {
+      // 有单会话基线必在(登记闸保证);缺席属异常状态,留痕后照推。
+      recordTransition(state, {
+        source: "platform",
+        note: "推送前基线同步跳过:会话没有基线分支,按原分支继续推送",
+      });
+      ctx.persist();
+    }
     const codecheck = await ctx.beforePush?.(repo);
     ctx.assertActive?.();
-    const dirty = await dirtyWorktree(repo.dir);
     const receipt = await pushFromIssueWorkspace({
       dataDir: ctx.dataRoot,
       repoDir: repo.dir,
@@ -907,6 +983,8 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     };
     const slot = pushes.findIndex((item) => item.repo === repo.url);
     if (slot >= 0) pushes[slot] = record; else pushes.push(record);
+    // 推送成功即清零连续同步冲突计数(ADR-0071:「连续」指推送接连被拒)。
+    if (state.baseline_sync_conflicts) state.baseline_sync_conflicts = 0;
     recordTransition(state, {
       source: "platform",
       note: `分支已推送 ${repo.url} ${receipt.branch} @ ${receipt.sha.slice(0, 12)}`
@@ -917,7 +995,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     ctx.onBranchPushed?.(repo.url);
     return ok(`已推送 ${receipt.branch} @ ${receipt.sha.slice(0, 12)}`
       + `(仓 ${repo.url})${receipt.forced ? "(强制覆盖远端同名分支)" : ""}`
-      + `${dirty.length ? `；工作区另有 ${dirty.length} 条未提交改动，未包含在本次推送` : ""}`
+      + `${syncedNote}`
       + (codecheck ? `\n${codecheck}` : ""));
   };
   tools.push(defineTool({
@@ -928,6 +1006,9 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       + "走本工具)。平台机械校验:会话已绑定单号、分支名为会话修复分支"
       + "(<基线>_<工号>_<单号>_<时间戳>,平台生成并全程固定,以拉仓回执"
       + "为准);多仓交付逐仓串行推送,推送后返回 SHA。"
+      + "推送前宿主自动同步基线:基线有新提交先合并进修复分支再推,"
+      + "撞冲突时本次推送被拒、回执列冲突文件——按回执解决冲突并 commit "
+      + "后重推即可,不要绕开。"
       + "force=true 强制覆盖远端同名分支:新命名下正常流程不会撞名,"
       + "只防平台侧罕见异动——覆盖前先现查远端同名分支当前位置,对不上"
       + "即拒推,不盲盖。",
