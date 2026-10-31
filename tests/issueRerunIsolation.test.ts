@@ -130,6 +130,11 @@ test("取消后重跑同单:新会话新目录全新克隆,各用各的时间戳
     assert.equal(service.get(first.id).status, "canceled");
 
     // 取消是终态,单号查重放行:同账号新会话必须开新目录。
+    // 分支名时间戳秒级粒度(ADR-0063):快机上重跑会落进同一秒,两名
+    // 相同而会话仍独立——垫出秒界,保住「各用各的时间戳新名」断言的
+    // 确定性(CI 实锤:2026-10-31 首跑即同秒撞名)。
+    const secondsBoundary = 1_000 - (Date.now() % 1_000);
+    await new Promise(resolve => setTimeout(resolve, secondsBoundary + 5));
     const second = service.create({
       account: "dev", title: "开局飞跑(重跑)", ticket: TICKET,
       source: "dts", repoUrl: origin, baseline: BASELINE,
