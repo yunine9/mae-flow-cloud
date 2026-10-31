@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { seedTechnologyStacks } from "./fixtures/technologyStacks.ts";
 import { createTaskServer } from "../src/server.ts";
 import { ScriptedModelServer } from "../src/scriptedModel.ts";
 import { TaskService } from "../src/taskService.ts";
@@ -538,7 +539,10 @@ test("HTTP 显式选择保持兼容；未选择时等待 Git 现场原生发现"
   const repo = repository("http", [
     { root: ".agents", name: "http-api", marker: "HTTP-MARKER" },
   ]);
-  const taskService = service(mfcTemp("mfc-skill-http-data-"));
+  const dataDir = mfcTemp("mfc-skill-http-data-");
+  // 技术栈确认是新任务硬契约:栈须在库(requireTechnologyStacks),先种。
+  seedTechnologyStacks(dataDir, ["javascript"]);
+  const taskService = service(dataDir);
   const server = createTaskServer(taskService);
   await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
   const address = server.address();

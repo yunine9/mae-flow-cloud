@@ -68,7 +68,8 @@ test("领域重新萃取复用单号、上传资料、源码和归档配置，�
     await until(() => !!replacementRun); assert.equal(latestDigest, latest.digest); assert.notEqual(latestDigest, current.digest);
     assert.equal(replacementRun!.turn.research, undefined); assert.equal(replacementRun!.job.documents.length, 0);
     assert.deepEqual(readKnowledgeDocument(dir, formal.id), formal);
-    assert.deepEqual(JSON.parse(readFileSync(join(dir, "domain-extraction", original.id, "job.json"), "utf8")).publications, completed.publications, "重新萃取不会删除原任务的 MR 证据");
+    // 内存对象的 attempted_documents:undefined 键在 JSON 落盘时消失,过一遍 JSON 归一。
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, "domain-extraction", original.id, "job.json"), "utf8")).publications, JSON.parse(JSON.stringify(completed.publications)), "重新萃取不会删除原任务的 MR 证据");
     await service.shutdown();
     const restarted = new DomainKnowledgeExtraction(dir, async () => "不应执行");
     try { assert.equal(restarted.reextract(original.id, "bob").id, next.id); assert.equal(restarted.list().length, 1); }
