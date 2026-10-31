@@ -4128,6 +4128,10 @@ export interface DtsTicketBrief {
   submitter?: string;
   url?: string;
   description?: string;
+  /** 自动接单单级排除标记(ADR-0070):服务端按排除表逐单补齐;在场=
+   *  排除(定时扫描器跳过这张单),缺席=允许不带字段——两态下拉的
+   *  缺省值即「允许」。 */
+  auto_claim_excluded?: boolean;
 }
 
 /** 单张问题单详情(页签展开用):列表字段优先,详情接口补齐描述全文。
@@ -4974,6 +4978,26 @@ export function putDtsModuleBinding(
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(moduleId ? { module_id: moduleId } : {}),
+    },
+  );
+}
+
+/** 写自动接单单级排除(ADR-0070):excluded=true 落条目(PUT)、false
+ *  删条目恢复允许(DELETE),幂等。接口在登录闸后,操作人取登录身份,
+ *  客户端不传账号。 */
+export function putDtsAutoClaimExclusion(
+  ticket: string,
+  excluded: boolean,
+): Promise<{ ticket: string; excluded: boolean;
+  updated_by?: string; updated_at?: string }> {
+  return issueFetch(
+    `/issues/dts-auto-claim-exclusions/${encodeURIComponent(ticket)}`,
+    {
+      method: excluded ? "PUT" : "DELETE",
+      ...(excluded && {
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      }),
     },
   );
 }

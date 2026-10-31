@@ -311,6 +311,9 @@ export interface DtsTicketBrief {
   /** 特性名(单据字段 sFeatureNoName,列表查询需 fields 显式请求):
    * 业务模块强匹配的关键字段(ADR-0056),路由层据此带出 module_id。 */
   featureName?: string;
+  /** 自动接单排除标记(ADR-0070):路由层按服务端排除表补齐,网关
+   * 不产;被排除的单带 true,缺省允许不加字段。 */
+  auto_claim_excluded?: boolean;
 }
 
 export interface DtsTicketDetail {

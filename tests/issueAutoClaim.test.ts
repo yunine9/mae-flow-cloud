@@ -122,6 +122,16 @@ function auditRows(dataDir: string): Array<Record<string, unknown>> {
     .filter(Boolean).map((line) => JSON.parse(line));
 }
 
+/** 种排除存储(ADR-0070):直接落 dts-auto-claim-exclusions.json 的
+ * 真实形状,条目在场=排除;空对象=全部取消(条目删除,不留墓碑)。 */
+function seedExclusions(
+  dataDir: string,
+  exclusions: Record<string, { updated_by: string; updated_at: string }>,
+): void {
+  writeFileSync(join(dataDir, "dts-auto-claim-exclusions.json"),
+    JSON.stringify({ version: 1, exclusions }));
+}
+
 test("同尺过滤矩阵:各闸各挡,全过的单才发起", async () => {
   const dataDir = mfcTemp("mfc-autoclaim-");
   seedFixture(dataDir);
@@ -310,6 +320,35 @@ test("个人自助开关(2026-10-10 修订):本人翻转生效,管理员拒收,�
     await issues.shutdown();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+});
+
+test("单级排除闸(ADR-0070):三闸全过的单被排除即跳过并落「用户排除」审计,取消下一拍恢复", async () => {
+  const dataDir = mfcTemp("mfc-autoclaim-");
+  seedFixture(dataDir);
+  configureAudit(join(dataDir, "logs"));
+  const { deps, created } = fakeDeps(dataDir, {
+    accounts: ["dev1"],
+    briefs: [brief({ ticket: "DTSX" }), brief({ ticket: "DTSY" })],
+  });
+  // DTSX 三道预筛全过,但被用户标记排除:本拍跳过,只 DTSY 被接。
+  seedExclusions(dataDir, {
+    DTSX: { updated_by: "someone", updated_at: "2026-10-31T08:00:00Z" },
+  });
+  const first = await runAutoClaimTick(deps);
+  assert.deepEqual(first.claimed.map((c) => c.ticket), ["DTSY"]);
+  assert.equal(first.skipped, 1);
+  assert.equal(created.length, 1);
+  // 审计行与其他跳过可区分:原因单列「用户排除」语义,带操作人。
+  const skipped = auditRows(dataDir)
+    .filter((row) => row.ticket === "DTSX" && row.kind === "auto_claim.skipped");
+  assert.equal(skipped.length, 1);
+  assert.match(String(skipped[0].reason), /用户排除/);
+  assert.match(String(skipped[0].reason), /someone/);
+  // 取消排除(条目删除):同一单下一拍恢复自动接单。
+  seedExclusions(dataDir, {});
+  const second = await runAutoClaimTick(deps);
+  assert.deepEqual(second.claimed.map((c) => c.ticket), ["DTSX", "DTSY"]);
+  assert.equal(second.skipped, 0);
 });
 
 test("调度器排程:装配即有下次扫描时刻,间隔改 0 重排后转入已暂停", async () => {

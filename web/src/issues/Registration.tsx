@@ -47,6 +47,7 @@ import {
   listCollaborationAssignees,
   listDtsTickets,
   listPeople,
+  putDtsAutoClaimExclusion,
   putDtsModuleBinding,
   uploadIssueImage,
   uploadIssueAttachment,
@@ -685,7 +686,7 @@ function ManualRegister({
 
 type DtsColKey =
   | "select" | "ticket" | "title"
-  | "launch" | "remark" | "module" | "tier";
+  | "launch" | "remark" | "module" | "tier" | "autoClaim";
 
 /** 默认列宽(px):初版沿用迁表时的现行宽度(w-28/w-64/w-24/w-56);
  * 2026-10-14 按使用观感调整——备注格是截断预览钮用不了 240 那么宽,
@@ -693,23 +694,24 @@ type DtsColKey =
  * 列,吃掉全部剩余宽度(拖其他列都是从它身上要地方,初览观感不变)。 */
 const DTS_COL_DEFAULT: { [K in Exclude<DtsColKey, "title">]: number } = {
   select: 64, ticket: 150,
-  launch: 96, remark: 180, module: 200, tier: 116,
+  launch: 96, remark: 180, module: 200, tier: 116, autoClaim: 116,
 };
 /** 拖动下限:再窄内容就互相打架(单号列要放得下完整单号)。 */
 const DTS_COL_MIN: Record<DtsColKey, number> = {
   select: 48, ticket: 120, title: 160,
-  launch: 88, remark: 140, module: 120, tier: 96,
+  launch: 88, remark: 140, module: 120, tier: 96, autoClaim: 96,
 };
 /** 拖动上限(2026-10-14 随引擎迁移补上):手写版只有下限,单列拖到
  * 几千像素表就横向滚不到头;上限封住跑飞,超宽内容格内自行滚动。 */
 const DTS_COL_MAX: Record<DtsColKey, number> = {
   select: 96, ticket: 320, title: 1200,
-  launch: 220, remark: 800, module: 400, tier: 240,
+  launch: 220, remark: 800, module: 400, tier: 240, autoClaim: 240,
 };
 /** 列头人话(把手 aria 用;列设置 popover 的可显隐清单另含业务释义)。 */
 const DTS_COL_LABEL: Record<DtsColKey, string> = {
   select: "勾选", ticket: "单号", title: "标题",
   launch: "发起状态", remark: "附加信息", module: "所属模块", tier: "介入档位",
+  autoClaim: "自动接单",
 };
 /** 单元格排版(表定宽后格内的裁剪策略,随列走不随格写)。 */
 const DTS_CELL_CLASS: Partial<Record<DtsColKey, string>> = {
@@ -735,6 +737,18 @@ const DTS_HIDEABLE_COLS: Array<{ key: DtsColKey; label: string }> = [
   // 进阶需求,不占默认视野;要在列设置里自己打开。显隐极性与其余
   // 数据列相反(默认关,点名才开),单独存一份按人记忆。
   { key: "tier", label: "介入档位" },
+  // 自动接单排除(ADR-0070)同极性:按单调「排除」是少数人的逃生门
+  // 操作,默认不占视野,点名才开。
+  { key: "autoClaim", label: "自动接单" },
+];
+
+/** 默认隐藏、点名才开的列(显隐极性反转表):tier(ADR-0058)与
+ *  autoClaim(ADR-0070)两列默认关,与其余数据列「默认开、勾掉进
+ *  hiddenCols」极性相反,逐列单独一份按人记忆,免得「缺席」一词
+ *  两头解读。 */
+const DTS_OPT_IN_COLS: ReadonlyArray<{ key: DtsColKey; storage: string }> = [
+  { key: "tier", storage: "mae-flow:dts-tier-col" },
+  { key: "autoClaim", storage: "mae-flow:dts-autoclaim-col" },
 ];
 
 /** 介入档位三档(ADR-0057):与个人设置「人工介入程度 · 问题处理」
@@ -753,6 +767,15 @@ const TIER_FOLLOW = "__follow";
 const TIER_SELECT_ITEMS = [
   { value: TIER_FOLLOW, label: "跟随全局" },
   ...TIER_OPTIONS,
+] as const;
+
+/** 自动接单两态(ADR-0070):「允许」=缺省(排除表无条目,照常参与
+ *  定时自动接单),「排除」=扫描器跳过这张单,人工发起不受影响。
+ *  items 模块级常量(同 TIER_SELECT_ITEMS:标识稳定,弹层开着撞上
+ *  轮询重渲染不被收掉)。 */
+const CLAIM_SELECT_ITEMS = [
+  { value: "allow", label: "允许" },
+  { value: "exclude", label: "排除" },
 ] as const;
 
 /** 随单附件条目(#502):显示名留原始文件名给人看,path 是暂存引用
@@ -1005,25 +1028,32 @@ function DtsRegister({
         DTS_HIDEABLE_COLS.some((col) => col.key === key)));
     } catch { return new Set(); }
   });
-  // 介入档位列单独一份显隐记忆(2026-09-24 用户拍板默认隐藏):其余
-  // 数据列默认开、勾掉进 hiddenCols;这列默认关、点名才开,极性相反
-  // 不共用一份集合,免得「缺席」一词两头解读。
-  const tierColShownKey = `mae-flow:dts-tier-col:${viewer.username}`;
-  const [tierColShown, setTierColShown] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem(tierColShownKey) === "1";
-    } catch { return false; }
-  });
+  // 默认隐藏列的显隐记忆(介入档位 2026-09-24 用户拍板默认隐藏;自动
+  // 接单 ADR-0070 同极性):其余数据列默认开、勾掉进 hiddenCols;这两
+  // 列默认关、点名才开,极性相反不共用一份集合,免得「缺席」一词两头
+  // 解读——DTS_OPT_IN_COLS 逐列单独一份按人记忆。
+  const [optInColShown, setOptInColShown] = useState<Record<string, boolean>>(
+    () => Object.fromEntries(DTS_OPT_IN_COLS.map((col) => {
+      try {
+        return [col.key,
+          localStorage.getItem(`${col.storage}:${viewer.username}`) === "1"];
+      } catch { return [col.key, false]; }
+    })));
   useEffect(() => {
-    try {
-      localStorage.setItem(tierColShownKey, tierColShown ? "1" : "0");
-    } catch { /* 旁路:存不下就本次会话内有效 */ }
-  }, [tierColShown, tierColShownKey]);
+    for (const col of DTS_OPT_IN_COLS) {
+      try {
+        localStorage.setItem(`${col.storage}:${viewer.username}`,
+          optInColShown[col.key] ? "1" : "0");
+      } catch { /* 旁路:存不下就本次会话内有效 */ }
+    }
+  }, [optInColShown, viewer.username]);
   const colShown = (key: DtsColKey) =>
-    key === "tier" ? tierColShown : !hiddenCols.has(key);
+    DTS_OPT_IN_COLS.some((col) => col.key === key)
+      ? optInColShown[key] === true
+      : !hiddenCols.has(key);
   const toggleCol = (key: DtsColKey, shown: boolean) => {
-    if (key === "tier") {
-      setTierColShown(shown);
+    if (DTS_OPT_IN_COLS.some((col) => col.key === key)) {
+      setOptInColShown((current) => ({ ...current, [key]: shown }));
       return;
     }
     setHiddenCols((prev) => {
@@ -1042,6 +1072,12 @@ function DtsRegister({
   // 行内保存反馈:哪张单正在存/哪张单存失败(失败显示原因,选择回滚)。
   const [bindingTicket, setBindingTicket] = useState("");
   const [bindFail, setBindFail] = useState<{ ticket: string; message: string }>();
+  // 自动接单排除(ADR-0070):行字段 auto_claim_excluded 是服务端事实,
+  // 选即存的乐观覆盖单独一份(改写失败回滚用);进行中保存与失败原因
+  // 与所属模块列同款逐行反馈。所有行可改,不限发起状态。
+  const [claimExcluded, setClaimExcluded] = useState<Record<string, boolean>>({});
+  const [claimTicket, setClaimTicket] = useState("");
+  const [claimFail, setClaimFail] = useState<{ ticket: string; message: string }>();
   // 下拉目录与登记页同一把尺:active 且至少绑一个仓——绑了也没用的
   // 模块不给选。
   const moduleCatalog = useMemo(() => (modules ?? [])
@@ -1289,6 +1325,7 @@ function DtsRegister({
     remark: colShown("remark"),
     module: colShown("module"),
     tier: colShown("tier"),
+    autoClaim: colShown("autoClaim"),
   };
   const columns: Array<ColumnDef<DtsTicketBrief, unknown>> = [
     {
@@ -1614,6 +1651,49 @@ function DtsRegister({
               </Select>;
       },
     },
+    {
+      // 自动接单列(ADR-0070):按单号把这张单挡在定时自动接单之外,
+      // 只拦扫描器、人工发起不受影响。默认隐藏(照介入档位列极性),
+      // 点名显示后每格两态下拉「允许/排除」,缺省「允许」(行字段
+      // 缺席即允许);选即存、失败回滚(照所属模块列)。所有行可改,
+      // 不限发起状态与视角——能看见这单就能改,与单号→模块映射同尺。
+      id: "autoClaim",
+      size: DTS_COL_DEFAULT.autoClaim,
+      minSize: DTS_COL_MIN.autoClaim, maxSize: DTS_COL_MAX.autoClaim,
+      header: () => (
+        <span className="inline-flex items-center gap-1"
+          title="把这张单挡在定时自动接单之外:排除=扫描器跳过(人工发起不受影响),允许=照常参与自动接单">
+          自动接单
+        </span>
+      ),
+      cell: ({ row }) => {
+        const ticket = row.original;
+        const excluded = claimExcluded[ticket.ticket]
+          ?? ticket.auto_claim_excluded === true;
+        return <>
+          <Select
+            value={excluded ? "exclude" : "allow"}
+            items={CLAIM_SELECT_ITEMS}
+            disabled={claimTicket === ticket.ticket}
+            onValueChange={(value) =>
+              void saveClaimExclusion(ticket.ticket, value === "exclude")}>
+            <SelectTrigger className="h-8 w-full text-xs"
+              aria-label={`${ticket.ticket} 自动接单`}
+              title="排除=定时自动接单跳过这张单(选即存,失败回滚);允许=照常参与自动接单">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="tw-root">
+              <SelectItem value="allow">允许</SelectItem>
+              <SelectItem value="exclude">排除</SelectItem>
+            </SelectContent>
+          </Select>
+          {claimFail?.ticket === ticket.ticket
+            && <p className="mt-1 text-xs text-destructive" role="alert">
+              {claimFail.message}
+            </p>}
+        </>;
+      },
+    },
   ];
   const table = useReactTable({
     data: display,
@@ -1753,6 +1833,33 @@ function DtsRegister({
       });
     } finally {
       setBindingTicket("");
+    }
+  }
+
+  /** 选即存(照所属模块列):乐观更新本地覆盖,改写失败回滚为原值
+   *  并把原因落在那一行。排除落条目、允许删条目,幂等;所有行可改,
+   *  不限发起状态——已发起的单同样能改(终态会话后防被重新接走的
+   *  逃生门)。 */
+  async function saveClaimExclusion(ticketNo: string, excluded: boolean) {
+    const previous = claimExcluded[ticketNo];
+    setClaimTicket(ticketNo);
+    setClaimFail(undefined);
+    setClaimExcluded((current) => ({ ...current, [ticketNo]: excluded }));
+    try {
+      await putDtsAutoClaimExclusion(ticketNo, excluded);
+    } catch (reason) {
+      setClaimExcluded((current) => {
+        const next = { ...current };
+        if (previous === undefined) delete next[ticketNo];
+        else next[ticketNo] = previous;
+        return next;
+      });
+      setClaimFail({
+        ticket: ticketNo,
+        message: String(reason instanceof Error ? reason.message : reason),
+      });
+    } finally {
+      setClaimTicket("");
     }
   }
 
