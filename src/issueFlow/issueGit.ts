@@ -17,14 +17,17 @@ import { GIT_TRANSFER_TIMEOUT_MS } from "../gitTransferBudget.ts";
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { createSafeGitView } from "../safeGit.ts";
 import { publishGitAiNotes } from "../gitAiNotes.ts";
+import type { IssueBaselineSyncRecord } from "./state.ts";
 
 export interface GitCredential {
   username: string;
@@ -488,6 +491,160 @@ export async function pushFromIssueWorkspace(options: {
       branch: options.branch, sha, url: remoteUrl,
       ...(options.force === true ? { forced: true } : {}),
     };
+  } finally {
+    view?.cleanup();
+    sandbox.cleanup();
+  }
+}
+
+export type BaselineSyncOutcome =
+  | { kind: "current" }
+  | { kind: "synced"; record: IssueBaselineSyncRecord }
+  | { kind: "conflict"; files: string[] }
+  | { kind: "unavailable"; reason: string }
+  | { kind: "failed"; reason: string };
+
+/** 推送前基线同步(ADR-0071):把基线分支的新提交并进当前修复分支。
+ *
+ * fetch/merge 与其他宿主 git 写同一套边界:refs/objects/index 看真实
+ * 仓,config 来自空代理 gitdir,凭据只进一次性沙箱。merge 允许
+ * fast-forward(分支尚无自有提交时只移分支头,不产生提交);不用
+ * rebase——修复分支上的提交是合规账,不重写历史。合并提交身份与
+ * 克隆同源(宿主凭据,缺 email 按本机占位)经 -c 进命令,代理 gitdir
+ * 不读仓 config,克隆时写入的身份在这里看不见。
+ *
+ * 结果分五路由调用方分叉:current=基线无新提交;synced=干净合并完成;
+ * conflict=冲突现场已落盘(代理 gitdir 生成的 MERGE_HEAD 等复制回真实
+ * gitdir,Agent 的普通 git commit 才能收掉这场合并),推送必须拒绝;
+ * unavailable=取不到基线,fail-open 照推留痕,传输故障不卡交付;
+ * failed=merge 失败且无冲突文件,现场已 abort 还原。 */
+export async function syncBaselineBeforePush(options: {
+  dataDir: string;
+  repoDir: string;
+  repoUrl: string;
+  baseline: string;
+  ticket: string;
+  credential?: GitCredential;
+}): Promise<BaselineSyncOutcome> {
+  const baseline = options.baseline.trim();
+  if (!existsSync(join(options.repoDir, ".git"))) {
+    return { kind: "failed", reason: `代码克隆不存在: ${options.repoDir}` };
+  }
+  const format = await runGit(
+    ["check-ref-format", "--branch", baseline],
+    { env: process.env, timeoutMs: 10_000 });
+  if (format.code !== 0) {
+    return { kind: "failed", reason: `基线分支名不合法: ${baseline}` };
+  }
+  const remoteUrl = validateRepoUrl(options.repoUrl);
+  const sandbox = prepareSandbox(options.dataDir, options.credential,
+    options.repoDir);
+  let view: ReturnType<typeof createSafeGitView> | undefined;
+  const name = options.credential?.username ?? "mae-flow-cloud";
+  const email = options.credential?.email
+    ?? `${name.replace(/[^a-zA-Z0-9_.+-]/g, "-")}@localhost`;
+  try {
+    view = createSafeGitView(options.repoDir);
+    const baseRef = `refs/remotes/origin/${baseline}`;
+    const git = (...args: string[]) => runGit(
+      [...sandbox.args, "-c", `user.name=${name}`, "-c", `user.email=${email}`,
+        ...args], {
+        cwd: options.repoDir,
+        env: view!.environment(sandbox.env),
+        timeoutMs: args[0] === "fetch" || args[0] === "merge"
+          ? GIT_TRANSFER_TIMEOUT_MS : 30_000,
+      });
+    const fetched = await git("fetch", "--quiet", "--no-tags",
+      "--no-recurse-submodules", remoteUrl,
+      `+refs/heads/${baseline}:${baseRef}`);
+    if (fetched.code !== 0) {
+      const detail = (fetched.stderr || fetched.stdout).trim()
+        .split(/\r?\n/)[0] ?? "";
+      return {
+        kind: "unavailable",
+        reason: `fetch ${baseline} 失败: ${detail.slice(0, 300)}`,
+      };
+    }
+    const tip = (await git("rev-parse", "--verify", `${baseRef}^{commit}`))
+      .stdout.trim();
+    if (!/^[0-9a-f]{40}$/i.test(tip)) {
+      return {
+        kind: "unavailable",
+        reason: `远端基线 ${baseline} 取回后读不到分支头`,
+      };
+    }
+    const ancestor = await git("merge-base", "--is-ancestor", baseRef, "HEAD");
+    if (ancestor.code === 0) return { kind: "current" };
+    if (ancestor.code !== 1) {
+      // 非 0/1 的退出码是环境怪状(仓损坏之类),不是"有新提交"。
+      return {
+        kind: "unavailable",
+        reason: `无法比对基线新旧: `
+          + `${(ancestor.stderr || ancestor.stdout).trim().slice(0, 200)}`,
+      };
+    }
+    const from = (await git("merge-base", "HEAD", baseRef)).stdout.trim();
+    if (!/^[0-9a-f]{40}$/i.test(from)) {
+      return {
+        kind: "unavailable",
+        reason: "算不出基线与修复分支的合并基(历史不相交?)",
+      };
+    }
+    const counted = await git("rev-list", "--count", `HEAD..${baseRef}`);
+    const commits = Number.parseInt(counted.stdout.trim(), 10);
+    const message = `[${options.ticket}][fix] 同步基线 ${baseline} 至 ${tip.slice(0, 12)}`;
+    const merged = await git("merge", "-m", message, baseRef);
+    if (merged.code === 0) {
+      return {
+        kind: "synced",
+        record: {
+          repo: options.repoUrl, baseline, from, to: tip,
+          commits: Number.isFinite(commits) ? commits : 0,
+          at: new Date().toISOString(),
+        },
+      };
+    }
+    const conflicted = String((await git(
+      "diff", "--no-ext-diff", "--no-textconv",
+      "--name-only", "--diff-filter=U")).stdout || "")
+      .trim().split("\n").filter(Boolean);
+    if (!conflicted.length) {
+      // merge 失败却没有冲突文件 = 环境怪状(脏文件之类),别把 Agent
+      // 派进一个说不清的现场,abort 后如实上报。
+      await git("merge", "--abort");
+      return {
+        kind: "failed",
+        reason: `merge 失败但没有冲突文件: `
+          + `${(merged.stderr || merged.stdout).trim().slice(0, 300)}`,
+      };
+    }
+    // 冲突现场落盘:merge 的状态文件生成在代理 gitdir,复制回真实
+    // gitdir 后 Agent 在容器里 git add/commit 就能收掉这场合并。若
+    // gitdir 内出现软链等异动,fail-closed 还原现场,绝不跟随写文件。
+    try {
+      for (const stateFile of [
+        "MERGE_HEAD", "MERGE_MODE", "MERGE_MSG", "ORIG_HEAD",
+      ]) {
+        const source = join(view.proxyGitDir, stateFile);
+        if (!existsSync(source)) continue;
+        const info = lstatSync(source);
+        if (!info.isFile() || info.isSymbolicLink()) {
+          throw new Error(`代理 Git 状态 ${stateFile} 不是普通文件`);
+        }
+        const destination = join(view.repositoryGitDir, stateFile);
+        if (existsSync(destination)) {
+          const existing = lstatSync(destination);
+          if (!existing.isFile() || existing.isSymbolicLink()) {
+            throw new Error(`任务 Git 状态 ${stateFile} 不是普通文件`);
+          }
+        }
+        writeFileSync(destination, readFileSync(source), { mode: 0o600 });
+      }
+    } catch (error) {
+      await git("merge", "--abort");
+      return { kind: "failed", reason: `冲突现场落盘失败: ${String(error)}` };
+    }
+    return { kind: "conflict", files: conflicted };
   } finally {
     view?.cleanup();
     sandbox.cleanup();

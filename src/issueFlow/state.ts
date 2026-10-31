@@ -149,6 +149,19 @@ export interface IssuePushRecord {
   at: string;
 }
 
+/** 推送前基线同步账(ADR-0071,按仓):宿主把基线新提交并进修复分支
+ * 的事实记录;同仓重推覆盖同仓旧账。内部机制账,不上 wire。 */
+export interface IssueBaselineSyncRecord {
+  repo: string;
+  baseline: string;
+  /** 并入前修复分支所基于的基线提交(merge-base)。 */
+  from: string;
+  /** 本次并入的基线新头。 */
+  to: string;
+  commits: number;
+  at: string;
+}
+
 /** 平台问题卡(固定流程的人工闸)。与 Agent 的 AskUserQuestion 挂起
  * (humanGate/waiting.json)是并行的两条机制:平台闸由宿主写进
  * issue.json——Agent 对该文件只读,推不动闸门,这正是"固定流程"
@@ -535,6 +548,12 @@ export interface IssueSessionState {
   conclusion?: IssueConclusion;
   /** 推送账(按仓,一仓一分支):只增不删,重推同分支覆盖同仓旧账。 */
   pushes?: IssuePushRecord[];
+  /** 基线同步账(ADR-0071,按仓):push_branch 前宿主把基线新提交并进
+   * 修复分支的落账;同仓重推覆盖同仓旧账。内部机制账,不上 wire。 */
+  baseline_syncs?: IssueBaselineSyncRecord[];
+  /** 连续「推送前基线同步撞冲突」计数(ADR-0071):任何一次推送成功
+   * 即清零;满 3 次回执升级提示人工确认时机,不硬停。内部机制账。 */
+  baseline_sync_conflicts?: number;
   /** MR 账(按仓,一仓一 MR):AI 的"上报"即 create_mr 的调用记录;
    *  merged_at/merged_sha/closed_at 是合入事实(ADR-0022)。 */
   mrs?: IssueMrRecord[];
@@ -730,6 +749,11 @@ export function summarize(state: IssueSessionState): IssueSummary {
     // 工作台的分支名事实都来自推送/MR 账与回执;要上前端先补镜像与
     // 样例,不白送。
     fix_branch: _fixBranch,
+    // baseline_syncs(基线同步账,ADR-0071)与 baseline_sync_conflicts
+    // (连续同步冲突计数)不上 wire:推送的内部前置卫生,工作台事实
+    // 经推送账与回执呈现;要上前端先补镜像与样例,不白送。
+    baseline_syncs: _baselineSyncs,
+    baseline_sync_conflicts: _baselineSyncConflicts,
     ...rest } = state;
   return {
     ...rest,

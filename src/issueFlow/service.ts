@@ -4138,6 +4138,16 @@ export class IssueFlowService {
       },
       gitCredential: () =>
         this.options.gitCredential?.(live.state.account),
+      // 基线同步冲突现场交回容器前修属主(ADR-0071):宿主 merge 以宿主
+      // 身份写文件,容器用户改不动;幂等 walk,非隔离部署零开销。
+      repairOwnership: (dir: string) => {
+        repairContainerCloneOwnership({
+          workspace: live.root,
+          dir,
+          user: this.options.isolation?.user,
+          runtime: this.options.ownershipRuntime,
+        });
+      },
       // 介入档位现值:env 闸的举卡条件之一(一/二档不向用户索取环境,
       // 缺口写进分析报告,见 tools 侧守卫)。
       interventionTier: () => this.tierOf(live),
