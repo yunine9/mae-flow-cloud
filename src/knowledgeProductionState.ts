@@ -78,13 +78,25 @@ function projectDomainCandidates(job: DomainKnowledgeJob): KnowledgeProductionVi
   const inspecting = job.task_kind === "inspection" && job.status === "idle" && !job.turns.length;
   const noChanges = job.task_kind === "inspection" && job.status === "done" && !job.turns.length
     && job.documents.every(document => document.content === document.base_content && !document.deleted && document.path === (document.base_path ?? document.path));
+  // 旧知识清理(模块迁移,#489)在独立任务上仍会发生:候选投影补齐与主投影
+  // 同款的清理分支,否则清理任务显示「待开始」,开始萃取/清理旧知识的
+  // 入口与失败文案全部丢失(2026-10-31 清存量红实锤)。
+  const cleanup = job.source_cleanup && !job.source_cleanup.started ? job.source_cleanup : undefined;
+  const cleanupReady = !!cleanup && cleanup.plans.length === cleanup.repositories.length
+    && cleanup.plans.every(plan => !(plan.selected_paths ?? plan.entries.map(entry => entry.path)).length
+      || cleanup.publications.some(publication => publication.target_id === plan.target_id && publication.url));
+  const cleanupFailed = !!cleanup?.publications.some(publication => publication.state === "failed");
   const status_label = working ? job.status === "queued" ? "排队中" : modifying ? "修改中" : "研究中"
     : archiving ? "正在创建 MR" : failed ? anyMerged ? "部分 MR 已合入，剩余 MR 创建失败" : "MR 创建失败" : allCurrentMerged ? "MR 已合入" : anyMerged ? "部分 MR 已合入" : job.status === "paused" ? "等待你确认"
-    : job.status === "failed" ? "执行失败" : job.status === "cancelled" ? "已停止" : inspecting ? "检视中" : noChanges ? "检视完成，无需修改" : opened ? "MR 待合入" : job.documents.length ? "文稿已就绪" : "待开始";
+    : job.status === "failed" ? "执行失败" : job.status === "cancelled" ? "已停止"
+    : cleanup ? cleanupReady ? "待开始萃取" : cleanupFailed ? "清理 MR 创建失败" : "待清理旧知识"
+    : inspecting ? "检视中" : noChanges ? "检视完成，无需修改" : opened ? "MR 待合入" : job.documents.length ? "文稿已就绪" : "待开始";
   const archiveAction = link({ id: "archive", label: failed ? "重试失败仓 MR" : opened || anyMerged ? "查看 MR" : "创建 MR", view: "archive" });
   const next = link(working || archiving || ["failed", "cancelled", "paused"].includes(job.status) ? { id: "progress", label: "查看进展", view: "progress" }
     : allCurrentMerged ? { id: "knowledge", label: "查看正式知识", view: "review", href: `?kbPage=module&kbModule=${encodeURIComponent(`business:${job.module_id ?? ""}`)}` }
-    : inspecting ? { id: "review", label: "继续检视", view: "review" } : archiveAction);
+    : inspecting ? { id: "review", label: "继续检视", view: "review" }
+    : cleanup ? { id: "progress", label: cleanupReady ? "开始萃取" : "清理旧知识", view: "progress" }
+    : archiveAction);
   const capabilities = job.turns.at(-1)?.research?.capabilities ?? [];
   const group = working || archiving ? "running" : failed || anyMerged && !allCurrentMerged ? "attention" : allCurrentMerged || opened || noChanges ? "completed" : "attention";
   const docs = job.documents.map(document => {
