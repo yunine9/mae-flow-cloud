@@ -6,7 +6,7 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { TaskService } from "../src/taskService.ts";
 import { createTaskServer } from "../src/server.ts";
-import { KnowledgeSearch } from "../src/knowledgeSearch.ts";
+import { readBusinessKnowledgeAsset } from "../src/businessModuleLibrary.ts";
 import { seedTechnologyStacks } from "./fixtures/technologyStacks.ts";
 
 function createService(dataDir: string, host?: { kernelRoot: string; repoPath: string }): TaskService {
@@ -114,11 +114,11 @@ test("B1验收3：模块管理、资产消费与发起预览保留当前版本",
       });
       assert.equal(task.business_modules?.[0].assets[0].version, 1);
       assert.equal("engineering_knowledge" in task, false);
-      const knowledge = new KnowledgeSearch(dataDir);
-      const context = { repo: "orders", repositories: [repository], moduleIds: ["orders"] };
-      assert.match(JSON.stringify(knowledge.read(context, "module:orders:refund")), /退款必须幂等/);
+      // 模块资产已退出统一检索面(正文统一从正式 Git 快照读取);
+      // 「保留当前版本」按模块键直读资产钉住。
+      assert.match(readBusinessKnowledgeAsset(dataDir, "orders", "refund").content, /退款必须幂等/);
       assert.equal((await fetch(base + assetPath, { method: "DELETE" })).status, 200);
-      assert.equal(knowledge.read(context, "module:orders:refund"), undefined);
+      assert.equal(readBusinessKnowledgeAsset(dataDir, "orders", "refund").asset.status, "archived", "删除后归档,不再作为当前版本消费");
     } finally {
       await service.shutdown();
       await new Promise<void>((resolve) => server.close(() => resolve()));

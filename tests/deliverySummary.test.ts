@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -159,7 +159,12 @@ test("shutdown 取消独立子会话，不留下后台发布", async () => {
   } finally { f.dispose(); }
 });
 
-test("4+1 的图真实渲染，其他章节或代码示例中的图不能代替", async () => {
+test("4+1 的图真实渲染，其他章节或代码示例中的图不能代替", async (t) => {
+  // PlantUML 改参考实现服务端出图后要真 Java(df128f53);无 JDK 的测试
+  // 环境跳过——与容器真件/PG 缺环境自动跳过同款分层纪律。
+  if (spawnSync("java", ["-version"], { stdio: "ignore" }).status !== 0) {
+    return t.skip("宿主无 JDK,真实出图用例跳过(生产宿主应带 JDK)");
+  }
   assert.equal(await validateSummaryDiagrams(diagram), undefined);
   assert.equal(await validateSummaryDiagrams(diagram.replace("## 改动点 4+1\n", "").replaceAll("###", "##")), undefined, "允许直接排列五个视角，不强制总章节标题");
   assert.match((await validateSummaryDiagrams("no diagram"))!, /缺少/);
@@ -198,7 +203,11 @@ for (const failed of [false, true]) {
 }
 
 
-test("真实 Pi 子会话只读固定 diff/源码及执行证据，修正图后发布并通知", async () => {
+test("真实 Pi 子会话只读固定 diff/源码及执行证据，修正图后发布并通知", async (t) => {
+  // 同上:修正图后发布要真渲染 PlantUML,无 JDK 环境整用例跳过。
+  if (spawnSync("java", ["-version"], { stdio: "ignore" }).status !== 0) {
+    return t.skip("宿主无 JDK,真实出图用例跳过(生产宿主应带 JDK)");
+  }
   const f = fixture();
   const model = new ScriptedModelServer([
     { tool: { name: "delivery_source", input: { action: "diff", path: "service.cpp" } } },

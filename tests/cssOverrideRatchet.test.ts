@@ -17,11 +17,12 @@ import { join } from "node:path";
 
 const dir = new URL("../web/src/", import.meta.url).pathname;
 // #233 收官:web/src 手写样式只进 tailwind.css(19 个 legacy 文件退役)。
-// 2026-10 起在册两份:知识库问答页加了第二个组件样式(#476),按层
-// 纪律包 legacy 后入册;再新增文件先来这里登记并包层。
+// 2026-10 起在册三份:知识库问答页(#476)与任务演示页(TaskDemo,
+// 随演示模式落地)各有一个组件样式,均按层纪律包 legacy 后入册;
+// 再新增文件先来这里登记并包层。
 const files = readdirSync(dir).filter((name) => name.endsWith(".css"));
-assert.deepEqual(files, ["KnowledgeAnswers.css", "tailwind.css"],
-  "web/src 手写样式文件只限在册两份,新文件先改这里登记");
+assert.deepEqual(files, ["KnowledgeAnswers.css", "TaskDemo.css", "tailwind.css"],
+  "web/src 手写样式文件只限在册三份,新文件先改这里登记");
 const css = Object.fromEntries(files.map((name) => [name, readFileSync(join(dir, name), "utf-8")]));
 
 // 2026-09-06 晚拧到当前实测值(删死 CSS 后):要升必须来改这里并说清为什么。

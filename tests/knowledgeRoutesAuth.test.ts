@@ -61,7 +61,7 @@ test("知识任务与审阅接口要求登录，匿名读取和提交不能触�
     assert.ok(tasks.tasks.some(task => task.kind === "domain" && task.id === job.id));
     const emptyResponse = await request(path, cookie);
     assert.equal(emptyResponse.status, 200);
-    assert.deepEqual(await emptyResponse.json(), { notes: [] }, "匿名 POST 未写入批注");
+    assert.deepEqual(await emptyResponse.json(), { notes: [], submissions: {} }, "匿名 POST 未写入批注(submissions 为检视载荷新伴生字段)");
     const savedResponse = await request(path, cookie, noteInput);
     assert.equal(savedResponse.status, 200);
     const saved = await savedResponse.json() as { notes: KnowledgeReviewNote[] };

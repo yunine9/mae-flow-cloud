@@ -9,11 +9,18 @@ const retired = [
   "knowledgeCandidates", "engineeringKnowledgeRuntime", "skillDistiller",
   "knowledgeConsolidation", "knowledgeConsolidationAgent",
   "knowledgeConsolidationAudit", "knowledgeConsolidationStore",
-  "knowledgeConsolidationTypes", "knowledgeSourceCleanup", "domainKnowledgeProbe",
+  "knowledgeConsolidationTypes", "domainKnowledgeProbe",
+  // knowledgeSourceCleanup 原 B1 退役后,被 #489 模块迁移的「旧知识清理」
+  // 特性有意复名复活(src/knowledgeSourceCleanup.ts,现行机器非僵尸)。
+
   "componentApiBoundary", "componentResearchDocumentTool", "componentResearchMission",
   "KnowledgeDocuments", "KnowledgeCatalogTree", "KnowledgeTrial",
   "KnowledgeExport", "KnowledgeRepositoryTree", "KnowledgeConsolidation",
-  "KnowledgeConsolidationAudit", "KnowledgeSourceCleanup",
+  "KnowledgeConsolidationAudit",
+  // KnowledgeSourceCleanup(类/页组件)原 B1 退役后,被 #489 模块迁移的
+  // 「旧知识清理」特性有意复名复活:src/knowledgeSourceCleanup.ts 与
+  // web/src/KnowledgeSourceCleanup.tsx 都是现行机器,DomainKnowledgeExtraction
+  // 与 KnowledgeLibrary 在用,非僵尸。
 ];
 
 function sources(directory: string): string[] {

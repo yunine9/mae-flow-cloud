@@ -364,9 +364,10 @@ test("列表强匹配带出:特性名 trim 后与模块名完全相等且唯一�
     id: "dup-a", name: "重复模块", description: "d", owner: "dev",
     repositories: [origin],
   }, "tester");
+  // 知识目录按模块名派生,重名模块须显式给独立目录(目录重叠会被拦)。
   createBusinessModule(dataDir, {
     id: "dup-b", name: "重复模块", description: "d", owner: "dev",
-    repositories: [origin],
+    repositories: [origin], knowledge_path: "Function_Knowledge/Access Function/重复模块-b",
   }, "tester");
   const brief = (ticket: string, featureName?: string) => ({
     ticket, title: ticket,

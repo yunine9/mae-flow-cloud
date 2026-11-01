@@ -35,17 +35,17 @@ test("归档人员失败静默保留，重启后重试也不再调用已建MR的
   }, { publish });
   try {
     const job = service.create(config, "alice"); await until(() => service.get(job.id).status === "done");
-    await service.publish(job.id, "alice");
     await service.createArchive(job.id, { issue_no: config.issue_no, expected_revisions: service.previewArchive(job.id).expected_revisions }, "alice");
     const batchId = service.get(job.id).archive_batches!.find(batch => !!batch.issue_no)!.id;
-    assert.equal(service.get(job.id).production!.status_label, "已归档");
+    // 候选链路词表(13ff28b7):已开 MR = 「MR 待合入」,归档动作是「查看 MR」。
+    assert.equal(service.get(job.id).production!.status_label, "MR 待合入");
     const preview = service.previewArchive(job.id);
-    assert.equal(preview.status_label, "已归档");
+    assert.equal(preview.status_label, "MR 待合入");
     assert.deepEqual(preview.targets[0].mr_participants, failed);
     assert.equal(preview.targets[0].actions.length, 0);
     assert.equal(preview.targets[0].error, undefined);
     assert.doesNotMatch(preview.targets[0].message ?? "", /人员|重试/);
-    assert.equal(service.get(job.id).production!.archive.actions[0].label, "归档");
+    assert.equal(service.get(job.id).production!.archive.actions[0].label, "查看 MR");
     assert.equal(preview.targets[1].actions.length, 0);
     await service.shutdown(); service = new DomainKnowledgeExtraction(dir, async () => { throw new Error("不能重新执行研究"); }, { publish });
     const original = structuredClone(service.get(job.id).publications);
@@ -53,7 +53,7 @@ test("归档人员失败静默保留，重启后重试也不再调用已建MR的
     await service.retryArchive(job.id, "alice", { batch_id: batchId });
     const retained = service.get(job.id);
     assert.equal(retained.archive_batches!.find(batch => batch.id === batchId)!.state, "done");
-    assert.equal(retained.production!.status_label, "已归档");
+    assert.equal(retained.production!.status_label, "MR 待合入");
     assert.deepEqual(retained.publications, original, "复用链接并保留原内部人员结果");
     assert.deepEqual(calls, ["domain", "repo-1"]);
   } finally { await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
@@ -67,10 +67,11 @@ test("归档回执校验人员结果，拒绝损坏的状态、名单和说明�
   const reopened: DomainKnowledgeExtraction[] = [];
   try {
     const job = service.create(config, "alice"); await until(() => service.get(job.id).status === "done");
-    await service.publish(job.id, "alice");
     await service.createArchive(job.id, { issue_no: config.issue_no, expected_revisions: service.previewArchive(job.id).expected_revisions }, "alice");
     await service.shutdown();
-    const path = join(dir, "domain-extraction", job.id, "job.json"), original = JSON.parse(readFileSync(path, "utf8"));
+    // 回执的耐久落点是归档检查点(archive-progress.json),主文件只在首发时写一次正文;
+    // 校验损坏的 mr_participants 要打在检查点上,重启按检查点合并回公开记录。
+    const path = join(dir, "domain-extraction", job.id, "archive-progress.json"), original = JSON.parse(readFileSync(path, "utf8"));
     for (const result of [undefined, failed, { status: "skipped", requested, message: "已有 MR" }]) {
       const stored = structuredClone(original); stored.publications[0].mr_participants = result;
       writeFileSync(path, JSON.stringify(stored));

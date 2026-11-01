@@ -3,8 +3,9 @@ import { test } from "node:test";
 import fs, { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { DomainKnowledgeExtraction } from "../src/domainKnowledgeExtraction.ts";
+import { readDomainArchiveProgress } from "../src/domainArchiveProgress.ts";
 import { listKnowledgeDocuments } from "../src/knowledgeDocuments.ts";
 import { createBusinessModule, updateBusinessModule } from "../src/businessModuleLibrary.ts";
 import type { DomainKnowledgeJob, DomainPublication } from "../src/domainKnowledgeTypes.ts";
@@ -71,12 +72,14 @@ test("第二个目标 MR 回执耐久写 EIO 时保留首仓成功与失败仓�
     const job = service.create({ title: "订单域", scope: "核对订单规则", issue_no: "REQ-PARTIAL", repositories: [{ repository: "https://example.test/orders.git", branch: "main", docs_path: "docs/orders" }],
       knowledge_target: { repository: "https://example.test/knowledge.git", branch: "main", docs_path: "domains" } }, "alice");
     await until(() => service.get(job.id).status === "done", "测试研究未在5秒内完成");
-    const originals = structuredClone(service.get(job.id).documents), path = join(dir, "domain-extraction", job.id, "job.json"), rename = fs.renameSync;
+    const originals = structuredClone(service.get(job.id).documents), path = join(dir, "domain-extraction", job.id, "job.json"),
+      checkpoint = join(dirname(path), "archive-progress.json"), rename = fs.renameSync;
     let failed = false;
     const intercepted = t.mock.method(fs, "renameSync", (...args: Parameters<typeof fs.renameSync>) => {
-      if (!failed && String(args[1]) === path) {
-        const record = JSON.parse(readFileSync(String(args[0]), "utf8")) as DomainKnowledgeJob;
-        if (record.archive_batches?.some(batch => batch.publications.filter(publication => publication.state === "opened").length === 2)) {
+      // 回执的耐久写落在归档检查点(archive-progress.json)。
+      if (!failed && String(args[1]) === checkpoint) {
+        const record = JSON.parse(readFileSync(String(args[0]), "utf8")) as { batches?: Array<{ publications: DomainPublication[] }> };
+        if (record.batches?.some(batch => batch.publications.filter(publication => publication.state === "opened").length === 2)) {
           failed = true; throw Object.assign(new Error("测试磁盘 EIO：第二个 MR 回执未写成"), { code: "EIO" });
         }
       }
@@ -88,7 +91,8 @@ test("第二个目标 MR 回执耐久写 EIO 时保留首仓成功与失败仓�
     } finally { intercepted.mock.restore(); syncBuiltinESMExports(); }
     assert.equal(failed, true); assert.equal(seen.length, 2); assert.equal(indexed, 0, "候选提交不提前更新正式索引");
     assert.deepEqual(listKnowledgeDocuments(dir), []);
-    const disk = JSON.parse(readFileSync(path, "utf8")) as DomainKnowledgeJob, batch = disk.archive_batches![0];
+    // 检查点把正文换成摘要引用,用正式读取口还原后再断言。
+    const disk = readDomainArchiveProgress(path, JSON.parse(readFileSync(path, "utf8")) as DomainKnowledgeJob), batch = disk.archive_batches![0];
     const first = batch.publications.find(publication => publication.target_id === "domain")!, second = batch.publications.find(publication => publication.target_id === "repo-1")!;
     assert.equal(batch.state, "failed"); assert.equal(first.state, "opened"); assert.equal(first.url, "https://example.test/mr/domain");
     assert.equal(second.state, "failed"); assert.match(second.error ?? "", /EIO/); assert.equal(second.branch, "codex/partial-repo-1");
@@ -108,7 +112,9 @@ test("第二个目标 MR 回执耐久写 EIO 时保留首仓成功与失败仓�
     assert.equal(researchCalls, 0); assert.equal(retries, 0, "重启不自动进行外部提交");
     await restarted.retryArchive(job.id, "alice", { batch_id: batch.id });
     const completed = restarted.get(job.id).archive_batches![0];
-    assert.equal(completed.state, "done"); assert.equal(retries, 1); assert.deepEqual(completed.publications.find(publication => publication.target_id === "domain"), first);
+    assert.equal(completed.state, "done"); assert.equal(retries, 1);
+    { const kept = completed.publications.find(publication => publication.target_id === "domain")!;
+      assert.equal(kept.state, first.state); assert.equal(kept.url, first.url); assert.deepEqual(kept.documents, first.documents); }
     await restarted.retryArchive(job.id, "alice", { batch_id: batch.id });
     assert.equal(retries, 1); assert.deepEqual(restarted.get(job.id).documents, originals); assert.deepEqual(listKnowledgeDocuments(dir), []);
   } finally {

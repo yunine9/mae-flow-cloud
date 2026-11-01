@@ -67,6 +67,7 @@ const NOT_MIRRORED = new Set<string>([
   "delivery.source_branch",           // 分支对是门禁查询与冲突修复的参数
   "delivery.target_branch",
   "delivery.checks",                  // 逐项流水线结果由内核裁决;页面看 pipeline 汇总
+  "delivery.codecheck",               // 推送前 codecheck 预检的原始结果(#559),服务端门禁与回执用;页面看流水线汇总
   "delivery.git_push",                // 推送收据:内核比对三方 SHA 用
   "delivery.foreign_commits",         // 派给修复 Agent 的"别回滚"清单
   "delivery.last_reviewed_head",      // 复检卡的锚点,服务端算复检范围用

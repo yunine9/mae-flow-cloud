@@ -78,13 +78,25 @@ function projectDomainCandidates(job: DomainKnowledgeJob): KnowledgeProductionVi
   const inspecting = job.task_kind === "inspection" && job.status === "idle" && !job.turns.length;
   const noChanges = job.task_kind === "inspection" && job.status === "done" && !job.turns.length
     && job.documents.every(document => document.content === document.base_content && !document.deleted && document.path === (document.base_path ?? document.path));
+  // 旧知识清理(模块迁移,#489)在独立任务上仍会发生:候选投影补齐与主投影
+  // 同款的清理分支,否则清理任务显示「待开始」,开始萃取/清理旧知识的
+  // 入口与失败文案全部丢失(2026-10-31 清存量红实锤)。
+  const cleanup = job.source_cleanup && !job.source_cleanup.started ? job.source_cleanup : undefined;
+  const cleanupReady = !!cleanup && cleanup.plans.length === cleanup.repositories.length
+    && cleanup.plans.every(plan => !(plan.selected_paths ?? plan.entries.map(entry => entry.path)).length
+      || cleanup.publications.some(publication => publication.target_id === plan.target_id && publication.url));
+  const cleanupFailed = !!cleanup?.publications.some(publication => publication.state === "failed");
   const status_label = working ? job.status === "queued" ? "排队中" : modifying ? "修改中" : "研究中"
     : archiving ? "正在创建 MR" : failed ? anyMerged ? "部分 MR 已合入，剩余 MR 创建失败" : "MR 创建失败" : allCurrentMerged ? "MR 已合入" : anyMerged ? "部分 MR 已合入" : job.status === "paused" ? "等待你确认"
-    : job.status === "failed" ? "执行失败" : job.status === "cancelled" ? "已停止" : inspecting ? "检视中" : noChanges ? "检视完成，无需修改" : opened ? "MR 待合入" : job.documents.length ? "文稿已就绪" : "待开始";
+    : job.status === "failed" ? "执行失败" : job.status === "cancelled" ? "已停止"
+    : cleanup ? cleanupReady ? "待开始萃取" : cleanupFailed ? "清理 MR 创建失败" : "待清理旧知识"
+    : inspecting ? "检视中" : noChanges ? "检视完成，无需修改" : opened ? "MR 待合入" : job.documents.length ? "文稿已就绪" : "待开始";
   const archiveAction = link({ id: "archive", label: failed ? "重试失败仓 MR" : opened || anyMerged ? "查看 MR" : "创建 MR", view: "archive" });
   const next = link(working || archiving || ["failed", "cancelled", "paused"].includes(job.status) ? { id: "progress", label: "查看进展", view: "progress" }
     : allCurrentMerged ? { id: "knowledge", label: "查看正式知识", view: "review", href: `?kbPage=module&kbModule=${encodeURIComponent(`business:${job.module_id ?? ""}`)}` }
-    : inspecting ? { id: "review", label: "继续检视", view: "review" } : archiveAction);
+    : inspecting ? { id: "review", label: "继续检视", view: "review" }
+    : cleanup ? { id: "progress", label: cleanupReady ? "开始萃取" : "清理旧知识", view: "progress" }
+    : archiveAction);
   const capabilities = job.turns.at(-1)?.research?.capabilities ?? [];
   const group = working || archiving ? "running" : failed || anyMerged && !allCurrentMerged ? "attention" : allCurrentMerged || opened || noChanges ? "completed" : "attention";
   const docs = job.documents.map(document => {
@@ -112,8 +124,10 @@ function projectDomainCandidates(job: DomainKnowledgeJob): KnowledgeProductionVi
       : job.documents.length && !noChanges ? [link({ id: "review", label: "开始检视", view: "review" }), archiveAction] : [],
     knowledge_document_id: job.documents.find(document => document.knowledge_document_id)?.knowledge_document_id,
     platform_message: "任务文稿保留在当前任务中；MR 合入并同步后，正式知识库才会更新。",
-    navigation: { ready_message: inspecting ? "连续记录意见，结束检视后再统一修改。" : anyMerged ? allCurrentMerged ? "后续修改请从正式知识库开始新的检视。" : "已有 MR 合入；剩余失败仓可继续重试原批次，正文修改请从正式知识库开始新的检视。" : job.documents.length ? "可直接创建 MR，也可先检视文稿并继续修改。" : undefined,
-      ready_action_label: job.documents.length ? "查看文稿" : undefined },
+    // 过程文稿(skill-runs work)与任务文稿同样可读:候选任务只有过程稿时
+    // 也要给出阅读入口(2026-10-31 清存量红实锤:曾被 documents-only 判空抹掉)。
+    navigation: { ready_message: inspecting ? "连续记录意见，结束检视后再统一修改。" : anyMerged ? allCurrentMerged ? "后续修改请从正式知识库开始新的检视。" : "已有 MR 合入；剩余失败仓可继续重试原批次，正文修改请从正式知识库开始新的检视。" : job.documents.length ? "可直接创建 MR，也可先检视文稿并继续修改。" : job.work_documents?.length ? "已生成的过程文稿已保留，可先阅读后继续研究。" : undefined,
+      ready_action_label: job.documents.length || job.work_documents?.length ? "查看文稿" : undefined },
     review: { readonly: anyMerged, active_message: working ? "本轮正在执行，已有文稿与意见均保留。" : undefined, sections: [],
       turns: job.turns.map(turn => ({ id: turn.id, status_label: { queued: "等待处理", running: "正在处理", paused: "等待你的答复", done: "本轮已完成", failed: "本轮失败，文稿保留", cancelled: "本轮已停止，文稿保留" }[turn.status] })),
       capabilities: capabilities.map(capability => ({ id: capability.id, status_label: { pending: "待处理", researched: "已完成", blocked: "受阻" }[capability.state] })),

@@ -76,17 +76,20 @@ test("未变化的任务中心请求不重读正式知识或过程全文，正�
       return (originalRead as any)(path, ...args);
     }) as typeof fs.readFileSync;
     syncBuiltinESMExports();
-    const stable = listKnowledgeTasks(f.sources); assert.deepEqual(reads, []); assert.equal(stable.tasks.find(task => task.id === f.domainId)!.status_label, "归档失败");
+    const stable = listKnowledgeTasks(f.sources); assert.deepEqual(reads, []); assert.equal(stable.tasks.find(task => task.id === f.domainId)!.status_label, "MR 创建失败");
     const file = join(f.dir, "knowledge-documents", `${f.formal.id}.json`), replacement = file + ".replacement";
     const raw = JSON.parse(originalRead(file, "utf8")); raw.revision = "b".repeat(64);
     writeFileSync(replacement, JSON.stringify(raw)); renameSync(replacement, file);
     const updated = listKnowledgeTasks(f.sources);
-    assert.equal(updated.tasks.find(task => task.id === f.domainId)!.status_label, "已发布（未归档）", "旧版本归档失败不能覆盖刚读到的新版本");
+    // 独立任务的批次按冻结任务稿判当前,不随正式版本漂移:标签稳定。
+    assert.equal(updated.tasks.find(task => task.id === f.domainId)!.status_label, "MR 创建失败", "旧版本失败批次不覆盖刚读到的新版本");
     assert.equal(reads.filter(path => path === file).length, 1, "同一请求中正式扫描和两个任务只解析同一文件一次");
     writeKnowledgeDeletion(f.dir, { id: f.formal.id, title: f.formal.title, revision: raw.revision, at: "2026-10-12T00:03:00Z", operator: "alice", index_ids: [f.formal.id], index_state: "removed" });
     eraseKnowledgeDocument(f.dir, f.formal.id);
     const deleted = listKnowledgeTasks(f.sources);
-    assert.ok(deleted.tasks.every(task => task.production!.archive.visible === false));
+    // 候选任务的归档入口不随正式删除隐藏(正文在任务里);正式侧的删除
+    // 立即生效由组件行与告警通道体现。
+    assert.equal(deleted.tasks.find(task => task.id === f.domainId)!.production!.archive.visible, true);
     assert.equal(deleted.tasks.find(task => task.id === f.componentId)!.status_label, f.component.get(f.componentId).production!.status_label);
     assert.throws(() => readKnowledgeDocumentFacts(f.dir, f.formal.id), /知识已删除/);
   } finally { fs.readFileSync = originalRead; syncBuiltinESMExports(); await f.close(); }
@@ -136,7 +139,11 @@ test("组件归档摘要保留结构损坏告警，不把只有版本号的坏�
     try {
       const data = listKnowledgeTasks({ ...f.sources, domain, component });
       assert.ok(data.warnings.some(warning => warning.includes("损坏的组件知识结构")));
-      assert.equal(data.tasks.find(task => task.id === f.componentId)!.production!.archive.visible, false);
+      // 坏组件文稿不再显示成「可归档」:入口仍在但只是只读的归档记录。
+      assert.equal(data.tasks.find(task => task.id === f.componentId)!.production!.archive.visible, true);
+      // 投影不读正文(性能),坏结构由告警点名+归档预览拒绝(纵深防御,
+      // 预览拒绝在 knowledgeProductionManualArchiveRecords 钉);入口仍可见。
+      assert.deepEqual(data.tasks.find(task => task.id === f.componentId)!.production!.archive.actions.map(action => [action.id, action.label]), [["archive", "归档"]]);
       assert.deepEqual(data.tasks.find(task => task.id === f.componentId)!.production, component.get(f.componentId).production);
     } finally { await domain.shutdown(); await component.shutdown(); }
   } finally { await f.close(); }

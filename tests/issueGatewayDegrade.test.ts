@@ -57,13 +57,21 @@ function emptyTokenFile(): string {
   return path;
 }
 
+/** 显式空配置:裸跑 serve 会读本机 /etc/mae-flow-cloud/serve.json 进
+ * 机器调试形态(2026-10-21 实测;AGENTS.md 界面纪律同款要求)。 */
+function hermeticConfig(): string {
+  const path = join(mkdtempSync(join(tmpdir(), "mfc-serve-config-")), "serve.json");
+  writeFileSync(path, "{}");
+  return path;
+}
+
 test("MCP token 坏了:完整部署照常起服,需求流程不受影响", async () => {
   const token = emptyTokenFile();
   const data = mkdtempSync(join(tmpdir(), "mfc-mcp-degrade-"));
   // 探针钉的是"服务真的听上了端口"——不是"没报错"。降级必须是起得来,
   // 不是安静地死。
   const { output, matched } = await run(
-    ["--data", data, "--port", "0", "--mcp-token-file", token],
+    ["--config", hermeticConfig(), "--data", data, "--port", "0", "--mcp-token-file", token],
     (line) => line.includes("[serve] http://"),
   );
   assert.ok(matched, `问题流 token 坏了不该挡住起服;实际输出:\n${output}`);
@@ -77,7 +85,7 @@ test("MCP token 坏了:--issue-only 下问题处理是全部业务,当场拒启"
   const token = emptyTokenFile();
   const data = mkdtempSync(join(tmpdir(), "mfc-mcp-issueonly-"));
   const { code, output } = await run(
-    ["--data", data, "--port", "0", "--issue-only", "--mcp-token-file", token],
+    ["--config", hermeticConfig(), "--data", data, "--port", "0", "--issue-only", "--mcp-token-file", token],
     () => false,
     25_000,
   );

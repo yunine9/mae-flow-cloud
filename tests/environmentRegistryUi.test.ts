@@ -166,8 +166,9 @@ test("环境管理:列头排序(升/降/取消三态)与列头漏斗过滤(2026-
   }
   assert.match(page, /function toggleSort\(key: SortKey\)/);
   assert.match(page, /cur\.dir === 1 \? \{ key, dir: -1 \} : null/);
-  assert.match(page, /function SortMark/);
-  assert.match(page, /<ChevronsUpDown aria-hidden/);
+  // 方向标记随壳住在 HeaderFilter(两页共用),锚点随组件走(同下文壳纪律)。
+  assert.match(headerFilter, /function SortMark/);
+  assert.match(headerFilter, /<ChevronsUpDown aria-hidden/);
   // IP 按数值逐段比(10.0.0.9 排在 10.0.0.10 前),非 IPv4 退回字典序。
   assert.match(page, /function compareIp\(a: string, b: string\): number/);
   assert.match(page, /if \(av\[i\] !== bv\[i\]\) return av\[i\] - bv\[i\];/);

@@ -64,7 +64,7 @@ async function fixture(files: Record<string, string> = {}) {
   const target = { id: "domain", name: "知识仓", repository: remote, branch: "main", path: "", docs_path: "docs/knowledge" };
   const formal = saveKnowledgeDocument(dir, { title: "SONComm", content: original, scope: "platform", archive_target: { repository: remote, branch: "main", path: oldPath } }, "alice");
   const job: DomainKnowledgeJob = { id: `dkx-${randomUUID()}`, title: "DSON 模块知识", scope: "SONComm", issue_no: "REQ-466", operator: "alice",
-    created_at: "2026-10-12T00:00:00.000Z", status: "done", stage: "已入库", knowledge_target: target, repositories: [], material_ids: [],
+    created_at: "2026-10-12T00:00:00.000Z", status: "done", stage: "已入库", knowledge_target: target, repositories: [], material_ids: [], component_research_id: "cr-fixture",
     revisions: {}, turns: [], evidence: [], publications: [], documents: [{ id: "son-comm", title: formal.title, target_id: "domain", layer: "domain", path: oldPath,
       content: formal.content, sources: "固定版本源码", selected: true, revision: 1, base_content: null, base_revision: baseline, history: [],
       knowledge_document_id: formal.id, published_revision: formal.revision, published_document_revision: 1 }] };
@@ -153,8 +153,18 @@ test("Issue489：撤销旧 MR 使用个人凭据及项目 MR 编号，已合入�
   } finally { await f.close(); }
 });
 
+/** 正式文稿的 module_ids 现在要求业务模块在册(prepareKnowledgeDocument
+ * 校验),fixture 先把模块种进库里;同 id 重复种直接放过。 */
+function seedModule(f: Awaited<ReturnType<typeof fixture>>, moduleId: string): void {
+  try {
+    createBusinessModule(f.dir, { id: moduleId, name: moduleId, description: "归档用例模块", owner: "alice",
+      repositories: [f.target.repository] }, "alice");
+  } catch { /* 已在册 */ }
+}
+
 function repositoryJob(f: Awaited<ReturnType<typeof fixture>>, moduleId: string, directory: string, files: Record<string, string>): DomainKnowledgeJob {
   const target = { ...f.target, docs_path: directory };
+  seedModule(f, moduleId);
   const documents = Object.entries(files).map(([path, content], index) => {
     const formal = saveKnowledgeDocument(f.dir, { title: `${moduleId} 的知识`, content, scope: "module", module_ids: [moduleId],
       archive_target: { repository: target.repository, branch: target.branch, path } }, "alice");
@@ -167,6 +177,7 @@ function repositoryJob(f: Awaited<ReturnType<typeof fixture>>, moduleId: string,
 }
 
 function directoryJob(f: Awaited<ReturnType<typeof fixture>>, moduleId: string, domainDirectory: string, codeDirectory?: string): DomainKnowledgeJob {
+  seedModule(f, moduleId);
   const domain = { ...f.target, docs_path: domainDirectory }, repository = { ...f.target, id: "code", name: "代码仓", docs_path: codeDirectory ?? "docs/unused" };
   const values = [{ target: domain, layer: "domain" as const, file: "README.md", content: `# ${moduleId}领域说明\n` },
     ...(codeDirectory ? [{ target: repository, layer: "repository" as const, file: "module-map.md", content: `# ${moduleId}代码地图\n` }] : [])];
@@ -338,6 +349,7 @@ test("Issue489：按仓根相对路径归档，根导航兼容旧模块入口并
 test("Issue489：旧归档目录迁移至仓根相对路径只移除已核对原文稿，重试保留精确 SHA", { timeout: 20_000 }, async () => {
   const f = await fixture({ [oldPath]: original, "AGENTS.md": "旧的共享根说明。\n", "docs/unrelated.md": "其他模块文稿。\n" });
   try {
+    seedModule(f, "orders");
     f.job.knowledge_layout = "repository-v1"; f.job.module_id = "orders"; f.target.docs_path = ".";
     f.job.documents[0].base_content = original;
     f.rename("docs/module-map.md");

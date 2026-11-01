@@ -455,8 +455,14 @@ test("架构页只展示独立 Archify 图，意见回到 Story；Story PlantUML
     "子任务有模块 Story 时也必须显示正式架构图页签");
   assert.match(workspace, /onOpenStory=\{\(\) => \{\s*openMaterial\("doc"\); if \(architectureStoryName\) setActive\(architectureStoryName\)/,
     "架构页返回当前任务自己的 Story");
-  assert.doesNotMatch(workspace, /<RequirementGraph\b/,
-    "用户要求架构页只保留 Story 的架构展示，不再叠加任务拓扑图");
+  // 拍板原话是「架构页只保留 Story 的架构展示」——拓扑图后来在演示的
+  // 需求拆分视图(b2832ea5)合法复用,锚点从全文件收窄为:每一处渲染
+  // 都必须由演示拆分分支把门,不许出现无门拓扑图。
+  const graphRenders = [...workspace.matchAll(/<RequirementGraph\b/g)].length;
+  const gatedRenders = [...workspace.matchAll(
+    /demoShowsDecomposition \? \(\s*<section[\s\S]{0,160}?<RequirementGraph\b/g)].length;
+  assert.ok(graphRenders > 0 && graphRenders === gatedRenders,
+    "任务拓扑图只许出现在演示的需求拆分视图,架构页仍由 Story 独占");
   assert.match(workspace, /setActive\(OVERALL_STORY_ARTIFACT\)/,
     "阅读与反馈返回唯一全局 Story");
   const architecture = readFileSync(new URL("../web/src/StoryArchitecture.tsx", import.meta.url), "utf8");

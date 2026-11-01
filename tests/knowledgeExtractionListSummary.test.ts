@@ -29,7 +29,7 @@ test("领域列表不读取过程全文或携带归档副本，详情仍保留�
   const manager = new DomainKnowledgeExtraction(dir, async () => "unused");
   try {
     const [summary] = manager.list();
-    assert.equal(summary.id, id); assert.equal(summary.production.status_label, "待审查");
+    assert.equal(summary.id, id); assert.equal(summary.production.status_label, "文稿已就绪", "候选链路词表:有稿未建 MR");
     assert.equal(summary.documents[0].path, document.path); assert.equal(summary.documents[0].revision, 2);
     assert.ok(Buffer.byteLength(JSON.stringify(summary)) < 10_000);
     assert.deepEqual(manager.warnings(), [], "任务列表不能打开每个历史会话的过程文件");

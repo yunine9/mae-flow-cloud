@@ -151,8 +151,10 @@ test("责任人可从验证、等待合入和失败现场继续 Agent，协作�
 });
 
 test("右栏长输入只在输入框内部滚动，不得挤没上方会话流", () => {
+  // 意图是三个输入框都有界内滚动;类名不必按固定顺序书写(插话框后加
+  // 的 pr-12 前缀曾把逐字锚打红),按类集合计,不钉顺序。
   const boundedInputs = composer.match(
-    /className="min-h-13 max-h-40 resize-y overflow-y-auto bg-surface/g,
+    /className="[^"]*\bmin-h-13\b[^"]*\bmax-h-40\b[^"]*\boverflow-y-auto\b[^"]*"/g,
   ) ?? [];
   assert.equal(boundedInputs.length, 3,
     "插话、跨仓同步和开发助手输入框都必须有最大高度与内部滚动");
