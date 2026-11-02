@@ -13,7 +13,7 @@
  * + 右栏协作对话框)。前端不推断状态:一切文案来自 /issues API 镜像。
  */
 import { useEffect, useState } from "react";
-import { PipelineRepairPanel } from "../PipelineRepairPanel";
+import { IssueMrImport } from "../IssueMrImport";
 import {
   ISSUE_STATUS_TEXT,
   controlIssue,
@@ -69,7 +69,7 @@ function readIssueListFilter(): IssueListFilter {
 }
 
 /** 问题处理导航的子页签(2026-09-11 拍板,spec #171):问题会话是缺省
- * 落点、排导航首位;问题登记/DTS 列表是发起域的两个面板，流水线修复独立执行。App 侧边栏
+ * 落点、排导航首位;问题登记/DTS 列表是发起域的两个面板，流水线修复从已有 MR 进入同一工作台。App 侧边栏
  * 展开组持有选择,本组件按它承接右侧页面。 */
 export type IssueChildTab = "sessions" | "register" | "dts" | "pipeline";
 
@@ -116,28 +116,31 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
     try { localStorage.setItem(ISSUE_FILTER_STORAGE_KEY, next); } catch { /* 同上,存不进就算了 */ }
   };
 
+  const scopedIssues = childTab === "pipeline"
+    ? issues.filter(issue => issue.scenario === "mr_repair") : issues;
+
   // 聚合徽章(与任务侧"当前任务"同款语义):待答复置前,需介入报警。
   // 按全量算,不跟着筛选走——告警不该因为翻历史就消失。
-  const waitingCount = issues.filter((issue) =>
+  const waitingCount = scopedIssues.filter((issue) =>
     issue.status === "waiting_user" || issue.status === "idle").length;
-  const interventionCount = issues.filter((issue) =>
+  const interventionCount = scopedIssues.filter((issue) =>
     issue.status === "failed").length;
 
   const statusCounts = new Map<IssueStatus, number>();
-  for (const issue of issues) {
+  for (const issue of scopedIssues) {
     statusCounts.set(issue.status, (statusCounts.get(issue.status) ?? 0) + 1);
   }
   // 「进行中」计数走 api 的 isIssueActive 单份口径,与侧栏父行徽章同源。
-  const activeCount = issues.filter((issue) => isIssueActive(issue.status)).length;
+  const activeCount = scopedIssues.filter((issue) => isIssueActive(issue.status)).length;
   // 「等你答复」选项的计数含 idle(展示归一,计数同步归一)。
   const filterOptionCount = (status: IssueStatus) =>
     status === "waiting_user"
       ? (statusCounts.get("waiting_user") ?? 0) + (statusCounts.get("idle") ?? 0)
       : statusCounts.get(status) ?? 0;
-  const visibleIssues = statusFilter === "all" ? issues
+  const visibleIssues = statusFilter === "all" ? scopedIssues
     : statusFilter === "active"
-      ? issues.filter((issue) => isIssueActive(issue.status))
-      : issues.filter((issue) => statusFilter === "waiting_user"
+      ? scopedIssues.filter((issue) => isIssueActive(issue.status))
+      : scopedIssues.filter((issue) => statusFilter === "waiting_user"
           ? issue.status === "waiting_user" || issue.status === "idle"
           : issue.status === statusFilter);
 
@@ -226,7 +229,9 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
   }
 
   return <div className="grid gap-[18px]">
-    {viewer.role !== "admin" && <PipelineRepairPanel visible={childTab === "pipeline"} onNavigateProfile={onNavigateProfile} />}
+    {viewer.role !== "admin" && <IssueMrImport visible={childTab === "pipeline"} onCreated={issue => {
+      refreshList(); onOpenIssue(issue.id);
+    }} />}
     {/* #231 换装:看板壳(.issue-board/.issue-error 等 issue-board 家族)
         退役,直译成令牌工具类。 */}
     {error && childTab !== "pipeline" && <div role="alert"
@@ -267,7 +272,7 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
       onNavigateProfile={onNavigateProfile}
     />}
     <section aria-labelledby="issue-mine-title"
-      hidden={childTab !== "sessions"}
+      hidden={childTab !== "sessions" && childTab !== "pipeline"}
       className="rounded-[14px] border border-line bg-surface px-[18px] py-4 max-[680px]:px-3 max-[680px]:py-3">
       {/* 发起成功横幅(ADR-0040):DTS 发起切过来后第一眼就能确认
           "发起成了",单号链接新页签直达对应工作台(与卡片同款通道)。 */}
@@ -289,7 +294,7 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
           {/* kicker 不再重复页首大标题「问题处理」;列表区自己只有标题。
               单一列表(ADR-0031,2026-09-16 修订):归属或登记人是自己,
               名下的与登记给别人的同列,卡上两端标注可辨。 */}
-          <h2 id="issue-mine-title">{viewer.role === "admin" ? "全部问题" : "我的问题"}</h2>
+          <h2 id="issue-mine-title">{childTab === "pipeline" ? "我的 MR 修复会话" : viewer.role === "admin" ? "全部问题" : "我的问题"}</h2>
         </div>
         {/* 聚合徽章与任务侧"当前任务"同款语义:待答复置前,需介入报警。 */}
         <span className="flex flex-wrap items-center justify-end gap-3">
@@ -300,7 +305,7 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
                 ...ISSUE_FILTER_STATUSES.map((status) => ({
                   value: status, label: `${ISSUE_STATUS_TEXT[status]}(${filterOptionCount(status)})`,
                 })),
-                { value: "all", label: `全部(${issues.length})` }]}
+                { value: "all", label: `全部(${scopedIssues.length})` }]}
               onValueChange={(value) =>
                 changeStatusFilter((value ?? "active") as IssueListFilter)}>
               <SelectTrigger aria-label="按状态筛选问题会话"><SelectValue /></SelectTrigger>
@@ -314,7 +319,7 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
                       {ISSUE_STATUS_TEXT[status]}({filterOptionCount(status)})
                     </SelectItem>
                   ))}
-                  <SelectItem value="all">全部({issues.length})</SelectItem>
+                  <SelectItem value="all">全部({scopedIssues.length})</SelectItem>
                 </SelectGroup>
               </SelectContent>
             </Select>
@@ -324,19 +329,19 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
           {interventionCount > 0 && <span className="text-[13px] font-medium tabular-nums text-danger">
             {interventionCount} 项需介入</span>}
           <span className="text-[13px] font-medium tabular-nums text-muted-foreground">共 {visibleIssues.length} 个</span>
-          {statusFilter === "active" && issues.length > visibleIssues.length
+          {statusFilter === "active" && scopedIssues.length > visibleIssues.length
             && <span className="text-[13px] font-medium tabular-nums text-muted-foreground"
               title="已归档/已取消默认收起,把状态切到对应标签或「全部」可查看">
-              已收起 {issues.length - visibleIssues.length} 个</span>}
+              已收起 {scopedIssues.length - visibleIssues.length} 个</span>}
         </span>
       </div>
       {/* 打开过渡态已随页内 overlay 通道退役(ADR-0040):点卡开新页签,
           加载/失败态由 /issues/:id 页面形态自己承担(见上方渲染门)。 */}
-      {issues.length === 0
+      {scopedIssues.length === 0
         ? <Empty className="min-h-40 border">
             <EmptyMedia className="text-2xl font-light text-muted-foreground" aria-hidden>✓</EmptyMedia>
-            <EmptyTitle>{viewer.role === "admin" ? "团队还没有问题会话" : "还没有问题会话"}</EmptyTitle>
-            <EmptyDescription>{viewer.role === "admin"
+            <EmptyTitle>{childTab === "pipeline" ? "还没有 MR 修复会话" : viewer.role === "admin" ? "团队还没有问题会话" : "还没有问题会话"}</EmptyTitle>
+            <EmptyDescription>{childTab === "pipeline" ? "粘贴上方 MR 链接，即可进入现有问题工作台修复流水线。" : viewer.role === "admin"
               ? "开发成员从各自的问题处理页登记后,这里会汇总全员会话供查看。"
               : "从上方「问题登记」登记问题并指派责任人,或从 DTS 拉取问题单发起处理;自己登记给别人的和名下推进的都在这里,研究结论是非问题也可以直接归档收口。"}</EmptyDescription>
           </Empty>

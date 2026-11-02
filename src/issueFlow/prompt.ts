@@ -156,7 +156,7 @@ export interface IssueEnvCredentials {
  * 两号同一不必赘述。 */
 export interface IssueRegistrationMeta {
   /** 流程形态(有单/无单):阶段路线与出口不同,工具清单随之有别。 */
-  scenario: "ticket" | "no_ticket";
+  scenario: IssueScenario;
   title: string;
   description: string;
   /** 附加信息(原发起备注,2026-10-15 #502 更名):DTS 列表发起时
@@ -402,6 +402,12 @@ export function issueFixedOpeningPrompt(
         : options.tier === "1" ? "fixed.intervention.full_auto"
         : "fixed.intervention.report_review"),
   });
+  if (scenario === "mr_repair") return [
+    "你在现有问题工作台处理一个用户提供的 MR，直接从流水线修复阶段开始。拉单、问题分析和问题修改等前置阶段不适用，没有被执行或自动批准。",
+    `MR：${state.imported_mr?.url}；源分支：${state.fix_branch}；目标分支：${state.baseline}；仓库：${state.repo_url}。`,
+    ...stageBriefLines(scenario, "mr_green", ""),
+    "沿用本工作台的工具、代码差异、对话、执行日志和恢复能力。不要关闭测试或检查规则来制造绿灯；无法修复时如实说明原因。流水线通过后总结结果并等待人合入，不要求网管环境验证。",
+  ].join("\n\n");
   const facts = [
     `- 标题: ${meta.title}`,
     `- 描述: ${meta.description || "(无补充描述)"}`,
@@ -557,6 +563,10 @@ export function issueResumePrompt(
       ? [`- 登记人: ${meta.reporter}(问题由其登记提交)`]
       : []),
     `- 单号: ${state.ticket ?? "(未绑定)"}`,
+    ...(state.scenario === "mr_repair"
+      ? [`- 从已有 MR 开始: ${state.imported_mr?.url}；源分支 ${state.fix_branch}；目标分支 ${state.baseline}。前置调查步骤不适用。`,
+         ...stageBriefLines("mr_repair", "mr_green", "")]
+      : []),
     // 附加信息与附件随续聊词重给(与开场词同一事实源):重启后模型
     // 上下文是重建的,登记材料不随对话流失。
     ...(meta.remark
@@ -597,7 +607,7 @@ export function issueResumePrompt(
       ? `- 已推送: ${state.pushes.map((push) =>
           `${push.branch} @ ${push.sha.slice(0, 12)}`).join(";")}` : "",
     state.mrs?.length
-      ? `- 已建 MR: ${state.mrs.map((mr) =>
+      ? `- ${state.scenario === "mr_repair" ? "已有" : "已建"} MR: ${state.mrs.map((mr) =>
           mr.url ?? mr.title).join(";")}` : "",
     "",
     `用户的最新输入:\n\n${userText}`,

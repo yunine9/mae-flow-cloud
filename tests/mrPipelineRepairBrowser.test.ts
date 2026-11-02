@@ -7,7 +7,7 @@ import { build, stop } from "../web/node_modules/esbuild/lib/main.js";
 import { browserResultDump } from "./fixtures/browserResultDump.ts";
 
 const chrome = process.env.MFC_TEST_CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-test("流水线修复桌面界面：真实导航、开始/停止/重试、错误恢复与轮询生命周期", { skip: !existsSync(chrome) && "需要 Chrome" }, async () => {
+test("流水线修复桌面界面：真实导航、导入错误恢复与复用原问题工作台", { skip: !existsSync(chrome) && "需要 Chrome" }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "pipeline-repair-ui-"));
   try {
     const built = await build({ entryPoints: [resolve("tests/browser/pipelineRepair.tsx")], bundle: true, write: false,
@@ -18,7 +18,7 @@ test("流水线修复桌面界面：真实导航、开始/停止/重试、错误
     const file = join(dir, "check.html"); writeFileSync(file, html);
     const preview = process.env.MFC_PIPELINE_REPAIR_PREVIEW;
     if (preview) { mkdirSync(preview, { recursive: true }); writeFileSync(join(preview, "pipeline-repair-ui.html"), html); }
-    for (const mode of ["main", "disabled"]) {
+    for (const mode of ["import", "workbench"]) {
       const screenshot = preview ? [`--screenshot=${resolve(preview, `pipeline-repair-${mode}.png`)}`] : [];
       const dom = await browserResultDump(chrome, ["--headless=new", "--disable-gpu", "--no-first-run", "--disable-extensions",
         `--user-data-dir=${join(dir, mode)}`, "--window-size=1920,1080", "--virtual-time-budget=18000", ...screenshot, "--dump-dom", `file://${file}?${mode}`], join(dir, `${mode}.html`));

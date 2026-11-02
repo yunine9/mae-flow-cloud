@@ -62,8 +62,8 @@ export type IssueStatus =
   | "canceled"
   | "failed";
 
-/** 固定流程的两大场景:有单走五阶段,无单走三节点(结论即闭环归档)。 */
-export type IssueScenario = "ticket" | "no_ticket";
+/** 有单走五阶段、无单走三节点；已有 MR 只进入流水线修复阶段。 */
+export type IssueScenario = "ticket" | "no_ticket" | "mr_repair";
 
 /** 固定流程单个阶段的执行状态(inherited=转正继承,redo=回退待重做)。 */
 export type StageState =
@@ -500,6 +500,8 @@ export interface IssueSessionState {
   environment?: IssueEnvironmentConfig;
   /** 固定流程的场景。 */
   scenario?: IssueScenario;
+  /** 从用户提供的已有 MR 开始，前置调查步骤不适用；不伪造 DTS 或推送记录。 */
+  imported_mr?: import("../mrImportTypes.ts").RepairMr;
   /** 固定流程每阶段执行状态,与 scenario 阶段表对齐。 */
   stage_states?: StageState[];
   /** 验证回退轮次(fixed 用;回退问题分析时 +1,分支/MR 延用)。 */
@@ -875,7 +877,7 @@ export function shouldNudgeFixed(state: IssueSessionState): boolean {
   // ADR-0024):收口只是出口的一半(申报),另一半是把验证卡交到用户
   // 手上;卡没举(闸不在场)就停机 = 欠着出口,催。
   if (index >= 0 && (state.stage_states?.[index] ?? "pending") === "done") {
-    return state.stage === "mr_green" && !state.gate;
+    return state.scenario !== "mr_repair" && state.stage === "mr_green" && !state.gate;
   }
   const pipelines = Object.values(state.pipelines ?? {});
   if ((state.mrs?.length ?? 0) > 0

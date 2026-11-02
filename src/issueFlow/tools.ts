@@ -773,6 +773,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         fail(promptCopy("receipts", "raisegate.card_pending"));
       }
       const kind = String(params?.kind ?? "") as IssueGateKind;
+      if (ctx.state.scenario === "mr_repair" && kind === "env_verify") fail("本次从已有 MR 开始，只验证流水线，不要求网管环境验证");
       // 白名单即模板键集:加卡种只改一处(模板表),校验自动跟上。
       if (!(kind in RAISE_GATE_QUESTIONS)) {
         fail(promptCopy("receipts", "raisegate.bad_kind",
@@ -916,7 +917,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
   const runPush = async (params: any) => {
     gateStage("push_branch");
     const state = ctx.state;
-    if (!state.ticket) {
+    if (!state.ticket && !state.imported_mr) {
       fail(promptCopy("receipts", "push.no_ticket"));
     }
     const repo = locateRepo(params.repo);
@@ -929,11 +930,12 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       fail(promptCopy("receipts", "push.branch_mismatch",
         { expected, branch }));
     }
-    const ticket = state.ticket;
+    const ticket = state.ticket ?? `MR !${state.imported_mr!.iid}`;
     // 强制覆盖意图(ADR-0063 修订):新命名下正常流程不会再撞远端同名
     // 分支,force 保留防平台侧罕见异动。覆盖前先现查远端同名分支当前
     // 位置(issueGit 侧),对不上即拒推——不盲盖。
     const force = params.force === true;
+    if (force && state.imported_mr) fail("已有 MR 修复不允许强制覆盖源分支，请保留其他人的提交");
     // 脏工作区熔断做实(2026-08-28 真实环境事故;ADR-0071):已跟踪
     // 文件有未提交改动即拒推——push 推已提交历史,带脏改动推只会推出
     // 旧 HEAD(MR 没 diff),基线合并也要求干净的树。未跟踪的过程产物
@@ -1538,7 +1540,8 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       const staleRepos: string[] = [];
       const headMovedRepos: string[] = [];
       for (const record of ledger) {
-        const sha = state.pushes?.find((item) => item.repo === record.repo)?.sha;
+        const sha = state.pushes?.find((item) => item.repo === record.repo)?.sha
+          ?? (state.imported_mr?.repo === record.repo ? state.imported_mr.sha : undefined);
         if (!sha) {
           fail(promptCopy("receipts", "mr.verify_missing_push",
             { repo: record.repo }));
@@ -1591,9 +1594,11 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         delete state.mr_gate;
         fixedComplete(ctx.state,
           `MR 核验通过(${runs.length} 个 MR 全绿):${note}`);
-        ctx.state.stage_note = MR_GREEN_ENV_VERIFY_NOTE;
+        ctx.state.stage_note = state.scenario === "mr_repair"
+          ? "已有 MR 的流水线已通过，等待人工审批与合入" : MR_GREEN_ENV_VERIFY_NOTE;
         ctx.persist();
         ctx.notifyMrGreen?.();
+        if (state.scenario === "mr_repair") return ok("已有 MR 的当前提交流水线已通过。本轮修复完成，等待人审批和合入；不要新建 MR 或要求网管环境验证。");
         return ok(promptCopy("receipts", "mrgate.all_green", {
           repos: runs.map((item) => item.repo).join(", "),
         }));

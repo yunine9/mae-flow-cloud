@@ -571,7 +571,7 @@ test("问题会话查看模式:操作控件逐处收进归属分支,信息面不
   // #231 改锚:单号徽标换工具类胶囊(绑单/无单两态),user-select 由
   // span 上的 select-text 承担。
   assert.match(sessionView,
-    /\? <span className="select-text rounded-full bg-primary\/10 px-\[7px\] py-px font-mono text-xs font-bold text-primary">\{detail\.ticket\}<\/span>\s*: <span className="select-text rounded-full border border-dashed px-\[7px\] py-px font-mono text-xs font-bold text-faint">无单场景<\/span>/);
+    /\? <span className="select-text rounded-full bg-primary\/10 px-\[7px\] py-px font-mono text-xs font-bold text-primary">\{detail\.ticket\}<\/span>\s*: <span className="select-text rounded-full border border-dashed px-\[7px\] py-px font-mono text-xs font-bold text-faint">\{detail\.scenario === "mr_repair" \? "已有 MR" : "无单场景"\}<\/span>/);
   assert.doesNotMatch(sessionView, /className="issue-bind"/);
   assert.doesNotMatch(sessionView, /bindIssueTicket/);
   // 认证报错的「去个人设置配置令牌」修的是归属人的凭据,查看模式不渲染。
@@ -1621,7 +1621,7 @@ test("元信息页签居首(#239):登记四项只读、绑定标、终态只读�
   assert.match(metaPane,
     /const isTerminal =\s*\n\s*\(TERMINAL_STATUSES as readonly string\[\]\)\.includes\(detail\.status\);/);
   assert.match(metaPane,
-    /\{!isTerminal && <section aria-label="调整关联仓"/);
+    /\{!isTerminal && detail\.scenario !== "mr_repair" && <section aria-label="调整关联仓"/);
 });
 
 // ---- 主动拉取日志(#268,ADR-0026):按钮=意图递交,Agent 主理第二例 ----
@@ -1706,7 +1706,7 @@ test("关联仓编辑器(#241):绑定仓零按钮、确定 diff 门禁、https �
   // 一道门后——模块绑定仓是团队资产、账外仓不在登记清单,行内连按钮都
   // 不渲染(不是置灰)。
   assert.match(metaPane,
-    /\{!isTerminal && registered && !bound && \(queued\s*\n\s*\? <Button variant="outline"/);
+    /\{!isTerminal && detail\.scenario !== "mr_repair" && registered && !bound && \(queued\s*\n\s*\? <Button variant="outline"/);
   assert.equal(
     (metaPane.match(/variant="destructive" size="xs"/g) ?? []).length, 1,
     "移除按钮唯一(非绑定仓清单行),不给绑定仓另配删除口");

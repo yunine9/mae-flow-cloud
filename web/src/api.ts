@@ -154,21 +154,10 @@ export interface WishImageUpload {
   content_base64: string;
 }
 
-export type { PipelineRepairRecord, PipelineRepairList } from "../../src/mrPipelineRepairTypes";
-export async function listPipelineRepairs(signal?: AbortSignal): Promise<import("../../src/mrPipelineRepairTypes").PipelineRepairList> {
-  const response = await fetch("/pipeline-repairs", { signal });
+export async function importIssueMr(mrUrl: string): Promise<IssueSummary> {
+  const response = await fetch("/issues/from-mr", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mr_url: mrUrl }) });
   if (!response.ok) throw new Error(await errorText(response));
-  return await response.json() as import("../../src/mrPipelineRepairTypes").PipelineRepairList;
-}
-export async function startPipelineRepair(mrUrl: string): Promise<import("../../src/mrPipelineRepairTypes").PipelineRepairRecord> {
-  const response = await fetch("/pipeline-repairs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mr_url: mrUrl }) });
-  if (!response.ok) throw new Error(await errorText(response));
-  return await response.json() as import("../../src/mrPipelineRepairTypes").PipelineRepairRecord;
-}
-export async function controlPipelineRepair(id: string, action: "stop" | "retry"): Promise<import("../../src/mrPipelineRepairTypes").PipelineRepairRecord> {
-  const response = await fetch(`/pipeline-repairs/${encodeURIComponent(id)}/${action}`, { method: "POST" });
-  if (!response.ok) throw new Error(await errorText(response));
-  return await response.json() as import("../../src/mrPipelineRepairTypes").PipelineRepairRecord;
+  return parseJson(response);
 }
 
 export async function listWishes(): Promise<WishWallItem[]> {
@@ -3763,7 +3752,7 @@ export const isIssueActive = (status: IssueStatus): boolean =>
 
 // ---- 固定流程(2026-08-27 拍板;#98 单路径化:前端不再感知"模式") ----
 
-export type IssueScenario = "ticket" | "no_ticket";
+export type IssueScenario = "ticket" | "no_ticket" | "mr_repair";
 export type FixedIssueStage =
   | "dts_info"
   | "prep_repo"
@@ -3801,6 +3790,7 @@ export function issueStageText(issue: {
   scenario?: IssueScenario;
   stage: FixedIssueStage;
 }): string {
+  if (issue.scenario === "mr_repair" && issue.stage === "mr_green") return "修复已有 MR 流水线";
   return FIXED_STAGE_TEXT[issue.stage]
     ?? LEGACY_STAGE_TEXT[issue.stage]
     ?? String(issue.stage);
@@ -3811,7 +3801,7 @@ export function fixedStageList(
   scenario: IssueScenario | undefined,
 ): FixedIssueStage[] {
   return scenario === "no_ticket"
-    ? FIXED_NO_TICKET_STAGES : FIXED_TICKET_STAGES;
+    ? FIXED_NO_TICKET_STAGES : scenario === "mr_repair" ? ["mr_green"] : FIXED_TICKET_STAGES;
 }
 
 /** 单阶段执行状态:inherited=转正继承,redo=验证回退待重做。 */
@@ -3899,6 +3889,7 @@ export type IssueCancelReason =
   | "other";
 
 export interface IssueSummary {
+  imported_mr?: import("../../src/mrImportTypes").RepairMr;
   id: string;
   /** 归属账号=问题责任人(ADR-0031):写操作与闸口通知的唯一对象。 */
   account: string;

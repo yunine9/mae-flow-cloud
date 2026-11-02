@@ -78,6 +78,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { closeSync, existsSync, openSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { IssueFlowService } from "./service.ts";
+import { normalizeRepairMrUrl } from "../mrImport.ts";
 import {
   DtsGatewayUnconfiguredError,
   toHttpError,
@@ -138,6 +139,7 @@ export interface IssueViewer {
 }
 
 export interface IssueRouteOptions {
+  managedMr?: (url: string) => string | undefined;
   issueFlow?: IssueFlowService;
   /** DTS 网关直连(拉单/单据详情/内嵌图代理;收窄票 #7:服务不再
    * 转手)。缺席时按原透传层的同一句 fail-loud 打回。 */
@@ -398,6 +400,14 @@ export async function handleIssueRoutes(
       return done(200, { issues: mine });
     }
 
+    if (method === "POST" && parts.length === 2 && parts[1] === "from-mr") {
+      if (viewer?.role === "admin") return done(403, { error: "请使用开发者账号接入 MR" });
+      const body = await readBody(request);
+      const url = normalizeRepairMrUrl(body.mr_url);
+      const managed = routeOptions.managedMr?.(url);
+      if (managed) return done(409, { error: managed });
+      return done(201, await issueFlow.importMr(url, viewer?.username ?? "local"));
+    }
     if (method === "POST" && parts.length === 1) {
       if (viewer?.role === "admin") {
         return done(403, {

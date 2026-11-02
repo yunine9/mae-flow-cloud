@@ -227,6 +227,7 @@ for (const spec of Object.values(FIXED_STAGE_SPECS)) {
 export const STAGE_ROUTES: Record<IssueScenario, readonly FixedStage[]> = {
   ticket: FIXED_TICKET_STAGES,
   no_ticket: FIXED_NO_TICKET_STAGES,
+  mr_repair: ["mr_green"],
 };
 
 export function fixedStages(scenario: IssueScenario): readonly FixedStage[] {
@@ -243,6 +244,7 @@ export function fixedStageIndex(
 /** 阶段显示名(按场景取词;prep_repo 两场景叫法不同)。 */
 export function fixedStageLabel(scenario: IssueScenario, stage: FixedStage): string {
   const spec = FIXED_STAGE_SPECS[stage];
+  if (scenario === "mr_repair" && stage === "mr_green") return "修复已有 MR 流水线";
   return scenario === "no_ticket" && spec.noTicketLabel
     ? spec.noTicketLabel
     : spec.label;
@@ -250,6 +252,9 @@ export function fixedStageLabel(scenario: IssueScenario, stage: FixedStage): str
 
 /** 场景 × 阶段的完整显示名词表(state.ts 沿用的导出形状)。 */
 export const FIXED_STAGE_LABELS: Record<IssueScenario, Record<FixedStage, string>> = {
+  mr_repair: Object.fromEntries(
+    (Object.keys(FIXED_STAGE_SPECS) as FixedStage[]).map(stage => [stage, fixedStageLabel("mr_repair", stage)]),
+  ) as Record<FixedStage, string>,
   ticket: Object.fromEntries(
     (Object.keys(FIXED_STAGE_SPECS) as FixedStage[]).map((stage) =>
       [stage, fixedStageLabel("ticket", stage)]),
@@ -276,6 +281,7 @@ export function stageAllowsTool(
   scenario: IssueScenario, stage: FixedStage, tool: string,
 ): boolean {
   if (!STAGE_ROUTES[scenario].includes(stage)) return false;
+  if (scenario === "mr_repair" && ["create_mr", "request_env", "select_environment", "dts_get_ticket"].includes(tool)) return false;
   return FIXED_STAGE_SPECS[stage]?.tools.some((entry) => entry.name === tool)
     ?? false;
 }
@@ -302,8 +308,9 @@ export function registeredStageTools(): string[] {
 // ---- 简报视角(引导层:提示词的"可用工具"行查这里) ----
 
 /** 阶段简报的工具行:与门禁同一列 tools,只多渲染用途注记。 */
-export function stageToolLine(stage: FixedStage): string {
+export function stageToolLine(stage: FixedStage, scenario?: IssueScenario): string {
   return fixedStageSpec(stage).tools
+    .filter(tool => !scenario || stageAllowsTool(scenario, stage, tool.name))
     .map((tool) => (tool.note ? `${tool.name}(${tool.note})` : tool.name))
     .join("、");
 }
@@ -316,6 +323,12 @@ export function stageBriefLines(
   scenario: IssueScenario, stage: FixedStage, guidance: string,
 ): string[] {
   const spec = fixedStageSpec(stage);
+  if (scenario === "mr_repair") return [
+    "当前阶段「修复已有 MR 流水线」：读取已有 MR 的失败材料，只修复编译、测试和代码质量问题。",
+    "先用 pull_repo 拉取 MR 的源分支，拉取完成后检查当前提交的流水线报错。首次按仓库标准完整构建，后续复用同一工作区增量验证；提交后用 push_branch 推送原分支，再用 complete_stage 申报已有 MR。",
+    "不新建 MR、不绑定 DTS、不重走问题分析；检视意见不自动修改，审批和合入仍由人处理。",
+    `可用工具：${stageToolLine(stage, scenario)}。`,
+  ];
   return [
     `当前阶段「${fixedStageLabel(scenario, stage)}」: ${guidance}`,
     `怎么算完: ${spec.exit}`,

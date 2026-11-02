@@ -202,3 +202,10 @@ test("#241 编辑骨架:非终态在场且关态可辨,终态零编辑入口", (
       `${status} 会话零编辑入口`);
   }
 });
+
+test("已有 MR 元信息复用原面板，固定源仓库且无需网管环境", () => {
+  const html = render({ scenario: "mr_repair", environment: undefined });
+  assert.match(html, /关联仓清单/);
+  assert.match(html, /本次只修复 MR 流水线，无需网管环境/);
+  assert.doesNotMatch(html, /调整关联仓|新增代码仓地址|>移除</);
+});

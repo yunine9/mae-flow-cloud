@@ -1,5 +1,3 @@
-import type { PipelineCheck } from "./pipelineContract.ts";
-
 export interface RepairMr {
   url: string;
   iid: string;
@@ -9,29 +7,6 @@ export interface RepairMr {
   target_branch: string;
   sha: string;
   state: "opened" | "closed" | "merged";
-}
-
-export type PipelineRepairStatus = "queued" | "preparing" | "repairing" | "verifying"
-  | "stopping" | "stopped" | "passed" | "needs_attention";
-
-export interface PipelineRepairRecord {
-  id: string;
-  account: string;
-  mr_url: string;
-  mr?: RepairMr;
-  status: PipelineRepairStatus;
-  message: string;
-  round: number;
-  created_at: string;
-  updated_at: string;
-  checks?: PipelineCheck[];
-  logs: Array<{ at: string; text: string }>;
-}
-
-export interface PipelineRepairList {
-  enabled: boolean;
-  reason?: string;
-  records: PipelineRepairRecord[];
 }
 
 export function normalizeRepairMrUrl(raw: unknown): string {
@@ -68,8 +43,4 @@ export function parseRepairMr(raw: unknown, requestedUrl: string): RepairMr {
   return { url: normalizeRepairMrUrl(row.url), iid: String(row.iid), title: String(row.title || `MR !${row.iid}`),
     repo: repo.toString(), source_branch: row.source_branch, target_branch: row.target_branch,
     sha: row.sha!, state: row.state! };
-}
-
-export function repairIsActive(status: PipelineRepairStatus): boolean {
-  return ["queued", "preparing", "repairing", "verifying", "stopping"].includes(status);
 }

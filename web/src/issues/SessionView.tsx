@@ -303,6 +303,7 @@ export function IssueSessionView({
       <div className="ws-identity">
         <strong>{detail.title}</strong>
         <div className="ws-identity-line">
+          {detail.scenario === "mr_repair" && <Badge variant="info" title="从已有 MR 直接进入修复；拉单、分析和问题修改等前置阶段不适用">从已有 MR 开始 · 前置调查不适用</Badge>}
           {/* 查看模式标识(非归属人围观):徽标走 Badge warning 软皮
               (中性琥珀,只提示不告警),文本即 aria 信息(读屏直读)。 */}
           {!canOperate && <Badge variant="warning" role="status"
@@ -355,7 +356,7 @@ export function IssueSessionView({
               (原 .issue-ticket 的 user-select 规则随家族退役)。 */}
           {detail.ticket
             ? <span className="select-text rounded-full bg-primary/10 px-[7px] py-px font-mono text-xs font-bold text-primary">{detail.ticket}</span>
-            : <span className="select-text rounded-full border border-dashed px-[7px] py-px font-mono text-xs font-bold text-faint">无单场景</span>}
+            : <span className="select-text rounded-full border border-dashed px-[7px] py-px font-mono text-xs font-bold text-faint">{detail.scenario === "mr_repair" ? "已有 MR" : "无单场景"}</span>}
         </div>
       </div>
       <div className="ws-progress">

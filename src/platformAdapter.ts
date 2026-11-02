@@ -85,7 +85,7 @@ import { PlatformQueryCache, codeHubRateLimited, type QueryResult } from "./plat
  */
 
 import { execFile } from "node:child_process";
-import { normalizeRepairMrUrl, parseRepairMr } from "./mrPipelineRepairTypes.ts";
+import { normalizeRepairMrUrl, parseRepairMr } from "./mrImport.ts";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createServer } from "node:http";

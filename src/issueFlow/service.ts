@@ -195,6 +195,7 @@ import {
   type BusinessModule,
 } from "../businessModuleLibrary.ts";
 import { repositoryIdentity } from "../knowledgeAssetModel.ts";
+import { normalizeRepairMrUrl, readRepairMr } from "../mrImport.ts";
 import { type ModelsSettings } from "../settings.ts";
 import { resolveModelConfig, type ModelLane } from "../modelResolution.ts";
 import { createGoOpsTools, type ContainerExec, type IssueOpsTools } from "./opsTools.ts";
@@ -626,6 +627,8 @@ export interface IssueContainerBuild {
 }
 
 export interface IssueFlowOptions {
+  /** MR 信息读取边界；缺省使用交付平台的只读详情接口。 */
+  mrDetails?: (url: string, account: string) => Promise<import("../mrImport.ts").RepairMr>;
   dataDir: string;
   provider: string;
   model: string;
@@ -978,6 +981,7 @@ function pipelineFailureDigest(
 }
 
 export class IssueFlowService {
+  private readonly mrImports = new Map<string, { account: string; promise: Promise<IssueSummary> }>();
   /** 公开只读:管理页服务设置的 defaults 要展示部署层并发缺省
    *  (与 TaskService.options 公开同一理由)。 */
   readonly options: IssueFlowOptions;
@@ -1188,7 +1192,8 @@ export class IssueFlowService {
     if (!isTerminal(state.status)) {
       for (const mr of state.mrs ?? []) {
         const pushed = state.pushes
-          ?.find((item) => item.repo === mr.repo)?.sha;
+          ?.find((item) => item.repo === mr.repo)?.sha
+          ?? (state.imported_mr?.repo === mr.repo ? state.imported_mr.sha : undefined);
         const watch = state.pipelines?.[mr.repo];
         if (pushed && (!watch || (watch.sha !== pushed
             && !watch.external_head))) {
@@ -2029,6 +2034,52 @@ export class IssueFlowService {
     return this.summarize(state);
   }
 
+  /** 只增加已有 MR 的进入方式，后续使用同一问题会话、工具和流水线监看。 */
+  async importMr(rawUrl: unknown, account: string): Promise<IssueSummary> {
+    const url = normalizeRepairMrUrl(rawUrl);
+    this.requireGitAccount(account);
+    if (this.shuttingDown) throw new IssueControlError("执行服务正在关闭，请稍后重试");
+    if (!this.options.platformUrl) throw new IssueControlError("尚未配置交付平台，请联系管理员");
+    const pending = this.mrImports.get(url);
+    if (pending) {
+      if (pending.account !== account) throw new IssueControlError("这个 MR 正在由其他成员接入，请稍后查看");
+      return pending.promise;
+    }
+    const promise = (async () => {
+      const mr = await this.readMrDetails(url, account);
+      if (mr.state !== "opened") throw new IssueControlError("MR 已关闭或合入，不能启动修复");
+      if (this.shuttingDown) throw new IssueControlError("执行服务正在关闭，请稍后重试");
+      const existing = [...this.live.values()].find(live => !isTerminal(live.state.status)
+        && live.state.mrs?.some(row => row.url === mr.url
+          || (repositoryIdentity(row.repo) === repositoryIdentity(mr.repo) && row.branch === mr.source_branch)));
+      if (existing) {
+        if (existing.state.account === account) return this.project(existing);
+        throw new IssueControlError("这个 MR 的源分支已有其他成员的进行中会话，请在原会话协作");
+      }
+      const id = this.nextId(), root = join(this.issuesRoot, id), now = new Date().toISOString();
+      mkdirSync(root, { recursive: true });
+      const state: IssueSessionState = { id, account, reporter: account, created_at: now, updated_at: now,
+        title: mr.title, description: `修复已有 MR ${mr.url} 的流水线失败；仅处理编译、测试和代码质量问题。`,
+        source: "manual", scenario: "mr_repair", imported_mr: mr, repo_url: mr.repo, repo_urls: [mr.repo],
+        baseline: mr.target_branch, fix_branch: mr.source_branch, round: 1, stage: "mr_green", stage_states: ["in_progress"],
+        status: "queued", stage_at: now, stage_note: "先拉取 MR 源分支，再检查流水线失败；前置调查步骤不适用",
+        mrs: [{ repo: mr.repo, branch: mr.source_branch, target: mr.target_branch, title: mr.title, url: mr.url, iid: mr.iid, at: now }] };
+      recordTransition(state, { source: "platform", stage: "mr_green", note: `接入用户提供的已有 MR ${mr.url}，沿用源分支 ${mr.source_branch}；没有创建 DTS、MR 或推送代码` });
+      saveState(root, state);
+      const live: LiveIssue = { id, root, state, humanGate: new HumanGate(join(root, "waiting.json")), controlEpoch: 0 };
+      this.live.set(id, live);
+      void this.pump();
+      return this.project(live);
+    })();
+    this.mrImports.set(url, { account, promise });
+    try { return await promise; } finally { if (this.mrImports.get(url)?.promise === promise) this.mrImports.delete(url); }
+  }
+
+  private readMrDetails(url: string, account: string) {
+    return this.options.mrDetails?.(url, account) ?? readRepairMr({ platformUrl: this.options.platformUrl!, url,
+      credential: this.options.gitCredential?.(account) });
+  }
+
   private nextId(): string {
     let max = 0;
     for (const name of readdirSync(this.issuesRoot)) {
@@ -2787,6 +2838,9 @@ export class IssueFlowService {
   }> {
     const { state } = live;
     const url = validateRepoUrl(rawUrl);
+    if (state.imported_mr && repositoryIdentity(url) !== repositoryIdentity(state.imported_mr.repo)) {
+      throw new IssueControlError("本次只修复已接入 MR 的源仓库，不能增加其他交付仓");
+    }
     this.requireGitIdentity(state.account, [url]);
     // 身份裁决(ADR-0054,resolvePullRoute 纯函数):指派意图 > 登记
     // 表命中 > 平等登记。指派升级:摘掉参考仓台账行走平等仓登记路径
@@ -2819,6 +2873,7 @@ export class IssueFlowService {
     // 首次解出即显式写 state.fix_branch 并保存(生成即持久化),时间戳
     // 是首次建分支时刻,中断重试不重算,同会话所有仓全程同名。
     let branch: string | undefined;
+    if (state.imported_mr) branch = state.imported_mr.source_branch;
     if (state.scenario === "ticket" && state.ticket) {
       const known = state.fix_branch;
       branch = resolveFixBranch(state);
@@ -2839,9 +2894,11 @@ export class IssueFlowService {
       try {
         await cloneRepository({
           ...common,
-          ...(state.baseline ? { baseline: state.baseline } : {}),
+          ...((state.imported_mr?.source_branch ?? state.baseline)
+            ? { baseline: state.imported_mr?.source_branch ?? state.baseline } : {}),
         });
       } catch (error) {
+        if (state.imported_mr) throw new IssueControlError(`无法拉取 MR 源分支 ${state.imported_mr.source_branch}，请核对分支和仓库权限：${String(error).slice(0, 200)}`);
         if (!state.baseline) throw error;
         // 基线分支缺失是硬失败(ADR-0038):不退默认分支继续。
         throw new Error(
@@ -2879,6 +2936,7 @@ export class IssueFlowService {
       user: this.options.isolation?.user,
       runtime: this.options.ownershipRuntime,
     });
+    if (state.imported_mr) this.armPipelineWatch(live, state.imported_mr.repo);
     return {
       dir: relative(live.root, repo.dir) || repo.dir,
       cloned,
@@ -4183,7 +4241,17 @@ export class IssueFlowService {
       workspace: live.root,
       dataRoot: this.options.dataDir,
       persist: () => saveState(live.root, live.state),
-      beforePush: repo => this.checkCodecheckBeforePush(live, repo),
+      beforePush: async repo => {
+        const imported = live.state.imported_mr;
+        if (imported) {
+          const current = await this.readMrDetails(imported.url, live.state.account);
+          if (current.state !== "opened" || current.repo !== imported.repo
+            || current.source_branch !== imported.source_branch || current.target_branch !== imported.target_branch) {
+            throw new IssueControlError("已有 MR 的状态、仓库或分支已变化，已停止推送，请先核对");
+          }
+        }
+        return this.checkCodecheckBeforePush(live, repo);
+      },
       assertActive: () => {
         if (this.shuttingDown || live.controlEpoch !== epoch || isTerminal(live.state.status)) throw new IssueControlError("会话已停止");
       },
@@ -5737,7 +5805,13 @@ export class IssueFlowService {
   armPipelineWatch(live: LiveIssue, repo: string): void {
     const state = live.state;
     const platformUrl = this.options.platformUrl;
-    const sha = state.pushes?.find((item) => item.repo === repo)?.sha;
+    // 已有 MR 先准备原分支工作区，再检查报错；恢复补挂也遵守同一顺序。
+    if (state.imported_mr) {
+      const workspace = issueRepoWorkspaces(state, live.root).find(item => item.url === repo);
+      if (!workspace || !existsSync(join(workspace.dir, ".git"))) return;
+    }
+    const sha = state.pushes?.find((item) => item.repo === repo)?.sha
+      ?? (state.imported_mr?.repo === repo ? state.imported_mr.sha : undefined);
     if (!platformUrl || !sha) return;
     // 返工轮没人启动合入状态循环(#319):这条循环原先只在 mr_green
     // 收口和进程重启恢复时启动。环境验证不通过回退后,第二轮重新进
@@ -6107,7 +6181,7 @@ export class IssueFlowService {
   private autoArchiveDelivered(live: LiveIssue): void {
     const state = live.state;
     if (isTerminal(state.status) || this.turning.has(live.id)) return;
-    if (state.scenario !== "ticket") return;
+    if (state.scenario !== "ticket" && state.scenario !== "mr_repair") return;
     const mrs = state.mrs ?? [];
     if (!mrs.length || !mrs.every((mr) => Boolean(mr.merged_at))) return;
     state.conclusion = {
@@ -7108,6 +7182,12 @@ export class IssueFlowService {
     // 收口即启动合入事实监看(ADR-0022):两条收口路都汇到这里,
     // 单例防重入;重启恢复由 recover() 补挂。
     this.watchMergeStates(live);
+    if (live.state.scenario === "mr_repair") {
+      live.state.stage_note = "已有 MR 的流水线已通过，等待人工审批与合入";
+      saveState(live.root, live.state);
+      this.startPlatformTurn(live, "已有 MR 的当前提交流水线已通过。请总结本次修复并结束本轮，等待人审批和合入；不要求网管环境验证，不重走前置流程。");
+      return;
+    }
     // 全绿事实发送(ADR-0024,#246):平台不代举验证卡——收口后把
     // 事实交给 AI,由它经 raise_gate 落卡(前置校验会复核全绿+收口)。
     // 欠卡由催办机器打回(shouldNudgeFixed 的出口卡未清判据),

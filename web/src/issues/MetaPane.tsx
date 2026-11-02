@@ -361,7 +361,7 @@ export function IssueMetaPane({ detail, canOperate }: {
               <span>端口 {detail.environment.port}</span>
               <span>{envTypeText(detail.environment.env_type)}</span>
             </span>
-        : <span className="text-muted-foreground">尚未配置——AI按需配置</span>}
+        : <span className="text-muted-foreground">{detail.scenario === "mr_repair" ? "本次只修复 MR 流水线，无需网管环境" : "尚未配置——AI按需配置"}</span>}
         {/* 日志的人读出口(#267):拉取过(logs 清单有文件)才显示,
             终态会话照常可下(与导出现场记录同口径);下载是纯读,
             查看模式不收闸。清单撞条数帽时如实披露(打包以清单为界)。 */}
@@ -473,7 +473,7 @@ export function IssueMetaPane({ detail, canOperate }: {
                   {/* #241:移除 = 人裁定该仓与问题无关的严肃操作——按钮
                       只把意图移入缓冲,不就地改清单;模块绑定仓是团队资产、
                       账外仓不在登记清单,两者连按钮都不渲染(不是置灰)。 */}
-                  {!isTerminal && registered && !bound && (queued
+                  {!isTerminal && detail.scenario !== "mr_repair" && registered && !bound && (queued
                     ? <Button variant="outline" size="xs" className="ml-auto"
                       onClick={() => setPendingRepoRemove(
                         pendingRepoRemove.filter((item) =>
@@ -563,7 +563,7 @@ export function IssueMetaPane({ detail, canOperate }: {
     {/* #241 编辑区:增删裁定先入本地缓冲,「确定」一次提交给 Agent 执行。
         清单不乐观更新(数据源仍是 detail),提交成功只清缓冲并如实告知,
         清单随既有事件流自刷;终态会话整段不渲染(上面的终态闸)。 */}
-    {!isTerminal && <section aria-label="调整关联仓"
+    {!isTerminal && detail.scenario !== "mr_repair" && <section aria-label="调整关联仓"
       className="grid content-start gap-2.5 rounded-xl border border-border bg-surface px-3.5 py-3">
       <div className="flex flex-wrap items-baseline gap-2.5">
         <strong className="text-sm font-bold">调整关联仓</strong>
