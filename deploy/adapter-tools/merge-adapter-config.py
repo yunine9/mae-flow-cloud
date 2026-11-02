@@ -15,6 +15,7 @@ REQUIRED_ENDPOINTS = (
     "pipeline_artifacts",
     "mr_lookup",
     "mr_discover",
+    "mr_detail",
     "mr_discussions",
     "mr_gates",
 )
@@ -23,6 +24,7 @@ REPOSITORY_SCRIPTS = {
     "pipeline_status": "pipeline-status.sh",
     "pipeline_artifacts": "pipeline-artifacts.sh",
     "mr_discover": "mr-discover.py",
+    "mr_detail": "mr-detail.py",
     "mr_gates": "mr-gates.py",
 }
 

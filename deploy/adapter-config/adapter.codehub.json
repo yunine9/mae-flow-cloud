@@ -139,6 +139,10 @@
       "json": "0.iid"
     }
   },
+  "mr_detail": {
+    "command": ["python3", "/data/mae-flow-cloud/repo/deploy/adapter-tools/mr-detail.py", "{mr}", "{token}"],
+    "timeout_s": 12
+  },
   "mr_discover": {
     "command": [
       "python3",

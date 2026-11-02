@@ -85,6 +85,7 @@ import { PlatformQueryCache, codeHubRateLimited, type QueryResult } from "./plat
  */
 
 import { execFile } from "node:child_process";
+import { normalizeRepairMrUrl, parseRepairMr } from "./mrPipelineRepairTypes.ts";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createServer } from "node:http";
@@ -218,6 +219,8 @@ interface AdapterConfig {
   mr_lookup?: CommandSpec;
   /** 全生命周期精确查找，不复用“只查 opened”的创建前查询。 */
   mr_discover?: CommandSpec;
+  /** 只凭 MR 链接读取仓库、源/目标分支和提交；用于独立流水线修复。 */
+  mr_detail?: CommandSpec;
   /** 单号纠正成功后关闭旧 MR。未配置时保留旧 MR 并明确报告清理失败。 */
   mr_close?: CommandSpec;
   pipeline_trigger: PipelineTriggerSpec;
@@ -942,6 +945,12 @@ export class PlatformAdapter {
         + failures.map((why, index) => `候选[${index}]: ${why}`).join("\n"));
     }
     // ---- MR 闭环的四个可选端点:不配=404,宿主 fail-open ----
+    if (method === "GET" && path === "/mr/detail") {
+      if (!this.config.mr_detail) return { status: 404, payload: { error: "未配置 mr_detail" } };
+      const url = normalizeRepairMrUrl(query.get("mr_url"));
+      const output = await this.run(this.config.mr_detail, this.values({ mr: url }, headers));
+      return { status: 200, payload: parseRepairMr(JSON.parse(output), url) };
+    }
     if (method === "GET" && path === "/mr/discover") {
       if (!this.config.mr_discover) return { status: 404, payload: { error: "未配置 mr_discover" } };
       const values = this.values({ repo: query.get("repo") ?? "", source_branch: query.get("source_branch") ?? "", target_branch: query.get("target_branch") ?? "" }, headers);
@@ -1179,6 +1188,7 @@ export class PlatformAdapter {
       ["mr_close(只印不执行)", this.config.mr_close],
       ["mr_lookup(先查后建的查询)", this.config.mr_lookup],
       ["mr_discover(全生命周期查找)", this.config.mr_discover],
+      ["mr_detail(独立修复读取 MR)", this.config.mr_detail],
       ["mr_gates", this.config.mr_gates],
       ["mr_discussions", this.config.mr_discussions],
       ["discussion_reply(只印不执行)", this.config.discussion_reply],

@@ -154,6 +154,23 @@ export interface WishImageUpload {
   content_base64: string;
 }
 
+export type { PipelineRepairRecord, PipelineRepairList } from "../../src/mrPipelineRepairTypes";
+export async function listPipelineRepairs(signal?: AbortSignal): Promise<import("../../src/mrPipelineRepairTypes").PipelineRepairList> {
+  const response = await fetch("/pipeline-repairs", { signal });
+  if (!response.ok) throw new Error(await errorText(response));
+  return await response.json() as import("../../src/mrPipelineRepairTypes").PipelineRepairList;
+}
+export async function startPipelineRepair(mrUrl: string): Promise<import("../../src/mrPipelineRepairTypes").PipelineRepairRecord> {
+  const response = await fetch("/pipeline-repairs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mr_url: mrUrl }) });
+  if (!response.ok) throw new Error(await errorText(response));
+  return await response.json() as import("../../src/mrPipelineRepairTypes").PipelineRepairRecord;
+}
+export async function controlPipelineRepair(id: string, action: "stop" | "retry"): Promise<import("../../src/mrPipelineRepairTypes").PipelineRepairRecord> {
+  const response = await fetch(`/pipeline-repairs/${encodeURIComponent(id)}/${action}`, { method: "POST" });
+  if (!response.ok) throw new Error(await errorText(response));
+  return await response.json() as import("../../src/mrPipelineRepairTypes").PipelineRepairRecord;
+}
+
 export async function listWishes(): Promise<WishWallItem[]> {
   const response = await fetch("/wishes");
   if (!response.ok) throw new Error(await errorText(response));

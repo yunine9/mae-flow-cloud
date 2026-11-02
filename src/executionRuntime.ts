@@ -37,6 +37,8 @@ import { reclaimIssueWorkspaces } from "./issueFlowWorkspaceReclaim.ts";
 import { EnvironmentRegistry } from "./environmentRegistry.ts";
 import { startEnvironmentProbePolling } from "./environmentProbe.ts";
 import { createTaskServer } from "./server.ts";
+import { MrPipelineRepairs } from "./mrPipelineRepair.ts";
+import { createPipelineRepairRuntime } from "./mrPipelineRepairRuntime.ts";
 import { FakeLubanServer, Notifier } from "./notifier.ts";
 import {
   loadLubanPluginToken,
@@ -1242,12 +1244,26 @@ async function main(): Promise<void> {
   // 就不上网,是姿态不是疏忽)。暴露时登录/权限本来就在,但要认两条:
   // 内网是明文 http(会话 cookie 可被同网段嗅探,正式部署前加反代
   // TLS);工作机合盖=全员断线,它是工作站不是服务器。
+  const pipelineRepairs = new MrPipelineRepairs({ dataDir,
+    runtime: createPipelineRepairRuntime({ dataDir, platformUrl: issueFlow.options.platformUrl,
+      isolation: issueFlow.options.isolation, deployment: { provider, model, modelsJson }, settings,
+      credential: account => auth.gitCredential(account), log: issueLog }),
+    maxRounds: () => settings.runtime().repair_rounds ?? 20, unfixableTools, log: issueLog,
+    managedMr: mr => {
+      const task = service.list().find(task => !["completed", "canceled", "failed"].includes(task.status)
+        && task.delivery?.mr_url === mr.url);
+      if (task) return `这个 MR 正由需求任务「${task.title}」管理，请在原任务处理流水线失败`;
+      const issue = issueFlow.list().find(issue => !["archived", "canceled"].includes(issue.status)
+        && issue.mrs?.some(row => row.url === mr.url));
+      return issue ? `这个 MR 正由问题会话「${issue.title}」管理，请在原会话处理流水线失败` : undefined;
+    },
+  });
   const server = createTaskServer(service, {
     webRoot, auth, lubanApproval, lubanKnowledgeToken: lubanPluginToken, issueFlow, mcpGateway,
     // 问题路由直连所需的 DTS 网关与台账日志(与问题服务同一实例/口径)。
     dts: issueDtsGateway,
     log: issueLog,
-    buildHash, startup,
+    buildHash, startup, pipelineRepairs,
   });
   let terminating = false;
   const terminate = async (signal: "SIGTERM" | "SIGINT") => {
@@ -1275,6 +1291,7 @@ async function main(): Promise<void> {
     });
     let exitCode = 0;
     try {
+      await pipelineRepairs.shutdown();
       await service.shutdown();
       await issueFlow.shutdown();
       console.log("[serve] 所有任务会话与容器已确认释放；业务状态保持不变，"

@@ -415,7 +415,7 @@ export interface ManagedContainerSweepResult {
 }
 
 const MANAGED_ROLES = new Set([
-  "coding", "prepush", "system-check", "issue", "knowledge-extract",
+  "coding", "prepush", "system-check", "issue", "knowledge-extract", "pipeline-repair",
 ]);
 
 /**

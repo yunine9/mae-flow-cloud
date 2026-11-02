@@ -62,7 +62,7 @@ test("父行=展开/收起开关:本地 open 态承载,箭头旋转指示,点击
     "问题处理不再是普通 NavButton(它现在是开关,不是直跳页签)");
 });
 
-test("子页签:开发三枚(问题登记/DTS列表/问题会话),admin 只见问题会话", () => {
+test("子页签:开发含独立流水线修复,admin 只见问题会话", () => {
   const { admin, developer } = navSlices();
   for (const [name, branch] of [["admin", admin], ["开发", developer]] as const) {
     assert.ok(branch.includes("<IssueNavGroup"), `${name}侧导航应挂问题处理组`);
@@ -74,15 +74,16 @@ test("子页签:开发三枚(问题登记/DTS列表/问题会话),admin 只见�
     /admin\s*\?\s*\[\{ tab: "sessions", label: "问题会话" \}\]/,
     "admin 分支只应有问题会话一个子页签");
   for (const [tab, label] of [
-    ["register", "问题登记"], ["dts", "DTS 列表"], ["sessions", "问题会话"],
+    ["register", "问题登记"], ["dts", "DTS 列表"], ["sessions", "问题会话"], ["pipeline", "流水线修复"],
   ] as const) {
     assert.ok(group.includes(`{ tab: "${tab}", label: "${label}" }`),
       `开发侧子页签缺「${label}」`);
   }
   // 默认子页签排第一(拍板:缺省落点在首位,与选择直觉一致)。
   assert.ok(group.indexOf('{ tab: "sessions"') < group.indexOf('{ tab: "register"')
-    && group.indexOf('{ tab: "register"') < group.indexOf('{ tab: "dts"'),
-    "子页签顺序应为 问题会话 → 问题登记 → DTS 列表");
+    && group.indexOf('{ tab: "register"') < group.indexOf('{ tab: "dts"')
+    && group.indexOf('{ tab: "dts"') < group.indexOf('{ tab: "pipeline"'),
+    "子页签顺序应为 问题会话 → 问题登记 → DTS 列表 → 流水线修复");
   // 子页签行走 shadcn SidebarMenuSubButton 轨道(原 tw-root scoped 归一随
   // preflight 全局化退役,见 tailwind.css base 层)。
   assert.match(group, /SidebarMenuSubButton/, "子页签是 shadcn Sidebar 子按钮");

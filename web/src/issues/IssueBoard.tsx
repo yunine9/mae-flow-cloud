@@ -13,6 +13,7 @@
  * + 右栏协作对话框)。前端不推断状态:一切文案来自 /issues API 镜像。
  */
 import { useEffect, useState } from "react";
+import { PipelineRepairPanel } from "../PipelineRepairPanel";
 import {
   ISSUE_STATUS_TEXT,
   controlIssue,
@@ -68,9 +69,9 @@ function readIssueListFilter(): IssueListFilter {
 }
 
 /** 问题处理导航的子页签(2026-09-11 拍板,spec #171):问题会话是缺省
- * 落点、排导航首位;问题登记/DTS 列表是发起域的两个面板。App 侧边栏
+ * 落点、排导航首位;问题登记/DTS 列表是发起域的两个面板，流水线修复独立执行。App 侧边栏
  * 展开组持有选择,本组件按它承接右侧页面。 */
-export type IssueChildTab = "sessions" | "register" | "dts";
+export type IssueChildTab = "sessions" | "register" | "dts" | "pipeline";
 
 export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
   onOpenIssue, onCloseIssue, childTab, onChildTabChange }: {
@@ -225,9 +226,10 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
   }
 
   return <div className="grid gap-[18px]">
+    {viewer.role !== "admin" && <PipelineRepairPanel visible={childTab === "pipeline"} onNavigateProfile={onNavigateProfile} />}
     {/* #231 换装:看板壳(.issue-board/.issue-error 等 issue-board 家族)
         退役,直译成令牌工具类。 */}
-    {error && <div role="alert"
+    {error && childTab !== "pipeline" && <div role="alert"
       className="flex flex-wrap items-center justify-between gap-2.5 rounded-[10px] border border-danger/35 bg-danger-soft px-3.5 py-2.5 text-sm text-danger">
       <span>{error}</span>
       <span className="flex items-center gap-3">
@@ -249,7 +251,7 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
     {viewer.role !== "admin" && <IssueRegistration
       viewer={viewer}
       issues={issues}
-      visible={childTab !== "sessions"}
+      visible={childTab === "register" || childTab === "dts"}
       panel={childTab === "dts" ? "dts" : "manual"}
       // 登记成功后的进台方式分两路(ADR-0040):手工登记不自动跳
       // (成功横幅里给「打开问题会话」链接,登记完成即撒手),只刷

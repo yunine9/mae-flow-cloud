@@ -10,6 +10,8 @@ import { continuationHistoryZip } from "./taskContinuation.ts";
 import { domainKnowledgeRoute } from "./domainKnowledgeRoutes.ts";
 import { extractionConfigurationRoute } from "./knowledgeExtractionRoutes.ts";
 import { componentResearchRoute } from "./componentResearchRoutes.ts";
+import { pipelineRepairRoute } from "./mrPipelineRepairRoutes.ts";
+import type { MrPipelineRepairs } from "./mrPipelineRepair.ts";
 import { knowledgeDocumentRoute } from "./knowledgeDocumentRoutes.ts";
 import { knowledgeAnswerRoute, lubanKnowledgeRoute } from "./knowledgeAnswerRoutes.ts";
 import { KnowledgeAnswerError, type KnowledgeAnswers } from "./knowledgeAnswers.ts";
@@ -372,6 +374,7 @@ export function createTaskServer(
     lubanApproval?: LubanApprovalGateway;
     lubanKnowledgeToken?: string;
     knowledgeAnswers?: KnowledgeAnswers;
+    pipelineRepairs?: MrPipelineRepairs;
     issueFlow?: import("./issueFlow/service.ts").IssueFlowService;
     mcpGateway?: import("./issueFlow/gateways.ts").McpGateway;
     /** DTS 网关:问题路由直连拉单/详情/内嵌图代理(服务不再转手)。 */
@@ -1382,6 +1385,12 @@ export function createTaskServer(
           if (request.method === "POST" && parts.length === 4 && parts[3] === "resolve") return json(response, 200, resolveKnowledgeReviewNotes(sources, kind, id, await readBody(request) as { note_ids: string[] }, viewer?.username ?? "本地部署"));
           return json(response, 404, { error: "未知知识审阅接口" });
         } catch (error) { return json(response, 400, { error: (error as Error).message }); }
+      }
+      if (parts[0] === "pipeline-repairs") {
+        if (options.auth && !viewer) return json(response, 401, { error: "请先登录" });
+        if (viewer?.role === "admin") return json(response, 403, { error: "请使用开发成员账号发起和查看自己的流水线修复" });
+        return pipelineRepairRoute(request, response, parts, options.pipelineRepairs,
+          viewer?.username ?? "本地用户", readBody, json);
       }
       if (parts[0] === "component-knowledge") return componentKnowledgeRoute(request, response, parts, service, viewer?.username ?? "本地部署", readBody, json);
       if (["component-repositories", "component-research"].includes(parts[0])) return componentResearchRoute(request, response, parts, service, viewer?.username ?? "本地部署", readBody, json);

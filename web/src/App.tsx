@@ -146,11 +146,11 @@ function teamAssetTabFromHistoryState(
     ? candidate as TeamAssetTab : undefined;
 }
 
-/** 问题处理子页签(spec #171):问题登记/DTS列表/问题会话。选择记住
+/** 问题处理子页签:问题会话、登记、DTS 列表与独立流水线修复。选择记住
  * localStorage + 浏览器历史快照,与团队需求页的现场/档案页签同口径;
  * admin 恒为问题会话(不发起,登记/DTS 入口对 admin 不渲染)。 */
 const ISSUE_CHILD_TABS = new Set<IssueChildTab>([
-  "register", "dts", "sessions",
+  "register", "dts", "sessions", "pipeline",
 ]);
 const ISSUE_CHILD_STORAGE_KEY = "mae-flow:issue-child-tab";
 
@@ -1422,6 +1422,7 @@ export function App() {
   // 问题处理域页头随子页签换文案(spec #171 评审拍板):整域的静态说明
   // 对子页签没有信息量,每个子页签讲自己真正有用的一句。
   const issueChildHeaders: Record<IssueChildTab, { title: string; description: string }> = {
+    pipeline: { title: "流水线修复", description: "输入已有 MR，让 Agent 修复编译、测试和代码质量失败。" },
     register: { title: "问题登记",
       description: "手工登记一个问题:说清现象、选业务模块;要处理 DTS 单,去「DTS 列表」勾选发起。" },
     dts: { title: "DTS 列表",
@@ -1940,8 +1941,8 @@ function CommitterInbox({
 }
 
 /** 问题处理导航组(spec #171):父行=展开/收起开关(受控状态,点击不跳
- * 页;首次展开而右侧不在问题处理时落默认子页签),子行=子页签(问题登记
- * /DTS列表/问题会话;admin 只见问题会话)。2026-09-11 迁到 Sidebar 菜单
+ * 页;首次展开而右侧不在问题处理时落默认子页签),子行=问题会话、登记、
+ * DTS 列表与独立流水线修复;admin 只见问题会话。沿用 Sidebar 菜单
  * 语言:父行 SidebarMenuButton,子行 SidebarMenuSub/SubButton——nova 皮
  * 与令牌桥自动生效,不再依赖 nav-item 家族与手工缩进类。进入问题处理
  * 视图自动展开(深链同理)。徽章只属开发侧:名下进行中的问题数,口径见
@@ -1967,7 +1968,8 @@ export function IssueNavGroup({ view, current, admin = false, childTab, onSelect
     ? [{ tab: "sessions", label: "问题会话" }]
     : [{ tab: "sessions", label: "问题会话" },
       { tab: "register", label: "问题登记" },
-      { tab: "dts", label: "DTS 列表" }];
+      { tab: "dts", label: "DTS 列表" },
+      { tab: "pipeline", label: "流水线修复" }];
   return <SidebarMenuItem>
     <SidebarMenuButton isActive={current === view} aria-label="问题处理"
       aria-expanded={open}
