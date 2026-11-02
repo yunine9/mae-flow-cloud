@@ -30,6 +30,24 @@ import {
 } from "../src/pipelineMirror.ts";
 import { scopePipelineArtifacts } from "../src/pipelineArtifactScope.ts";
 
+test("镜像默认等待 120 秒，30 秒后的慢响应仍可取证", async (t) => {
+  const dir = join(mkdtempSync(join(tmpdir(), "mfc-mirror-timeout-")), "pipeline");
+  let signal: AbortSignal | undefined;
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  t.mock.method(globalThis, "fetch", async (_url: unknown, init: { signal: AbortSignal }) => {
+    signal = init.signal;
+    return new Promise((_resolve, reject) => {
+      signal!.addEventListener("abort", () => reject(new Error("timeout")), { once: true });
+    });
+  });
+  const pending = mirrorPipelineArtifacts({ platformUrl: "http://fixture", sha: "a", repo: "r", dir });
+  t.mock.timers.tick(30_001);
+  assert.equal(signal?.aborted, false, "不能沿用 30 秒超时");
+  t.mock.timers.tick(89_999);
+  assert.equal(signal?.aborted, true, "120 秒到点仍会结束请求");
+  assert.deepEqual(await pending, []);
+});
+
 test("镜像延迟返回不能覆盖新版本；错误 SHA 和超时不会留下旧证据", async () => {
   const dir = join(mkdtempSync(join(tmpdir(), "mfc-mirror-race-")), "pipeline");
   let reply: ((body: unknown) => void) | undefined;

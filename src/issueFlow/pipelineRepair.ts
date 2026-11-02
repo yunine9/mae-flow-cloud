@@ -7,6 +7,38 @@
  * 修复会话就是会话自己(容器在场),平台回合即派单。产物全文镜像的
  * 公共实现在 src/pipelineMirror.ts,直接从那里 import。
  */
+import { PIPELINE_DIMENSION_TEXT, type PipelineArtifactText,
+  type PipelineEvidenceAssessment } from "../pipelineEvidence.ts";
+
+/** 采证结果随失败事实发送，修复与举卡仍由会话 Agent 判断。 */
+export function pipelineEvidenceLines(
+  assessment: PipelineEvidenceAssessment,
+  artifacts: PipelineArtifactText[],
+): string[] {
+  const lines = ["**失败证据评估**"];
+  for (const dimension of assessment.availableDimensions) {
+    lines.push(`${PIPELINE_DIMENSION_TEXT[dimension]}：${assessment.sources[dimension]?.join("、")}`);
+  }
+  for (const dimension of assessment.missingDimensions) {
+    lines.push(`缺失 ${PIPELINE_DIMENSION_TEXT[dimension]}：${assessment.reasons[dimension]?.join("；")}`);
+  }
+  // 直接保留平台的指标字段和值，不把 DT 数字解释成失败用例数量。
+  if (assessment.sources.UT?.some(source => source.includes("指标型质量门缺陷"))) {
+    const detail = artifacts.find(item => item.name === "codecheck_detail.json");
+    const indicators: string[] = [];
+    const visit = (value: unknown): void => {
+      if (!value || typeof value !== "object" || indicators.length >= 20) return;
+      if (!Array.isArray(value) && Object.keys(value).some(key => /^indicator_?name$/i.test(key))) {
+        indicators.push(JSON.stringify(value).slice(0, 2000));
+        return;
+      }
+      for (const nested of Object.values(value)) visit(nested);
+    };
+    try { visit(JSON.parse(detail?.text ?? "")); } catch { /* 原文仍在镜像文件中。 */ }
+    lines.push(...indicators.map(row => `指标缺陷原文(codecheck_detail.json)：${row}`));
+  }
+  return lines;
+}
 
 /** 修复轮预算:管理页旋钮现读,缺席用需求侧同款缺省 20。 */
 export function repairBudget(

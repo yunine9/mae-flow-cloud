@@ -2859,7 +2859,8 @@ test("红灯证据全缺:AI 举回灌卡请人贴原文,作答回灌原文且不
   const service = new IssueFlowService({
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
-    settings: fastPoll,
+    // #578：这里验证到期后的举卡与回灌，重试恢复由专门用例覆盖。
+    settings: { ...fastPoll, runtime: () => ({ ...fastPoll.runtime(), poll_timeout_s: 0 }) },
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
     gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
@@ -2886,8 +2887,7 @@ test("红灯证据全缺:AI 举回灌卡请人贴原文,作答回灌原文且不
     assert.equal(gated.feedback?.at(-1)?.status, "repairing", "留痕照记");
     assert.ok(model.requests.length >= 1,
       "发送回合在场(卡由 AI 在发送回合里举)");
-    // 镜像产物在场(build.log)也照镜像:内容嗅探背书/证据评估已退场,
-    // 读不读、够不够修由 AI 凭发送的事实判断。
+    // 镜像产物在场(build.log)也保留；采证评估与缺失原因一起交给 AI。
     assert.ok(existsSync(join(dataDir, "issues", "issue-1",
       "pipeline", "build.log")), "取证镜像照做");
     // 空答复打回:码到了但原文没贴,选项标签不能冒充证据。
@@ -3297,8 +3297,8 @@ test("盲输入形态:零 checks+链接式摘要+零产物→事实照发送,AI 
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("failed");
   // 内网实锤形态:摘要=标签+链接(会话没登录态打不开),checks 缺席,
-  // 产物零镜像。#247 后平台不再机械拦:事实照发送并如实说明缺席,
-  // 缺口由 AI 判断、自己举 pipeline_evidence 卡请人贴原文。
+  // 产物零镜像。#578 在有限重试到期后发送缺口，
+  // 由 AI 判断并举 pipeline_evidence 卡请人贴原文。
   platform.firstFailure = {
     log: "FAILED stage=CodeCCP2.0 job=CodeCCP2.0  detail: "
       + "https://loop.test/pipeline/1",
@@ -3319,7 +3319,8 @@ test("盲输入形态:零 checks+链接式摘要+零产物→事实照发送,AI 
   const service = new IssueFlowService({
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
-    settings: fastPoll,
+    // #578：这里验证到期后的举卡与回灌，重试恢复由专门用例覆盖。
+    settings: { ...fastPoll, runtime: () => ({ ...fastPoll.runtime(), poll_timeout_s: 0 }) },
     dts: new MockDtsGateway(),
     platformUrl: platform.baseUrl,
     gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),

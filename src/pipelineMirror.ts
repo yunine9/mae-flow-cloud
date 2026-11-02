@@ -84,7 +84,7 @@ export async function mirrorPipelineArtifacts(input: {
   current?: () => boolean;
 }): Promise<string[]> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), input.timeoutMs ?? 30_000);
+  const timer = setTimeout(() => controller.abort(), input.timeoutMs ?? 120_000);
   try {
     if (input.current && !input.current()) return [];
     const generation = scopePipelineArtifacts(input.dir, input.sha, true);

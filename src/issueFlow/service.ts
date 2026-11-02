@@ -82,8 +82,9 @@ import {
   taskContainerInstance,
   type TaskContainerLimits,
 } from "../containerRuntime.ts";
-import { mirrorPipelineArtifacts } from "../pipelineMirror.ts";
-import { repairBudget } from "./pipelineRepair.ts";
+import { mirrorPipelineArtifacts, isBlindPipelineInput, MISSING_FAILURE_PLACEHOLDER } from "../pipelineMirror.ts";
+import { assessPipelineRepairEvidence } from "../pipelineEvidence.ts";
+import { repairBudget, pipelineEvidenceLines } from "./pipelineRepair.ts";
 import { collectRepoContextFiles } from "./repoContextFiles.ts";
 import { perRepoBuildCacheMounts } from "../buildCacheMounts.ts";
 import {
@@ -1155,14 +1156,19 @@ export class IssueFlowService {
     // watching=false 的(终态/耗尽)不重挂。多仓各自挂各自的表。
     let staleRetryLedger = false;
     for (const [repo, watch] of Object.entries(state.pipelines ?? {})) {
+      // #578：在途取证沿用原截止时间，直接续取产物，不重新触发流水线。
+      if (watch.watching && watch.status === "failed" && watch.evidence_retry_deadline) {
+        void this.settlePipeline(live, repo, watch.sha, {
+          status: "failed", checks: watch.checks, log: watch.evidence_failure_log,
+        });
+        continue;
+      }
       if (watch.watching) {
         this.log(`[issue-flow] ${logPrefix}${state.id} 恢复流水线监看(${repo})`
           + ` @ ${watch.sha.slice(0, 12)}`);
         void this.watchPipeline(live, repo, watch.sha);
       }
-      // 证据重试窗已随红灯分诊退场(#247):存量盘上的 retry 字段
-      // 成了死账,顺手清掉(红灯的下一步=失败事实发送给 AI,不再
-      // 有"定时重评"的恢复义务)。
+      // 非在途取证的旧字段仍清理，避免把已处理的红灯重新发送。
       if (watch.evidence_retry_deadline) {
         delete watch.evidence_retry_deadline;
         delete watch.evidence_retry_attempts;
@@ -6738,6 +6744,11 @@ export class IssueFlowService {
     if (isTerminal(state.status)) return;
     const watch = state.pipelines?.[repo];
     if (watch?.sha !== sha) return;
+    const epoch = live.controlEpoch;
+    const current = () => !this.shuttingDown && !isTerminal(state.status)
+      && live.controlEpoch === epoch && state.pipelines?.[repo] === watch
+      && watch.sha === sha && (run.status === "success" || (watch.status !== "success"
+        && !state.mrs?.some(mr => mr.repo === repo && (mr.merged_at || mr.closed_at))));
     // ---- 最终结果动手前复核 MR 状态(#321,赛跑防护,issue-107)----
     // 红或绿的最终结果都是「记账并触发动作」的扳机,扣扳机之前现查
     // 一次 MR 状态(低频:每个提交只在拿到最终结果时复核一次):
@@ -6751,7 +6762,7 @@ export class IssueFlowService {
     const recheck = await this.recheckMrForSettle(live, repo, sha);
     // 复核是一场网络往返:期间检查目标可能已被跟随切换换走——换走了
     // 就说明切换已接管,这次旧结果同样不作数。
-    if (state.pipelines?.[repo]?.sha !== sha) return;
+    if (!current()) return;
     if (recheck?.mrState === "merged" && run.status !== "success") {
       recordTransition(state, {
         source: "platform",
@@ -6860,10 +6871,9 @@ export class IssueFlowService {
     // 掉的现场——恢复直挂续表绕过 armPipelineWatch、推送后 AI 同回合
     // 补举的验证卡——到红灯这里必须让失败事实正常送达,不再停靠旧卡。
     this.dismissStaleGate(live, repo, sha, "red");
-    // 取证增强:平台失败产物全文镜像进会话工作区 pipeline/,AI 用
-    // Bash 读全文再修,而不是只看状态响应里截断 1500 字的摘要。
-    // 镜像失败不拦主链路——按摘要修复,文案如实说明没有产物。
-    const artifacts = await this.mirrorPipelineArtifactsFor(live, repo, sha);
+    const evidence = await this.collectPipelineEvidence(live, repo, sha, run, current);
+    if (!evidence || !current()) return;
+    const { artifacts, lines: evidenceLines } = evidence;
     const feedbackId = `issue-pipeline:${repo}:${sha}`;
     this.feedbackStore(live).upsert([{
       id: feedbackId,
@@ -6877,15 +6887,8 @@ export class IssueFlowService {
       status: "repairing",
       updated_at: new Date().toISOString(),
     }]);
-    // ---- 红灯切换(#247,ADR-0024):分诊判断交 AI,平台停代举 ----
-    // 平台不再评估"可不可修/证据够不够",不再代举 pipeline_unfixable /
-    // pipeline_evidence:失败事实(摘要/逐维度明细/产物镜像)三态发送
-    // 给 AI,三路处置由它现场判断——能修直接修(同分支重推再建 MR)、
-    // 证据缺口举报错回灌卡、不可修告警举人工处理卡,后两路经 raise_gate
-    // (平台复核红灯在案)。平台保留机械三样:同提交刹车(防空转循环)、
-    // 修复轮预算(发送回合=修复回合,派了才 +1,耗尽诚实停机)、留痕
-    // (反馈账与转移账)。证据重试窗随分诊编排一并退场:产物镜像仍在
-    // 红灯当下做一次,AI 凭现场事实判断,平台不再定时重评。
+    // #578：平台先有限重试取证，再发送失败事实和采证评估。
+    // 修复方式、不可修判断与人工卡仍由 Agent 决定(ADR-0024)。
     const checks = run.checks ?? watch.checks;
     const max = repairBudget(this.options.settings);
     // ① 同提交刹车(需求流 last_sha===sha→halted 同语义):红灯还是
@@ -6984,6 +6987,8 @@ export class IssueFlowService {
         ? `失败产物全文已镜像到会话工作区 pipeline/ 目录(${artifacts.join("、")}),先用 Bash 读全文再判断。`
         : "平台未返回本次失败产物,可按上方摘要与各维度链接判断,"
           + "或到交付平台的 MR/流水线页面查看。",
+      "",
+      ...evidenceLines,
       ...(previousFailureLines(previousSha, previousSummary)
         .flatMap((line, index) => index === 0 ? ["", line] : [line])),
       "",
@@ -6994,21 +6999,91 @@ export class IssueFlowService {
       + "(分诊交 AI)");
   }
 
+  private pipelineEvidenceDelayMs(): number { return 3 * 60_000; }
+
+  /** 全部具体报错缺失时先重取一次，仍缺则间隔重试；期间不发修复回合。 */
+  private async collectPipelineEvidence(
+    live: LiveIssue, repo: string, sha: string, run: PipelineRun,
+    current: () => boolean,
+  ): Promise<{ artifacts: string[]; lines: string[] } | undefined> {
+    const watch = live.state.pipelines![repo];
+    const priorDeadline = Date.parse(watch.evidence_retry_deadline ?? "");
+    const budget = (this.options.settings?.runtime?.().poll_timeout_s ?? 1_800) * 1000;
+    const deadline = Number.isFinite(priorDeadline) ? priorDeadline : Date.now() + budget;
+    watch.evidence_retry_deadline = new Date(deadline).toISOString();
+    watch.evidence_failure_log = run.log?.slice(0, 2000);
+    watch.watching = true;
+    saveState(live.root, live.state);
+    for (;;) {
+      if (!current()) return;
+      const diagnostics: string[] = [];
+      const artifacts = await this.mirrorPipelineArtifactsFor(live, repo, sha, current, diagnostics);
+      if (!current()) return;
+      const texts = artifacts.flatMap(name => {
+        try { return [{ name, text: readFileSync(join(live.root, "pipeline", name), "utf8") }]; }
+        catch { return []; }
+      });
+      const assessment = assessPipelineRepairEvidence({ checks: run.checks ?? watch.checks,
+        artifacts: texts, failureSummary: run.log });
+      const allMissing = assessment.failedDimensions.length
+        ? assessment.availableDimensions.length === 0
+        : isBlindPipelineInput(run.log?.trim() || MISSING_FAILURE_PLACEHOLDER, texts.length > 0);
+      watch.evidence_retry_attempts = (watch.evidence_retry_attempts ?? 0) + 1;
+      const expired = Date.now() >= deadline;
+      // 已派过同提交或关闭自动修复时保留原停机规则，不额外等待取证。
+      const stopped = watch.last_repair_sha === sha
+        || (watch.reds ?? 0) >= repairBudget(this.options.settings);
+      if (!allMissing || expired || stopped || !this.options.platformUrl) {
+        const lines = pipelineEvidenceLines(assessment, texts);
+        if (allMissing && !assessment.failedDimensions.length) lines.push("失败维度未知：平台未返回逐维度明细，摘要没有可定位报错。");
+        if (allMissing) lines.push(...diagnostics);
+        if (allMissing && expired) lines.push("取证重试已到期。若仍无法定位，请调 raise_gate(kind=pipeline_evidence)，"
+          + "将上述缺失维度与原因原样写入 supplement，请用户补充报错原文。");
+        else if (assessment.missingDimensions.length) lines.push("先修复已有证据的问题；缺失维度不要猜改，必要时单独请求补证。");
+        watch.watching = false;
+        delete watch.evidence_retry_deadline;
+        delete watch.evidence_retry_attempts;
+        delete watch.evidence_failure_log;
+        if (live.state.stage_note.startsWith("流水线具体报错暂缺，正在重试取证")) {
+          live.state.stage_note = allMissing ? "流水线取证重试已结束，等待会话判断缺失证据"
+            : "流水线具体报错已取得，继续处理红灯";
+        }
+        saveState(live.root, live.state);
+        return { artifacts, lines };
+      }
+      live.state.stage_note = `流水线具体报错暂缺，正在重试取证(第 ${watch.evidence_retry_attempts} 次)，未消耗修复轮次`;
+      saveState(live.root, live.state);
+      this.log(`[issue-flow] ${live.id} ${repo}@${sha.slice(0, 12)} ${live.state.stage_note}`);
+      if (watch.evidence_retry_attempts > 1) {
+        await new Promise<void>(resolve => {
+          const timer = setTimeout(resolve, Math.min(this.pipelineEvidenceDelayMs(), Math.max(0, deadline - Date.now())));
+          timer.unref?.();
+        });
+      }
+    }
+  }
+
   /** 失败产物的平台侧镜像(红灯终态处理取证):全文落会话工作区
    *  pipeline/,AI 用 Bash 读原文判断与修复,不啃截断摘要。 */
   private mirrorPipelineArtifactsFor(
     live: LiveIssue,
     repo: string,
     sha: string,
+    current?: () => boolean,
+    diagnostics?: string[],
   ): Promise<string[]> {
     if (!this.options.platformUrl) return Promise.resolve([]);
     const mrUrl = live.state.mrs?.find((item) => item.repo === repo)?.url;
     return mirrorPipelineArtifacts({
       platformUrl: this.options.platformUrl,
       sha, repo, mrUrl,
+      current,
       dir: join(live.root, "pipeline"),
       headers: this.platformHeaders(live.state.account),
-      log: (message) => this.log(`[issue-flow] ${live.id} ${message}`),
+      log: (message) => {
+        diagnostics?.push(message);
+        this.log(`[issue-flow] ${live.id} ${message}`);
+      },
     }).catch(() => [] as string[]);
   }
 
@@ -7018,6 +7093,9 @@ export class IssueFlowService {
     IssueSessionState["pipelines"]>[string]): void {
     delete watch.last_repair_sha;
     delete watch.last_failure_summary;
+    delete watch.evidence_retry_deadline;
+    delete watch.evidence_retry_attempts;
+    delete watch.evidence_failure_log;
   }
 
   /** mr_green 收口(2026-09-02 拍板,ADR-0013:流程终点=流水线全绿,
