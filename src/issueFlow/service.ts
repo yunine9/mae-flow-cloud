@@ -1,3 +1,4 @@
+import { migrateMrRepairRecords } from "./mrRepairStore.ts";
 import { runCodecheckPrepush, rememberCodecheckBase, type CodecheckRunner } from "../codecheckPrepush.ts";
 import { runCodecheckSkillSession } from "../codecheckSkillSession.ts";
 import { excludeCodecheckArtifacts } from "../codecheckArtifacts.ts";
@@ -627,6 +628,8 @@ export interface IssueContainerBuild {
 }
 
 export interface IssueFlowOptions {
+  /** 复用执行能力，但工具数据、编号和生命周期与问题交付隔离。 */
+  purpose?: "pipeline_repair";
   /** MR 信息读取边界；缺省使用交付平台的只读详情接口。 */
   mrDetails?: (url: string, account: string) => Promise<import("../mrImport.ts").RepairMr>;
   dataDir: string;
@@ -1003,6 +1006,7 @@ export class IssueFlowService {
   readonly dataDir: string;
 
   constructor(options: IssueFlowOptions) {
+    migrateMrRepairRecords(options.dataDir, options.log);
     this.options = options;
     this.dataDir = options.dataDir;
     // 进程级审计账(host-calls/canonical,ADR-0053):单实例服务装配
@@ -1013,9 +1017,19 @@ export class IssueFlowService {
       ?? new IssueEnvironmentVault(options.dataDir);
     this.environmentRegistry = options.environmentRegistry
       ?? new EnvironmentRegistry(options.dataDir);
-    this.issuesRoot = join(options.dataDir, "issues");
+    this.issuesRoot = join(options.dataDir, options.purpose === "pipeline_repair" ? "pipeline-repairs" : "issues");
     mkdirSync(this.issuesRoot, { recursive: true });
     if (!options.deferRecovery) this.start();
+  }
+
+  private get idPrefix(): string { return this.options.purpose === "pipeline_repair" ? "mr-repair-" : "issue-"; }
+
+  /** 共用执行能力与凭据设施，记录和运行状态由独立实例持有。 */
+  createPipelineRepairTool(): IssueFlowService {
+    return new IssueFlowService({ ...this.options, purpose: "pipeline_repair",
+      vault: this.vault, environmentRegistry: this.environmentRegistry,
+      dts: undefined, notifier: undefined,
+    });
   }
 
   private log(message: string): void {
@@ -1043,7 +1057,7 @@ export class IssueFlowService {
     let requeued = 0;
     let keptQueued = 0;
     for (const name of readdirSync(this.issuesRoot)) {
-      if (!name.startsWith("issue-")) continue;
+      if (!name.startsWith(this.idPrefix)) continue;
       const root = join(this.issuesRoot, name);
       // 单目录隔离(票 #158,issue-31/32/33 复盘):一个损坏的 issue.json
       // 不许把整个服务启动拖死——全场唯一"死的是所有会话"的路径。
@@ -1071,6 +1085,8 @@ export class IssueFlowService {
         continue;
       }
       if (!state) continue;
+      if (state.scenario === "mr_repair" && this.options.purpose !== "pipeline_repair") continue;
+      if (this.options.purpose === "pipeline_repair" && state.id !== name) { state.id = name; saveState(root, state); }
       if (interruptWarmupReceipt(state.warmup)) saveState(root, state);
       // 旧值按字符串比(interrupted 已不在词表里,类型层面不认它)。
       const humanGate = new HumanGate(join(root, "waiting.json"));
@@ -1120,7 +1136,7 @@ export class IssueFlowService {
       if (!isTerminal(existingLive.state.status)) aliveIds.add(existingId);
     }
     for (const vaultId of this.vault.ids()) {
-      if (!vaultId.startsWith("issue-") || aliveIds.has(vaultId)) continue;
+      if (!vaultId.startsWith(this.idPrefix) || aliveIds.has(vaultId)) continue;
       this.vault.remove(vaultId);
       this.log(`[issue-flow] 重启清扫:会话 ${vaultId} 不在册或已终态,`
         + `孤儿环境凭据已删除`);
@@ -1248,6 +1264,7 @@ export class IssueFlowService {
   private freezeMetricsSnapshot(
     live: Pick<LiveIssue, "root" | "id" | "state">,
   ): void {
+    if (this.options.purpose === "pipeline_repair") return;
     try {
       // 提交归属层要 fetch MR 分支(#326):凭据与推送工具同源;缺席
       // (测试裸构)按匿名尝试,取不到由快照就地降级。
@@ -2036,6 +2053,7 @@ export class IssueFlowService {
 
   /** 只增加已有 MR 的进入方式，后续使用同一问题会话、工具和流水线监看。 */
   async importMr(rawUrl: unknown, account: string): Promise<IssueSummary> {
+    if (this.options.purpose !== "pipeline_repair") throw new IssueControlError("请从流水线修复工具发起，不创建问题会话");
     const url = normalizeRepairMrUrl(rawUrl);
     this.requireGitAccount(account);
     if (this.shuttingDown) throw new IssueControlError("执行服务正在关闭，请稍后重试");
@@ -2083,10 +2101,10 @@ export class IssueFlowService {
   private nextId(): string {
     let max = 0;
     for (const name of readdirSync(this.issuesRoot)) {
-      const match = /^issue-(\d+)$/.exec(name);
+      const match = new RegExp(`^${this.idPrefix}(\\d+)$`).exec(name);
       if (match) max = Math.max(max, Number(match[1]));
     }
-    return `issue-${max + 1}`;
+    return `${this.idPrefix}${max + 1}`;
   }
 
   /** 发起即校验 Git 身份(2026-09-08 拍板,从"按仓校验"升格为无条件):
@@ -3319,7 +3337,7 @@ export class IssueFlowService {
    *  linkBase 缺席时回落从请求 Host 学到的入口,不再只剩路径后缀。 */
   private issueLink(issueId: string): string {
     return `${(this.notificationLinkBase() ?? "").replace(/\/+$/, "")}`
-      + `/issues/${encodeURIComponent(issueId)}`;
+      + `/${this.options.purpose === "pipeline_repair" ? "pipeline-repairs" : "issues"}/${encodeURIComponent(issueId)}`;
   }
 
   /** skill 圈选入口闸(ADR-0011):complete_stage 推进进 analyze 时由
@@ -5578,6 +5596,7 @@ export class IssueFlowService {
   private finishTerminalHygiene(
     live: Pick<LiveIssue, "root" | "id" | "state">,
   ): void {
+    if (this.options.purpose === "pipeline_repair") return;
     this.freezeMetricsSnapshot(live);
     this.vault.remove(live.id);
     this.reclaimAfterCodeOrigin(live);
@@ -5586,6 +5605,7 @@ export class IssueFlowService {
   private reclaimAfterCodeOrigin(
     live: Pick<LiveIssue, "root" | "id" | "state">,
   ): void {
+    if (this.options.purpose === "pipeline_repair") return;
     const reclaim = (): void => {
       if (!this.repoReclaimOn()) return;
       setImmediate(() => {
@@ -5643,7 +5663,7 @@ export class IssueFlowService {
     let bytes = 0;
     let productBytes = 0;
     for (const name of readdirSync(this.issuesRoot)) {
-      if (!name.startsWith("issue-")) continue;
+      if (!name.startsWith(this.idPrefix)) continue;
       const root = join(this.issuesRoot, name);
       // 状态取内存优先:单子在内存时盘面是它的旧投影,拿盘面副本改标记
       // 再落盘,会被内存态的下一次 saveState 整个抹掉(返工通知失灵)。
@@ -6056,7 +6076,8 @@ export class IssueFlowService {
     const { pollMs } = this.pipelineKnobs();
     for (;;) {
       if (this.shuttingDown || isTerminal(live.state.status)
-          || live.state.stage !== "mr_green" || !live.state.mrs?.length) {
+          || live.state.stage !== "mr_green" || !live.state.mrs?.length
+          || (live.state.scenario === "mr_repair" && this.mrGreenClosed(live.state))) {
         return;
       }
       const { all_merged } = await this.syncMergeFacts(live);
@@ -6181,7 +6202,7 @@ export class IssueFlowService {
   private autoArchiveDelivered(live: LiveIssue): void {
     const state = live.state;
     if (isTerminal(state.status) || this.turning.has(live.id)) return;
-    if (state.scenario !== "ticket" && state.scenario !== "mr_repair") return;
+    if (state.scenario !== "ticket") return;
     const mrs = state.mrs ?? [];
     if (!mrs.length || !mrs.every((mr) => Boolean(mr.merged_at))) return;
     state.conclusion = {
@@ -6274,7 +6295,8 @@ export class IssueFlowService {
     let unavailableReason: string | undefined;
     for (;;) {
       if (this.shuttingDown || isTerminal(live.state.status)
-          || !live.state.mrs?.length) {
+          || !live.state.mrs?.length
+          || (live.state.scenario === "mr_repair" && this.mrGreenClosed(live.state))) {
         // 退出清算(H4):监看循环退出后没人再替信箱里的 pending 条目
         // 跑发送——统一置 failed 落 last_error 留痕,不让"待发送"悄悄
         // 烂在箱里装作还在路上。
@@ -7183,9 +7205,9 @@ export class IssueFlowService {
     // 单例防重入;重启恢复由 recover() 补挂。
     this.watchMergeStates(live);
     if (live.state.scenario === "mr_repair") {
-      live.state.stage_note = "已有 MR 的流水线已通过，等待人工审批与合入";
+      live.state.stage_note = "流水线修复完成";
       saveState(live.root, live.state);
-      this.startPlatformTurn(live, "已有 MR 的当前提交流水线已通过。请总结本次修复并结束本轮，等待人审批和合入；不要求网管环境验证，不重走前置流程。");
+      this.startPlatformTurn(live, "已有 MR 的当前提交流水线已通过。请总结本次修复并结束本轮；本工具不推进 DTS、审批、合入或归档。");
       return;
     }
     // 全绿事实发送(ADR-0024,#246):平台不代举验证卡——收口后把

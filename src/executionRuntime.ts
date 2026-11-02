@@ -970,6 +970,8 @@ async function main(): Promise<void> {
     // 通知深链落到问题会话工作台 /issues/<id>(与需求侧 /work 同一地位)。
     linkBase: publicUrl,
   });
+  // 复用同一执行器；工具使用独立存储与接口，不接 DTS 网关或交付通知。
+  const pipelineRepairs = issueFlow.createPipelineRepairTool();
 
   if (issueOnly) {
     console.log("[serve] 问题流专用模式(--issue-only):需求流程停用"
@@ -1102,7 +1104,7 @@ async function main(): Promise<void> {
       console.log(`[serve] 已清理遗留任务容器 ${swept.removed.length} 个: `
         + swept.removed.join(", "));
     }
-    await trace.phase("issue_recovery", async () => issueFlow.start());
+    await trace.phase("issue_recovery", async () => { issueFlow.start(); pipelineRepairs.start(); });
     // 进程可死任务不死:重启后重建索引,在跑的任务续跑,等人的继续等。
     const recovered = await trace.phase("task_recovery", async () => service.recover());
     if (recovered.restored) {
@@ -1243,7 +1245,7 @@ async function main(): Promise<void> {
   // 内网是明文 http(会话 cookie 可被同网段嗅探,正式部署前加反代
   // TLS);工作机合盖=全员断线,它是工作站不是服务器。
   const server = createTaskServer(service, {
-    webRoot, auth, lubanApproval, lubanKnowledgeToken: lubanPluginToken, issueFlow, mcpGateway,
+    webRoot, auth, lubanApproval, lubanKnowledgeToken: lubanPluginToken, issueFlow, pipelineRepairs, mcpGateway,
     // 问题路由直连所需的 DTS 网关与台账日志(与问题服务同一实例/口径)。
     dts: issueDtsGateway,
     log: issueLog,
@@ -1277,6 +1279,7 @@ async function main(): Promise<void> {
     try {
       await service.shutdown();
       await issueFlow.shutdown();
+      await pipelineRepairs.shutdown();
       console.log("[serve] 所有任务会话与容器已确认释放；业务状态保持不变，"
         + "下次启动将继续恢复");
     } catch (error) {

@@ -373,6 +373,7 @@ export function createTaskServer(
     lubanKnowledgeToken?: string;
     knowledgeAnswers?: KnowledgeAnswers;
     issueFlow?: import("./issueFlow/service.ts").IssueFlowService;
+    pipelineRepairs?: import("./issueFlow/service.ts").IssueFlowService;
     mcpGateway?: import("./issueFlow/gateways.ts").McpGateway;
     /** DTS 网关:问题路由直连拉单/详情/内嵌图代理(服务不再转手)。 */
     dts?: import("./issueFlow/gateways.ts").DtsGateway;
@@ -1021,7 +1022,7 @@ export function createTaskServer(
 
       // 问题流 API(/issues/*):独立于任务命名空间;未启用时由路由
       // 自己 404。必须先于静态托管兜底(非 /tasks 的 GET 会被接管)。
-      if (parts[0] === "issues") {
+      if (parts[0] === "issues" || parts[0] === "pipeline-repairs") {
         // 自动接单下次发起时刻(ADR-0061 修订):个人设置问号悬停卡的
         // 数据源。调度器未装配(测试/旁路形态)或间隔为 0 时为 null,
         // 前端显示「已暂停」。GET 且两级路径,若放行会给 SPA 深链,先截。
@@ -1047,9 +1048,11 @@ export function createTaskServer(
           && String(request.headers.accept ?? "").includes("text/html");
         if (!issuePage) {
           const handled = await handleIssueRoutes(request, response, parts, {
-            issueFlow: options.issueFlow,
+            issueFlow: parts[0] === "pipeline-repairs" ? options.pipelineRepairs : options.issueFlow,
             managedMr: url => service.list().some(task => !["completed", "failed", "canceled"].includes(task.status)
-              && task.delivery?.mr_url === url) ? "这个 MR 正由需求任务管理，请在原任务处理" : undefined,
+              && task.delivery?.mr_url === url) ? "这个 MR 正由需求任务管理，请在原任务处理"
+              : options.issueFlow?.list().some(issue => !["archived", "canceled", "failed"].includes(issue.status)
+                && issue.mrs?.some(mr => mr.url === url)) ? "这个 MR 正由问题会话处理，请在原会话继续" : undefined,
             dts: options.dts,
             viewer: viewer ?? undefined,
             authEnabled: Boolean(options.auth),

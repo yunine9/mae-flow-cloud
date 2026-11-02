@@ -1,3 +1,4 @@
+import { issueApiUrl } from "./issueLink";
 import { AnnotationExcerpt } from "../AnnotationExcerpt";
 import { resolvedAnnotationRange, annotationLocationRow } from "../annotateTargets";
 /**
@@ -204,8 +205,7 @@ function IssueAnalysisReport({ detail, canOperate }: {
     setDownloading(true);
     setDownloadError("");
     try {
-      const response = await fetch(
-        `/issues/${encodeURIComponent(id)}/documents/archive`);
+      const response = await fetch(issueApiUrl(`/issues/${encodeURIComponent(id)}/documents/archive`));
       if (!response.ok) {
         const body = await response.json().catch(() => ({})) as { error?: unknown };
         throw new Error(String(body.error ?? `打包下载失败(${response.status})`));

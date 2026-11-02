@@ -7,7 +7,7 @@ import { build, stop } from "../web/node_modules/esbuild/lib/main.js";
 import { browserResultDump } from "./fixtures/browserResultDump.ts";
 
 const chrome = process.env.MFC_TEST_CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-test("流水线修复桌面界面：真实导航、导入错误恢复与复用原问题工作台", { skip: !existsSync(chrome) && "需要 Chrome" }, async () => {
+test("流水线修复桌面界面：独立记录与接口、导入错误恢复和复用工作台", { skip: !existsSync(chrome) && "需要 Chrome" }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "pipeline-repair-ui-"));
   try {
     const built = await build({ entryPoints: [resolve("tests/browser/pipelineRepair.tsx")], bundle: true, write: false,

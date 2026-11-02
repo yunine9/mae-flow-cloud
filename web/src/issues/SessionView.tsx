@@ -1,3 +1,4 @@
+import { issueApiUrl } from "./issueLink";
 import { IssueExternalReviewPanel, externalReviewDone, useIssueReviews } from "./IssueExternalReviewPanel";
 /**
  * 会话域:会话工作台全屏视图(头部 / 阶段线 / 逐仓交付 / 耗时卡点 / 双栏)。
@@ -252,6 +253,7 @@ export function IssueSessionView({
   // perform 落 onError 既有通道。
   const [cancelOpen, setCancelOpen] = useState(false);
   function cancelSession() {
+    if (detail.scenario === "mr_repair") { void perform(() => controlIssue(detail.id, { action: "cancel" })); return; }
     setCancelOpen(true);
   }
   function cancelWithReason(input: CancelSessionInput) {
@@ -296,14 +298,14 @@ export function IssueSessionView({
       // 问题域主题:studio 组件在问题工作台内一律取问题域变量,同构不同色。
       "[--studio-accent:var(--accent)] [--studio-tint:var(--accent-soft)] [--workspace-tab-color:var(--accent)]",
     )}
-    aria-label={`问题会话:${detail.title}`}>
-    <header className="ws-head">
+    aria-label={`${detail.scenario === "mr_repair" ? "流水线修复" : "问题会话"}:${detail.title}`}>
+    <header className={cn("ws-head", detail.scenario === "mr_repair" && "[grid-template-columns:auto_minmax(0,1fr)_auto]! [grid-template-areas:'back_identity_controls']!")}>
       <button type="button" className="ws-back" onClick={onBack}
-        title="返回问题列表(Esc)" aria-label="返回问题列表(Esc)">←</button>
+        title={detail.scenario === "mr_repair" ? "返回流水线修复(Esc)" : "返回问题列表(Esc)"} aria-label={detail.scenario === "mr_repair" ? "返回流水线修复(Esc)" : "返回问题列表(Esc)"}>←</button>
       <div className="ws-identity">
         <strong>{detail.title}</strong>
         <div className="ws-identity-line">
-          {detail.scenario === "mr_repair" && <Badge variant="info" title="从已有 MR 直接进入修复；拉单、分析和问题修改等前置阶段不适用">从已有 MR 开始 · 前置调查不适用</Badge>}
+          {detail.scenario === "mr_repair" && <Badge variant="info" title="从已有 MR 直接进入修复；拉单、分析和问题修改等前置阶段不适用">流水线修复工具 · 独立记录</Badge>}
           {/* 查看模式标识(非归属人围观):徽标走 Badge warning 软皮
               (中性琥珀,只提示不告警),文本即 aria 信息(读屏直读)。 */}
           {!canOperate && <Badge variant="warning" role="status"
@@ -359,9 +361,9 @@ export function IssueSessionView({
             : <span className="select-text rounded-full border border-dashed px-[7px] py-px font-mono text-xs font-bold text-faint">{detail.scenario === "mr_repair" ? "已有 MR" : "无单场景"}</span>}
         </div>
       </div>
-      <div className="ws-progress">
+      {detail.scenario !== "mr_repair" && <div className="ws-progress">
         <IssueWorkspaceProgress issue={detail} />
-      </div>
+      </div>}
       <div className="ws-head-controls">
         <Button type="button" variant="outline" size="sm" disabled={busy}
           title="导出现场记录(Markdown:人粗读 + AI 精读复盘)"
@@ -369,7 +371,7 @@ export function IssueSessionView({
             // 同源 GET 自带 cookie,download 属性强制落盘;文件名本地拼,
             // 服务端 disposition 只对 curl/直连生效。
             const anchor = document.createElement("a");
-            anchor.href = `/issues/${detail.id}/export`;
+            anchor.href = issueApiUrl(`/issues/${detail.id}/export`);
             anchor.download = `${detail.id}-现场记录-`
               + `${new Date().toISOString().slice(0, 10)}.md`;
             document.body.appendChild(anchor);
@@ -390,7 +392,7 @@ export function IssueSessionView({
             onClick={() => { setReviveNote(""); setReviveOpen(true); }}>异常重跑</Button>}
           <Button type="button" variant="destructive" size="sm" disabled={busy
             || ["archived", "canceled"].includes(detail.status)}
-            onClick={cancelSession}>终止会话</Button>
+            onClick={cancelSession}>{detail.scenario === "mr_repair" ? "停止修复" : "终止会话"}</Button>
         </>}
       </div>
     </header>

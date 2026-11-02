@@ -22,6 +22,7 @@ import {
   issueStageText,
   issueStatusText,
   listIssues,
+  listPipelineRepairs,
   type AuthUser,
   type IssueDetail,
   type IssueStatus,
@@ -137,7 +138,7 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
     status === "waiting_user"
       ? (statusCounts.get("waiting_user") ?? 0) + (statusCounts.get("idle") ?? 0)
       : statusCounts.get(status) ?? 0;
-  const visibleIssues = statusFilter === "all" ? scopedIssues
+  const visibleIssues = childTab === "pipeline" || statusFilter === "all" ? scopedIssues
     : statusFilter === "active"
       ? scopedIssues.filter((issue) => isIssueActive(issue.status))
       : scopedIssues.filter((issue) => statusFilter === "waiting_user"
@@ -147,9 +148,9 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
   const refreshList = () => {
     // 单一列表(ADR-0031,2026-09-16 修订):服务端按「归属或登记人是
     // 自己」过滤,名下要推进的与登记给他人要跟踪的同列。
-    void listIssues().then(setIssues).catch(() => undefined);
+    void (childTab === "pipeline" ? listPipelineRepairs() : listIssues()).then(setIssues).catch(() => undefined);
   };
-  useEffect(() => startVisiblePolling(refreshList, 5000, document), []);
+  useEffect(() => startVisiblePolling(refreshList, 5000, document), [childTab]);
 
   // URL 指向工作台时跟读详情;列表照常低频轮询。openId 变化即清旧
   // detail(上一会话的内容不许顶在新 URL 下),detailRetry 并入依赖
@@ -253,7 +254,7 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
         403),管理视角的这块板只读——列表全员可见,会话点开落查看模式。
         两面板常驻(visible 隐藏切换):「问题会话」子页签下也不卸载,
         表单/勾选/搜索状态跨子页签驻留(spec #171)。 */}
-    {viewer.role !== "admin" && <IssueRegistration
+    {viewer.role !== "admin" && childTab !== "pipeline" && <IssueRegistration
       viewer={viewer}
       issues={issues}
       visible={childTab === "register" || childTab === "dts"}
@@ -294,11 +295,11 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
           {/* kicker 不再重复页首大标题「问题处理」;列表区自己只有标题。
               单一列表(ADR-0031,2026-09-16 修订):归属或登记人是自己,
               名下的与登记给别人的同列,卡上两端标注可辨。 */}
-          <h2 id="issue-mine-title">{childTab === "pipeline" ? "我的 MR 修复会话" : viewer.role === "admin" ? "全部问题" : "我的问题"}</h2>
+          <h2 id="issue-mine-title">{childTab === "pipeline" ? "我的流水线修复记录" : viewer.role === "admin" ? "全部问题" : "我的问题"}</h2>
         </div>
         {/* 聚合徽章与任务侧"当前任务"同款语义:待答复置前,需介入报警。 */}
         <span className="flex flex-wrap items-center justify-end gap-3">
-          <label className="inline-flex items-center gap-1.5">
+          {childTab !== "pipeline" && <><label className="inline-flex items-center gap-1.5">
             <span className="text-[13px] font-bold text-muted-foreground">状态</span>
             <Select value={statusFilter}
               items={[{ value: "active", label: `进行中(${activeCount})` },
@@ -328,8 +329,8 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
             {waitingCount} 项待答复</span>}
           {interventionCount > 0 && <span className="text-[13px] font-medium tabular-nums text-danger">
             {interventionCount} 项需介入</span>}
-          <span className="text-[13px] font-medium tabular-nums text-muted-foreground">共 {visibleIssues.length} 个</span>
-          {statusFilter === "active" && scopedIssues.length > visibleIssues.length
+          </>}<span className="text-[13px] font-medium tabular-nums text-muted-foreground">共 {visibleIssues.length} 个</span>
+          {childTab !== "pipeline" && statusFilter === "active" && scopedIssues.length > visibleIssues.length
             && <span className="text-[13px] font-medium tabular-nums text-muted-foreground"
               title="已归档/已取消默认收起,把状态切到对应标签或「全部」可查看">
               已收起 {scopedIssues.length - visibleIssues.length} 个</span>}
@@ -340,8 +341,8 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
       {scopedIssues.length === 0
         ? <Empty className="min-h-40 border">
             <EmptyMedia className="text-2xl font-light text-muted-foreground" aria-hidden>✓</EmptyMedia>
-            <EmptyTitle>{childTab === "pipeline" ? "还没有 MR 修复会话" : viewer.role === "admin" ? "团队还没有问题会话" : "还没有问题会话"}</EmptyTitle>
-            <EmptyDescription>{childTab === "pipeline" ? "粘贴上方 MR 链接，即可进入现有问题工作台修复流水线。" : viewer.role === "admin"
+            <EmptyTitle>{childTab === "pipeline" ? "还没有流水线修复记录" : viewer.role === "admin" ? "团队还没有问题会话" : "还没有问题会话"}</EmptyTitle>
+            <EmptyDescription>{childTab === "pipeline" ? "粘贴上方 MR 链接，即可在这里修复流水线，记录不计入 DTS 交付数据。" : viewer.role === "admin"
               ? "开发成员从各自的问题处理页登记后,这里会汇总全员会话供查看。"
               : "从上方「问题登记」登记问题并指派责任人,或从 DTS 拉取问题单发起处理;自己登记给别人的和名下推进的都在这里,研究结论是非问题也可以直接归档收口。"}</EmptyDescription>
           </Empty>
@@ -395,6 +396,7 @@ function IssueCard({ issue, onSettled }: {
   const terminatable = issue.status !== "archived" && issue.status !== "canceled";
 
   function terminate() {
+    if (issue.scenario === "mr_repair") { void terminateWithReason({} as CancelSessionInput); return; }
     setStopOpen(true);
   }
 
@@ -490,7 +492,7 @@ function IssueCard({ issue, onSettled }: {
       {terminatable && <Button type="button" variant="ghost" size="sm"
         className="h-auto px-0 font-semibold text-destructive underline-offset-2 hover:bg-transparent hover:underline"
         disabled={stopping} onClick={() => void terminate()}>
-        {stopping ? "终止中…" : "终止"}</Button>}
+        {stopping ? "终止中…" : issue.scenario === "mr_repair" ? "停止" : "终止"}</Button>}
       {stopError && <span className="rounded-lg bg-danger/10 px-2.5 py-2 text-[13px] text-danger">{stopError}</span>}
       {/* 多 MR 摘要:一仓一 MR,每个仓的 MR 各占一个链接(仓名 + iid),
           不再只显首个;没拿到 url 的(创建中途)如实落回文本。 */}

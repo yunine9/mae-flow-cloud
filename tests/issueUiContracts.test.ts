@@ -797,7 +797,7 @@ test("admin 只读可见问题处理(#103):角色门拆除,发起入口仅开发
   // 问题板:发起界面(登记/DTS)仅开发者渲染;列表标题「全部/我的」
   // (ADR-0031,2026-09-16 修订:单一列表,归属或登记人是自己)。
   assert.match(issueBoard,
-    /viewer\.role !== "admin" && <IssueRegistration/);
+    /viewer\.role !== "admin" && childTab !== "pipeline" && <IssueRegistration/);
   assert.match(issueBoard,
     /viewer\.role === "admin" \? "全部问题" : "我的问题"/);
   // 会话工作台的查看模式边界不变:写口仍按归属人判定(admin 旁观不写)。
@@ -1515,7 +1515,7 @@ test("问题工作台独立页签(ADR-0040):入口一律新页签,页内 overlay
   // 转正」已退役,管道保留),closeIssueSession
   // pushState 裸 /issues 留历史(浏览器后退回工作台),不依赖 window.close。
   assert.match(appSource,
-    /const closeIssueSession = \(\) => \{\s*\r?\n\s*history\.pushState\(appHistoryState\("issues", undefined, "sessions"\),\s*\r?\n\s*"", "\/issues"\);/);
+    /const closeIssueSession = \(\) => \{\s*const repair = issueRouteId\.startsWith\("mr-repair-"\);\s*history\.pushState\(appHistoryState\("issues", undefined, repair \? "pipeline" : "sessions"\),\s*"", repair \? "\/pipeline-repairs" : "\/issues"\);/);
   assert.doesNotMatch(appSource, /window\.close\(\)/);
   // 团队问题卡:整行即新页签链接,不再回调跳转。
   assert.match(teamIssueCard,

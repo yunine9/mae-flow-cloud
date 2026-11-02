@@ -41,7 +41,7 @@ test("已有 MR 复用原生会话：原分支拉取、红灯修复、真实推�
   const model = new ScriptedModelServer(scenes, "scripted-v1", { linear: true });
   await model.start();
   let detailsRead = 0;
-  const service = new IssueFlowService({ dataDir, provider: "maeflow", model: "scripted-v1", modelsJson: model.modelsJson(),
+  const service = new IssueFlowService({ purpose: "pipeline_repair", dataDir, provider: "maeflow", model: "scripted-v1", modelsJson: model.modelsJson(),
     settings: fastPoll, platformUrl: platform.baseUrl, gitCredential: credential,
     mrDetails: async () => { detailsRead++; return { ...fixture, repo, sha: head() }; } });
   try {
@@ -71,7 +71,7 @@ test("已有 MR 复用原生会话：原分支拉取、红灯修复、真实推�
     assert.ok(platform.seen.some(call => call.url.includes(firstSha)), "直接监看导入的真实提交");
     assert.ok(platform.seen.some(call => call.url.includes(head())), "推送后监看新提交");
     assert.ok(detailsRead >= 3, "推送前再次读取 MR 状态");
-    const root = join(dataDir, "issues", created.id);
+    const root = join(dataDir, "pipeline-repairs", created.id);
     const state = loadState(root);
     assert.ok(state);
     assert.equal(state.fix_branch, fixture.source_branch);
@@ -91,7 +91,7 @@ test("已有 MR 复用原生会话：原分支拉取、红灯修复、真实推�
 test("导入并发去重且失败不留半成会话，旧场景的工具范围保持原样", async () => {
   let release!: (mr: RepairMr) => void;
   const pending = new Promise<RepairMr>(resolve => { release = resolve; });
-  const service = new IssueFlowService({ dataDir: mfcTemp("issue-mr-lock-"), provider: "maeflow", model: "unused", modelsJson: {}, platformUrl: "http://127.0.0.1:1", gitCredential: credential,
+  const service = new IssueFlowService({ purpose: "pipeline_repair", dataDir: mfcTemp("issue-mr-lock-"), provider: "maeflow", model: "unused", modelsJson: {}, platformUrl: "http://127.0.0.1:1", gitCredential: credential,
     mrDetails: async () => pending });
   try {
     const first = service.importMr(url, "dev"), duplicate = service.importMr(url, "dev");
@@ -122,12 +122,12 @@ test("已有 MR 当前提交已经全绿：先拉原分支再核验，无需制�
     { text: "等待已有提交的流水线结果。" },
     { text: "已有提交全绿，无需修改代码。" },
   ], "scripted-v1", { linear: true }); await model.start();
-  const service = new IssueFlowService({ dataDir, provider: "maeflow", model: "scripted-v1", modelsJson: model.modelsJson(), settings: fastPoll,
+  const service = new IssueFlowService({ purpose: "pipeline_repair", dataDir, provider: "maeflow", model: "scripted-v1", modelsJson: model.modelsJson(), settings: fastPoll,
     platformUrl: platform.baseUrl, gitCredential: credential, mrDetails: async () => ({ ...fixture, repo, sha }) });
   try {
     const created = await service.importMr(url, "dev");
     assert.equal(created.pipelines, undefined);
-    assert.equal(loadState(join(dataDir, "issues", created.id))?.mr_gate, undefined, "导入本身不代替原阶段核验");
+    assert.equal(loadState(join(dataDir, "pipeline-repairs", created.id))?.mr_gate, undefined, "导入本身不代替原阶段核验");
     await until(() => service.get(created.id).stage_states?.[0] === "done" ? true : undefined, "已有提交全绿", 15_000);
     assert.equal(service.get(created.id).pushes, undefined);
     assert.equal(service.get(created.id).gate, undefined);
@@ -150,7 +150,7 @@ test("已有 MR 推送前重新核对生命周期，MR 被关闭后不能继续�
   ], "scripted-v1", { linear: true });
   await model.start();
   let reads = 0;
-  const service = new IssueFlowService({ dataDir, provider: "maeflow", model: "scripted-v1", modelsJson: model.modelsJson(),
+  const service = new IssueFlowService({ purpose: "pipeline_repair", dataDir, provider: "maeflow", model: "scripted-v1", modelsJson: model.modelsJson(),
     platformUrl: "http://127.0.0.1:1", gitCredential: credential,
     mrDetails: async () => ({ ...fixture, repo, sha, state: ++reads === 1 ? "opened" : "closed" }) });
   try {
@@ -158,13 +158,13 @@ test("已有 MR 推送前重新核对生命周期，MR 被关闭后不能继续�
     await until(() => service.get(created.id).status === "idle" ? true : undefined, "MR 变更后拒推", 15_000);
     assert.equal(head(), sha);
     assert.equal(service.get(created.id).pushes, undefined);
-    const events = readFileSync(join(dataDir, "issues", created.id, "events.jsonl"), "utf8");
+    const events = readFileSync(join(dataDir, "pipeline-repairs", created.id, "events.jsonl"), "utf8");
     assert.match(events, /已有 MR 的状态、仓库或分支已变化/);
   } finally { await service.shutdown(); await model.stop(); }
 });
 
 test("导入落盘后进程中断，恢复同一会话和原提交监看，不伪造推送或丢失现场", async () => {
-  const dataDir = mfcTemp("issue-mr-recover-"), root = join(dataDir, "issues", "issue-1");
+  const dataDir = mfcTemp("issue-mr-recover-"), root = join(dataDir, "pipeline-repairs", "mr-repair-1");
   mkdirSync(root, { recursive: true });
   const repo = bareOrigin(dataDir);
   execFileSync("git", ["--git-dir", repo, "branch", fixture.source_branch, "master"], { env: GIT_ENV });
@@ -173,7 +173,7 @@ test("导入落盘后进程中断，恢复同一会话和原提交监看，不�
   mkdirSync(join(root, "repo"), { recursive: true });
   execFileSync("git", ["clone", "-q", "--branch", fixture.source_branch, repo, join(root, "repo", "origin")], { env: GIT_ENV });
   const now = new Date().toISOString();
-  saveState(root, { id: "issue-1", account: "dev", created_at: now, updated_at: now, title: fixture.title, description: "修复已有 MR", source: "manual",
+  saveState(root, { id: "mr-repair-1", account: "dev", created_at: now, updated_at: now, title: fixture.title, description: "修复已有 MR", source: "manual",
     scenario: "mr_repair", imported_mr: mr, repo_url: repo, repo_urls: [repo], baseline: fixture.target_branch,
     fix_branch: fixture.source_branch, stage: "mr_green", stage_states: ["in_progress"], stage_at: now, stage_note: "接入 MR 后中断",
     status: "idle", round: 1, mrs: [{ repo, branch: fixture.source_branch, target: fixture.target_branch, url, title: fixture.title, iid: fixture.iid, at: now }],
@@ -182,30 +182,30 @@ test("导入落盘后进程中断，恢复同一会话和原提交监看，不�
   writeFileSync(join(root, "events.jsonl"), prior);
   const platform = new LoopPlatform("success"); await platform.start();
   const model = new ScriptedModelServer([{ text: "原 MR 流水线已通过，等待人合入。" }], "scripted-v1", { linear: true }); await model.start();
-  const service = new IssueFlowService({ dataDir, provider: "maeflow", model: "scripted-v1", modelsJson: model.modelsJson(), settings: fastPoll,
+  const service = new IssueFlowService({ purpose: "pipeline_repair", dataDir, provider: "maeflow", model: "scripted-v1", modelsJson: model.modelsJson(), settings: fastPoll,
     platformUrl: platform.baseUrl, gitCredential: credential });
   try {
-    await until(() => service.get("issue-1").stage_states?.[0] === "done" ? true : undefined, "导入后中断恢复", 15_000);
+    await until(() => service.get("mr-repair-1").stage_states?.[0] === "done" ? true : undefined, "导入后中断恢复", 15_000);
     assert.equal(service.list().length, 1);
-    assert.equal(service.get("issue-1").pushes, undefined);
-    assert.equal(service.get("issue-1").pipelines?.[repo]?.sha, sha);
+    assert.equal(service.get("mr-repair-1").pushes, undefined);
+    assert.equal(service.get("mr-repair-1").pipelines?.[repo]?.sha, sha);
     assert.ok(readFileSync(join(root, "events.jsonl"), "utf8").startsWith(prior));
   } finally { await service.shutdown(); await model.stop(); await platform.stop(); }
 });
 
 function post(payload: unknown, options: IssueRouteOptions) {
   return new Promise<{ status: number; body: any }>((resolve, reject) => {
-    const request: any = new EventEmitter(); request.method = "POST"; request.url = "/issues/from-mr";
+    const request: any = new EventEmitter(); request.method = "POST"; request.url = "/pipeline-repairs";
     let status = 0;
     void handleIssueRoutes(request, { writeHead: (code: number) => { status = code; }, end: (text: string) => resolve({ status, body: JSON.parse(text) }) } as any,
-      ["issues", "from-mr"], options).catch(reject);
+      ["pipeline-repairs"], options).catch(reject);
     request.emit("data", Buffer.from(JSON.stringify(payload))); request.emit("end");
   });
 }
 
 test("原生导入路由使用登录身份，拒绝匿名、管理员与需求任务正在管理的 MR", async () => {
   const seen: unknown[] = [];
-  const service = { importMr: async (...args: unknown[]) => { seen.push(args); return { id: "issue-1" }; } } as unknown as IssueFlowService;
+  const service = { options: { purpose: "pipeline_repair" }, importMr: async (...args: unknown[]) => { seen.push(args); return { id: "issue-1" }; } } as unknown as IssueFlowService;
   const base = { issueFlow: service, authEnabled: true };
   assert.equal((await post({ mr_url: url }, base)).status, 401);
   assert.equal((await post({ mr_url: url }, { ...base, viewer: { username: "admin", role: "admin" } })).status, 403);

@@ -355,11 +355,19 @@ export async function handleIssueRoutes(
   parts: string[],
   routeOptions: IssueRouteOptions,
 ): Promise<boolean> {
-  if (parts[0] !== "issues") return false;
+  const repairTool = parts[0] === "pipeline-repairs";
+  if (parts[0] !== "issues" && !repairTool) return false;
   const { issueFlow } = routeOptions;
   if (!issueFlow) {
     json(response, 404, { error: "问题流服务未启用" });
     return true;
+  }
+  if (repairTool !== (issueFlow.options?.purpose === "pipeline_repair")) {
+    json(response, 404, { error: "未知接口" }); return true;
+  }
+  if (repairTool && ((parts[1] && !parts[1].startsWith("mr-repair-"))
+    || ["ticket", "ticket-template", "environment", "repos", "logs", "code-origin"].includes(parts[2] ?? ""))) {
+    json(response, 404, { error: "流水线修复工具不提供问题交付接口" }); return true;
   }
   const viewer = routeOptions.viewer;
   const method = request.method ?? "GET";
@@ -400,7 +408,7 @@ export async function handleIssueRoutes(
       return done(200, { issues: mine });
     }
 
-    if (method === "POST" && parts.length === 2 && parts[1] === "from-mr") {
+    if (method === "POST" && parts.length === 1 && repairTool) {
       if (viewer?.role === "admin") return done(403, { error: "请使用开发者账号接入 MR" });
       const body = await readBody(request);
       const url = normalizeRepairMrUrl(body.mr_url);
@@ -408,6 +416,7 @@ export async function handleIssueRoutes(
       if (managed) return done(409, { error: managed });
       return done(201, await issueFlow.importMr(url, viewer?.username ?? "local"));
     }
+    if (method === "POST" && parts.length === 2 && parts[1] === "from-mr") return done(404, { error: "请使用流水线修复工具" });
     if (method === "POST" && parts.length === 1) {
       if (viewer?.role === "admin") {
         return done(403, {

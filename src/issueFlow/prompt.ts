@@ -403,10 +403,10 @@ export function issueFixedOpeningPrompt(
         : "fixed.intervention.report_review"),
   });
   if (scenario === "mr_repair") return [
-    "你在现有问题工作台处理一个用户提供的 MR，直接从流水线修复阶段开始。拉单、问题分析和问题修改等前置阶段不适用，没有被执行或自动批准。",
+    "你在流水线修复工具中处理用户提供的 MR，复用已有工作台和修复能力，独立于问题会话与 DTS 交付。拉单、问题分析和问题修改等前置阶段不适用，没有被执行或自动批准。",
     `MR：${state.imported_mr?.url}；源分支：${state.fix_branch}；目标分支：${state.baseline}；仓库：${state.repo_url}。`,
     ...stageBriefLines(scenario, "mr_green", ""),
-    "沿用本工作台的工具、代码差异、对话、执行日志和恢复能力。不要关闭测试或检查规则来制造绿灯；无法修复时如实说明原因。流水线通过后总结结果并等待人合入，不要求网管环境验证。",
+    "沿用本工作台的工具、代码差异、对话、执行日志和恢复能力。不要关闭测试或检查规则来制造绿灯；无法修复时如实说明原因。流水线通过后总结本次工具修复并结束；不推进 DTS、审批、合入或归档，不要求网管环境验证。",
   ].join("\n\n");
   const facts = [
     `- 标题: ${meta.title}`,

@@ -326,7 +326,7 @@ export function stageBriefLines(
   if (scenario === "mr_repair") return [
     "当前阶段「修复已有 MR 流水线」：读取已有 MR 的失败材料，只修复编译、测试和代码质量问题。",
     "先用 pull_repo 拉取 MR 的源分支，拉取完成后检查当前提交的流水线报错。首次按仓库标准完整构建，后续复用同一工作区增量验证；提交后用 push_branch 推送原分支，再用 complete_stage 申报已有 MR。",
-    "不新建 MR、不绑定 DTS、不重走问题分析；检视意见不自动修改，审批和合入仍由人处理。",
+    "不新建 MR、不绑定 DTS、不重走问题分析；检视意见不自动修改，不推进审批、合入或归档；工具记录不计入 DTS 交付统计。",
     `可用工具：${stageToolLine(stage, scenario)}。`,
   ];
   return [

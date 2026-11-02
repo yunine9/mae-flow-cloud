@@ -1595,10 +1595,10 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         fixedComplete(ctx.state,
           `MR 核验通过(${runs.length} 个 MR 全绿):${note}`);
         ctx.state.stage_note = state.scenario === "mr_repair"
-          ? "已有 MR 的流水线已通过，等待人工审批与合入" : MR_GREEN_ENV_VERIFY_NOTE;
+          ? "流水线修复完成" : MR_GREEN_ENV_VERIFY_NOTE;
         ctx.persist();
         ctx.notifyMrGreen?.();
-        if (state.scenario === "mr_repair") return ok("已有 MR 的当前提交流水线已通过。本轮修复完成，等待人审批和合入；不要新建 MR 或要求网管环境验证。");
+        if (state.scenario === "mr_repair") return ok("已有 MR 的当前提交流水线已通过。本次工具修复完成；不要推进 DTS、审批、合入或归档，不要求网管环境验证。");
         return ok(promptCopy("receipts", "mrgate.all_green", {
           repos: runs.map((item) => item.repo).join(", "),
         }));

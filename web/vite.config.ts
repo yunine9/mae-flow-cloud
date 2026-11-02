@@ -16,6 +16,7 @@ const apiPrefixes = [
   "/wishes",
   "/environments",
   "/issues",
+  "/pipeline-repairs",
   "/workflow-assets",
   "/component-repositories",
   "/component-research",
@@ -45,8 +46,8 @@ function isBrowserNavigation(url = "", accept = ""): boolean {
   const path = url.split("?")[0]!.replace(/\/$/, "");
       // /issues(登记页)、/issues/:id(会话工作台)与 /environments 是
       // 仅有的三个重叠面。
-      return path === "/environments" || path === "/issues"
-        || /^\/issues\/[^/]+$/.test(path);
+      return path === "/environments" || path === "/issues" || path === "/pipeline-repairs"
+        || /^\/(?:issues|pipeline-repairs)\/[^/]+$/.test(path);
 }
 
 function proxy(): Record<string, ProxyOptions> {
@@ -56,7 +57,7 @@ function proxy(): Record<string, ProxyOptions> {
       target,
       changeOrigin: true,
       bypass: (request) => {
-        if (prefix !== "/issues" && prefix !== "/environments") return;
+        if (prefix !== "/issues" && prefix !== "/pipeline-repairs" && prefix !== "/environments") return;
         if (isBrowserNavigation(
           request.url,
           String(request.headers.accept ?? ""),

@@ -1,3 +1,4 @@
+import { issueSessionPath } from "./issues/issueLink";
 import { KnowledgeAnswerPage, openKnowledgeAnswer } from "./KnowledgeAnswerPage";
 import { KnowledgeLibrary } from "./KnowledgeLibrary";
 import { PeopleProvider, PersonName, usePersonName } from "./People";
@@ -155,6 +156,7 @@ const ISSUE_CHILD_TABS = new Set<IssueChildTab>([
 const ISSUE_CHILD_STORAGE_KEY = "mae-flow:issue-child-tab";
 
 function readIssueChildTab(): IssueChildTab {
+  if (/^\/pipeline-repairs(?:\/|$)/.test(location.pathname)) return "pipeline";
   try {
     const saved = localStorage.getItem(ISSUE_CHILD_STORAGE_KEY);
     if (saved && ISSUE_CHILD_TABS.has(saved as IssueChildTab)) {
@@ -205,7 +207,7 @@ function workspacePath(taskId: string, reviewId = ""): string {
 /** 问题会话工作台深链(/issues/:id,小鲁班通知的落点)。匹配返回会话
  * id,其余路径返回空串。 */
 function readIssueRoute(): string {
-  const match = location.pathname.match(/^\/issues\/([^/]+)\/?$/);
+  const match = location.pathname.match(/^\/(?:issues|pipeline-repairs)\/([^/]+)\/?$/);
   if (!match) return "";
   try { return decodeURIComponent(match[1]); } catch { return ""; }
 }
@@ -247,7 +249,7 @@ function initialView(user: AuthUser): View {
   // 问题登记深链(裸 /issues):服务端/vite 判别式已把浏览器导航让给
   // SPA,这里把地址对上页签——落点与侧栏「问题处理」一致(子页签沿用
   // 持久化选择);会话工作台深链 /issues/:id 走下面的 readIssueRoute。
-  if (/^\/issues\/?$/.test(location.pathname)) return "issues";
+  if (/^\/(?:issues|pipeline-repairs)\/?$/.test(location.pathname)) return "issues";
   // 管理员没有"我的待办"(不下单的角色没有个人任务收件箱,用户拍板):
   // 深链也一律落到团队总览,从那里打开任意任务行使兜底控制。
   if (user.role === "admin") return "team";
@@ -879,8 +881,9 @@ export function App() {
       // 子页签随深链落「问题会话」——深链指的就是一个会话。
       if (issueId) {
         setView("issues");
-        setIssueChildTab("sessions");
-      } else if (/^\/issues\/?$/.test(location.pathname)) {
+        setIssueChildTab(readIssueRoute().startsWith("mr-repair-") ? "pipeline" : "sessions");
+      } else if (/^\/(?:issues|pipeline-repairs)\/?$/.test(location.pathname)) {
+        if (location.pathname.startsWith("/pipeline-repairs")) setIssueChildTab("pipeline");
         // 后退/前进到裸 /issues(问题登记入站深链):同款对表,落问题
         // 处理页签本身(子页签沿用持久化,与 initialView 同一口径)。
         setView("issues");
@@ -977,7 +980,7 @@ export function App() {
         setSession(user);
         if (user) {
           setView(initialView(user));
-          if (readIssueRoute()) setIssueChildTab("sessions");
+          if (readIssueRoute()) setIssueChildTab(readIssueRoute().startsWith("mr-repair-") ? "pipeline" : "sessions");
         }
       } catch {
         if (!stopped && authGeneration.current === generation) setSessionLoadFailed(true);
@@ -1353,10 +1356,10 @@ export function App() {
     setView("issues");
     setIssueRouteId(id);
     // 深链/点开都指向一个会话:子页签一并落「问题会话」。
-    setIssueChildTab("sessions");
-    const next = `/issues/${encodeURIComponent(id)}`;
+    setIssueChildTab(id.startsWith("mr-repair-") ? "pipeline" : "sessions");
+    const next = issueSessionPath(id);
     if (location.pathname !== next) {
-      history.pushState(appHistoryState("issues", undefined, "sessions"),
+      history.pushState(appHistoryState("issues", undefined, id.startsWith("mr-repair-") ? "pipeline" : "sessions"),
         "", next);
     }
   };
@@ -1366,8 +1369,9 @@ export function App() {
    * 离开问题处理域的归位守门(normalizeIssueRoute)另走一路,见
    * leaveIssueRoute。 */
   const closeIssueSession = () => {
-    history.pushState(appHistoryState("issues", undefined, "sessions"),
-      "", "/issues");
+    const repair = issueRouteId.startsWith("mr-repair-");
+    history.pushState(appHistoryState("issues", undefined, repair ? "pipeline" : "sessions"),
+      "", repair ? "/pipeline-repairs" : "/issues");
     setIssueRouteId("");
   };
   /** 离开问题处理域的归位守门:URL 滞留在 /issues/X(工作台深链)或裸
@@ -1376,7 +1380,7 @@ export function App() {
    * 地址栏。与 closeIssueSession(工作台内回列表,pushState 留历史)
    * 分工:这里管"点侧栏走了",那里管"从工作台回列表"。 */
   const normalizeIssueRoute = (target: View) => {
-    if (!readIssueRoute() && !/^\/issues\/?$/.test(location.pathname)) return;
+    if (!readIssueRoute() && !/^\/(?:issues|pipeline-repairs)\/?$/.test(location.pathname)) return;
     history.replaceState(appHistoryState(target,
       target === "knowledge" ? teamAssetTab : undefined), "", "/");
     setIssueRouteId("");
@@ -1455,10 +1459,13 @@ export function App() {
   const selectIssueChild = (tab: IssueChildTab) => {
     activeIssueChildRef.current = tab;
     setIssueChildTab(tab);
-    if (issueRouteId) closeIssueSession();
+    if (issueRouteId) {
+      setIssueRouteId("");
+      history.pushState(appHistoryState("issues", undefined, tab), "", tab === "pipeline" ? "/pipeline-repairs" : "/issues");
+    }
     if (view !== "issues") {
       selectView("issues");
-    } else if (location.pathname === "/" || location.pathname === "/issues") {
+    } else if (location.pathname === "/" || location.pathname === "/issues" || location.pathname === "/pipeline-repairs") {
       // 根路径或裸 /issues(工作台回列表/登记入站深链后的落点):原地
       // 改写快照,前进/后退还原到最新选择——/issues 不再推新历史项。
       history.replaceState(appHistoryState("issues", undefined, tab), "",

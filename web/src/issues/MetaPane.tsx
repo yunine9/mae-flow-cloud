@@ -1,3 +1,4 @@
+import { issueApiUrl } from "./issueLink";
 /**
  * 元信息域(#239 只读版;#266 场景化平铺):问题会话工作台首签「元信息」。
  *
@@ -200,8 +201,7 @@ export function IssueMetaPane({ detail, canOperate }: {
     setDownloadingLogs(true);
     setLogDownloadNote("");
     try {
-      const response = await fetch(
-        `/issues/${encodeURIComponent(detail.id)}/materials/logs/archive`);
+      const response = await fetch(issueApiUrl(`/issues/${encodeURIComponent(detail.id)}/materials/logs/archive`));
       if (!response.ok) {
         const body = await response.json().catch(() => ({})) as { error?: unknown };
         throw new Error(String(body.error ?? `下载失败(${response.status})`));

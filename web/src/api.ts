@@ -1,3 +1,4 @@
+import { issueApiUrl } from "./issues/issueLink";
 import type { CompletionRange } from "../../src/completionRange";
 import { invalidateKnowledgeReads } from "./knowledgeReadCache";
 import { resolveTaskDemoAsset } from "./taskDemoSandbox";
@@ -155,7 +156,7 @@ export interface WishImageUpload {
 }
 
 export async function importIssueMr(mrUrl: string): Promise<IssueSummary> {
-  const response = await fetch("/issues/from-mr", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mr_url: mrUrl }) });
+  const response = await fetch("/pipeline-repairs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mr_url: mrUrl }) });
   if (!response.ok) throw new Error(await errorText(response));
   return parseJson(response);
 }
@@ -3193,8 +3194,7 @@ export function tailIssueWarmupEvents(
   onState?: (state: SseConnectionState) => void,
 ): () => void {
   onState?.("connecting");
-  const source = new EventSource(
-    `/issues/${encodeURIComponent(issueId)}/warmup/events`);
+  const source = new EventSource(issueApiUrl(`/issues/${encodeURIComponent(issueId)}/warmup/events`));
   source.onopen = () => onState?.("live");
   source.onmessage = (message) => onEvent(JSON.parse(message.data));
   source.onerror = () => onState?.("reconnecting");
@@ -3246,7 +3246,7 @@ export function tailIssueEvents(
   onState?: (state: SseConnectionState) => void,
 ): () => void {
   onState?.("connecting");
-  const source = new EventSource(`/issues/${encodeURIComponent(issueId)}/events`);
+  const source = new EventSource(issueApiUrl(`/issues/${encodeURIComponent(issueId)}/events`));
   source.onopen = () => onState?.("live");
   source.onmessage = (message) => onEvent(JSON.parse(message.data));
   source.onerror = () => onState?.("reconnecting");
@@ -3737,7 +3737,14 @@ export const ISSUE_STATUS_TEXT: Record<IssueStatus, string> = {
 export function issueStatusText(issue: {
   status: IssueStatus;
   gate?: IssueGateCard;
+  scenario?: IssueScenario;
+  stage_states?: IssueStageState[];
 }): string {
+  if (issue.scenario === "mr_repair") {
+    if (issue.status === "canceled") return "已停止";
+    if (issue.stage_states?.[0] === "done") return "修复完成";
+    if (issue.status === "idle") return "等待输入";
+  }
   if (issue.status === "waiting_user" && issue.gate?.kind === "env_verify") {
     return "待验证";
   }
@@ -4193,12 +4200,16 @@ async function issueFetch(
   path: string,
   init?: RequestInit,
 ): Promise<any> {
-  const response = await fetch(path, init);
+  const response = await fetch(issueApiUrl(path), init);
   if (!response.ok) {
     const body = await errorBody(response);
     throw new Error(String(body.error ?? `HTTP ${response.status}`));
   }
   return parseJson(response);
+}
+
+export function listPipelineRepairs(): Promise<IssueSummary[]> {
+  return issueFetch("/pipeline-repairs").then(body => body.issues ?? []);
 }
 
 export function listIssues(): Promise<IssueSummary[]> {
@@ -4639,7 +4650,7 @@ export function bindIssueTicket(id: string, ticket: string): Promise<IssueSummar
 /** 提单模板(ADR-0048):确认是问题闭环会话的提单文稿原样取回。
  *  404(非问题/取消/早期会话没有模板)返回 null,调用方据此不渲染。 */
 export async function getIssueTicketTemplate(id: string): Promise<string | null> {
-  const response = await fetch(`/issues/${encodeURIComponent(id)}/ticket-template`);
+  const response = await fetch(issueApiUrl(`/issues/${encodeURIComponent(id)}/ticket-template`));
   if (response.status === 404) return null;
   if (!response.ok) {
     const body = await errorBody(response);
@@ -4778,7 +4789,7 @@ export interface IssueTimeline {
 export async function getIssueTimeline(
   id: string,
 ): Promise<{ timeline?: IssueTimeline; unavailable?: string }> {
-  const response = await fetch(`/issues/${encodeURIComponent(id)}/timeline`);
+  const response = await fetch(issueApiUrl(`/issues/${encodeURIComponent(id)}/timeline`));
   if (!response.ok) {
     const body = await errorBody(response);
     return { unavailable: String(body.error ?? `HTTP ${response.status}`) };

@@ -16,8 +16,8 @@ export function IssueMrImport({ onCreated, visible }: { onCreated: (issue: Issue
     finally { setBusy(false); }
   }}>
     <label htmlFor="issue-mr-url" className="mb-2 block text-sm font-medium text-text-strong">MR 链接</label>
-    <div className="flex items-center gap-3"><Input id="issue-mr-url" type="url" required value={url} onChange={event => setUrl(event.target.value)} placeholder="粘贴 CodeHub MR 链接" className="min-w-0 flex-1" /><Button type="submit" disabled={busy || !url.trim()}>{busy ? "正在接入…" : "进入工作台修复"}</Button></div>
-    <p className="mb-0 mt-2 text-sm text-muted-foreground">直接进入现有问题工作台的 MR 阶段，沿用原分支和已有流水线修复能力；前置调查步骤不适用。</p>
+    <div className="flex items-center gap-3"><Input id="issue-mr-url" type="url" required value={url} onChange={event => setUrl(event.target.value)} placeholder="粘贴 CodeHub MR 链接" className="min-w-0 flex-1" /><Button type="submit" disabled={busy || !url.trim()}>{busy ? "正在接入…" : "开始修复"}</Button></div>
+    <p className="mb-0 mt-2 text-sm text-muted-foreground">拉取 MR 源分支，检查报错并修复；记录只保留在本工具，不计入 DTS 交付数据。</p>
     {error && <p role="alert" className="mb-0 mt-3 text-sm text-danger">{error}</p>}
   </form>;
 }
