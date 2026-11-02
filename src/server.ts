@@ -2142,8 +2142,8 @@ export function createTaskServer(
         const workspaceRoute = parts[0] === "work" && parts.length >= 2;
         const helpRoute = parts[0] === "help" && extname(url.pathname) === "";
         // 问题工作台深链(小鲁班通知的落点):上一段已把带 text/html 的
-        // GET /issues 与 /issues/:id 让出,这里只管把它们接住交给 React。
-        const issuesRoute = parts[0] === "issues";
+        // GET /issues 与 /pipeline-repairs 的列表、详情让出，这里交给 React。
+        const issuesRoute = parts[0] === "issues" || parts[0] === "pipeline-repairs";
         // 环境管理页签深链(#149):API 判别式放行的 text/html GET 在这里接住交给 React。
         const environmentsRoute = parts[0] === "environments" && parts.length === 1;
         const appRoute = workspaceRoute || helpRoute || issuesRoute || environmentsRoute

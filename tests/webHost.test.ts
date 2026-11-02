@@ -133,6 +133,17 @@ test("配 webRoot:index 与资产按类型出文件,API 与穿越各归各位", 
     assert.equal(issueApi.status, 404);
     assert.match(issueApi.headers.get("content-type") ?? "", /application\/json/);
 
+    // 工具列表和详情直开都要进入 SPA，普通 fetch 仍返回 JSON。
+    for (const path of ["/pipeline-repairs", "/pipeline-repairs/mr-repair-1"]) {
+      const repairPage = await fetch(base + path, { headers: { accept: "text/html" } });
+      assert.equal(repairPage.status, 200, `${path} 浏览器导航应进入 SPA`);
+      assert.match(repairPage.headers.get("content-type") ?? "", /text\/html/);
+      assert.match(await repairPage.text(), /正式前端/);
+      const repairApi = await fetch(base + path);
+      assert.equal(repairApi.status, 404);
+      assert.match(repairApi.headers.get("content-type") ?? "", /application\/json/);
+    }
+
     // 环境管理页签深链(#149):同款判别式——浏览器导航(text/html)拿
     // SPA 入口,程序 fetch(默认 Accept:*/*)照旧拿台账 JSON,契约零变化。
     const envPage = await fetch(base + "/environments", {
