@@ -35,6 +35,10 @@ import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
 import { MockDtsGateway, type DtsGateway } from "../src/issueFlow/gateways.ts";
 import { handleIssueRoutes } from "../src/issueFlow/routes.ts";
+import {
+  readDtsAutoClaimExclusions,
+  setDtsAutoClaimExclusion,
+} from "../src/dtsAutoClaimExclusions.ts";
 import { createBusinessModule } from "../src/businessModuleLibrary.ts";
 import { saveProductVersion } from "../src/configurationCenter.ts";
 import type {
@@ -954,6 +958,76 @@ test("契约快照:取消带终止原因过线,镜像同字段(#541)", async () 
       ...summarySample, waiting: undefined, has_analysis: false,
     };
     assertWireShape(detailSample, detail.body, "GET /issues/:id 取消终态");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+  }
+});
+
+test("契约快照:完结原因终止联动单级排除,其余原因不写(ADR-0072)", async () => {
+  // 终止联动:「问题已处理」(resolved)与「无需处理」(accidental,原文案
+  // 「误发起」)终止的有单会话,服务端取消收口时把该单写进自动接单单级
+  // 排除(ADR-0070 的 dts-auto-claim-exclusions.json,操作人=归属账号——
+  // 路由只允许归属人取消);负面原因、无单会话不写。回执摘要带
+  // auto_claim_excluded:true(稀疏字段,终止确认框据此抑制事前提示)。
+  const dataDir = mfcTemp("mfc-issue-contract-cancel-linkage-");
+  const now = "2026-11-03T00:00:00Z";
+  const sessions: Array<{ id: string; ticket?: string }> = [
+    { id: "issue-11", ticket: "DTS-7201" },
+    { id: "issue-12", ticket: "DTS-7202" },
+    { id: "issue-13", ticket: "DTS-7203" },
+    { id: "issue-14" },
+    { id: "issue-15", ticket: "DTS-7204" },
+  ];
+  for (const { id, ticket } of sessions) {
+    const root = join(dataDir, "issues", id);
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, "issue.json"), JSON.stringify({
+      id, account: "dev", reporter: "dev",
+      created_at: now, updated_at: now,
+      title: `联动夹具 ${id}`, description: "", source: "manual",
+      ...(ticket ? { ticket, scenario: "ticket" } : { scenario: "no_ticket" }),
+      round: 1, stage_states: ["done", "done", "done"],
+      status: "idle", stage: "analyze", stage_note: "", stage_at: now,
+    }));
+  }
+  const service = new IssueFlowService({
+    dataDir, provider: "p", model: "m", modelsJson: {},
+  });
+  try {
+    // 完结类两项:排除表落条目,操作人=归属账号。
+    for (const [id, reason] of [["issue-11", "resolved"],
+      ["issue-12", "accidental"]] as const) {
+      const res = await issuePost(["issues", id, "control"],
+        { action: "cancel", reason }, service);
+      assert.equal(res.status, 200, `${id} 完结原因终止应成功`);
+      assert.equal(res.body.cancel_reason, reason);
+      assert.equal(res.body.auto_claim_excluded, true,
+        `${id} 回执摘要应带已排除旗标(终止确认框据此抑制提示)`);
+    }
+    // 负面原因与无单:不写排除。
+    const slow = await issuePost(["issues", "issue-13", "control"],
+      { action: "cancel", reason: "slow" }, service);
+    assert.equal(slow.status, 200);
+    const noTicket = await issuePost(["issues", "issue-14", "control"],
+      { action: "cancel", reason: "resolved" }, service);
+    assert.equal(noTicket.status, 200,
+      "无单会话取消本身不受联动影响");
+
+    // 幂等:已在排除表的单再以完结原因终止,不报错、条目仍在(覆盖写,
+    // 操作人更新为本次取消的归属人)。
+    setDtsAutoClaimExclusion(dataDir, "DTS-7204", true, "reviewer");
+    const again = await issuePost(["issues", "issue-15", "control"],
+      { action: "cancel", reason: "resolved" }, service);
+    assert.equal(again.status, 200, "已排除的单终止不因联动报错");
+
+    const exclusions = readDtsAutoClaimExclusions(dataDir);
+    assert.deepEqual(
+      Object.keys(exclusions).sort(), ["DTS-7201", "DTS-7202", "DTS-7204"],
+      "只有完结原因的有单终止落排除,负面原因与无单不写");
+    assert.equal(exclusions["DTS-7201"].updated_by, "dev",
+      "操作人取归属账号(路由只允许归属人取消)");
+    assert.equal(exclusions["DTS-7204"].updated_by, "dev",
+      "幂等覆盖写把操作人更新为本次取消的归属人");
   } finally {
     await service.shutdown().catch(() => undefined);
   }

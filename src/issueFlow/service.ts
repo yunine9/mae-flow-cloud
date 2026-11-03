@@ -106,6 +106,7 @@ import {
   isTerminal,
   ISSUE_CANCEL_REASON_UNKNOWN_ERROR,
   ISSUE_CANCEL_REASONS,
+  ISSUE_CANCEL_EXCLUSION_LINK_REASONS,
   ISSUE_NEGATIVE_CANCEL_REASONS,
   issueRepoWorkspaces,
   loadState,
@@ -135,6 +136,10 @@ import {
   type IssueEnvType,
 } from "./state.ts";
 import { businessKnowledgeLines } from "./businessKnowledge.ts";
+import {
+  readDtsAutoClaimExclusions,
+  setDtsAutoClaimExclusion,
+} from "../dtsAutoClaimExclusions.ts";
 import {
   materializeBusinessModuleKnowledge,
   snapshotBusinessModules,
@@ -1638,7 +1643,16 @@ export class IssueFlowService {
   }
   private summarize(state: IssueSessionState): IssueSummary {
     const module = this.currentModule(state);
-    return { ...summarize(state), ...(module ? { module_id: module.id, module: module.name } : {}) };
+    return {
+      ...summarize(state),
+      ...(module ? { module_id: module.id, module: module.name } : {}),
+      // 该单已排除自动接单(ADR-0072):终止确认框据此抑制「将改为排除」
+      // 的事前提示(已排除无需再提示)。稀疏在场,缺席=允许;per-call
+      // 现读与 currentModule 同款,排除表是小 JSON,量级可忽略。
+      ...(state.ticket
+        && readDtsAutoClaimExclusions(this.options.dataDir)[state.ticket]
+        ? { auto_claim_excluded: true } : {}),
+    };
   }
   private project(live: LiveIssue): IssueSummary {
     const feedback = this.feedbackStore(live).list();
@@ -5521,6 +5535,23 @@ export class IssueFlowService {
       }
     }
     this.finishTerminalHygiene(live);
+    // 终止联动单级排除(ADR-0072):完结类原因(词表
+    // ISSUE_CANCEL_EXCLUSION_LINK_REASONS,当前=问题已处理/无需处理)断言
+    // 这张单不再需要处理——不排除的话,只要 DTS 状态还停在可接状态,
+    // 下一拍定时扫描就会重新接走复活(ADR-0070 记录的循环)。有单才联动;
+    // 不看责任人开关(是对将来开开关的保险);幂等。其余原因、无原因取消
+    // 不联动。终态已落盘,联动失败不回滚取消——取消是不可逆主动作,
+    // 不能因伴生标记写失败谎报「取消未完成」,记日志可对账。
+    if (live.state.ticket && input.reason
+        && ISSUE_CANCEL_EXCLUSION_LINK_REASONS.includes(input.reason)) {
+      try {
+        setDtsAutoClaimExclusion(
+          this.options.dataDir, live.state.ticket, true, live.state.account);
+      } catch (error) {
+        this.log(`[issue-flow] ${id} 终止联动自动接单排除失败(不回滚取消): `
+          + String(error));
+      }
+    }
     this.log(`[issue-flow] ${id} 取消`);
     return this.summarize(live.state);
   }

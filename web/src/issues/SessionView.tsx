@@ -398,8 +398,10 @@ export function IssueSessionView({
     </header>
 
     {/* 终止会话确认框(#541):下拉式原因必选,与列表卡片入口同一份
-        CancelSessionDialog;「返回」无副作用,确认才发 cancel。 */}
+        CancelSessionDialog;「返回」无副作用,确认才发 cancel。联动提示
+        (ADR-0072)的单号与已排除旗标来自详情投影。 */}
     <CancelSessionDialog open={cancelOpen} busy={busy}
+      ticket={detail.ticket} autoClaimExcluded={detail.auto_claim_excluded}
       onOpenChange={setCancelOpen} onConfirm={cancelWithReason} />
 
     {/* 异常重跑确认框(#430,ADR-0055):一句话说明可留空;确认即调

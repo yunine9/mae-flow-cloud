@@ -517,8 +517,9 @@ function IssueCard({ issue, onSettled }: {
     </div>
 
     {/* 终止会话确认框(#541):与工作台头部同一份下拉式弹窗;终止发起中
-        禁开合防重。 */}
+        禁开合防重。联动提示(ADR-0072)的单号与已排除旗标来自卡片摘要。 */}
     <CancelSessionDialog open={stopOpen} busy={stopping}
+      ticket={issue.ticket} autoClaimExcluded={issue.auto_claim_excluded}
       onOpenChange={setStopOpen} onConfirm={(input) => void terminateWithReason(input)} />
   </Card>;
 }

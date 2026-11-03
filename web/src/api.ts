@@ -3895,7 +3895,8 @@ export interface IssueGateCard {
 }
 
 /** 终止原因(#541):稳定英文值是协议,界面渲染中文——resolved=问题已
- * 处理(默认)/accidental=误发起/wrong_module=业务模块绑错/
+ * 处理(默认)/accidental=无需处理(原文案「误发起」,2026-11-03 更名
+ * 只动文案,ADR-0072)/wrong_module=业务模块绑错/
  * inaccurate=分析不准确/slow=速度太慢/disobedient=指令不遵从/
  * unclear_plan=方案未明确/other=其他(附选填说明);排除类排在下拉
  * 前段。与服务端 state.ts 的词表同一份语义。 */
@@ -4051,6 +4052,10 @@ export interface IssueSummary {
   stage_at: string;
   /** 网管环境是否已配置(服务端 summarize 派生)。 */
   has_environment: boolean;
+  /** 该单已被排除出自动接单(ADR-0070 单级排除;与 DTS 列表行的同名
+   *  字段同一口径,稀疏在场,缺席=允许):终止确认框据此抑制「将改为
+   *  排除」的事前提示(ADR-0072)。 */
+  auto_claim_excluded?: true;
   /** 本回合已用催办次数(服务端催办预算账;前端暂不消费)。 */
   nudges?: number;
   conclusion?: {
@@ -4082,9 +4087,10 @@ export interface IssueSummary {
   /** 构建产物已回收的时刻(磁盘治理):返工首编为全量(依赖缓存热)。 */
   build_products_reclaimed_at?: string;
   /** 终止原因(#541):canceled 终态伴生,稳定英文值——resolved=问题已
-   *  处理(默认)/accidental=误发起/wrong_module=业务模块绑错/
-   *  inaccurate=分析不准确/slow=速度太慢/disobedient=指令不遵从/
-   *  unclear_plan=方案未明确/other=其他;缺席=无原因取消(历史路径)。 */
+   *  处理(默认)/accidental=无需处理(ADR-0072 更名)/wrong_module=
+   *  业务模块绑错/inaccurate=分析不准确/slow=速度太慢/
+   *  disobedient=指令不遵从/unclear_plan=方案未明确/other=其他;
+   *  缺席=无原因取消(历史路径)。 */
   cancel_reason?: IssueCancelReason;
   /** 终止补充说明(#541):仅 cancel_reason="other" 带,选填人话。 */
   cancel_reason_text?: string;

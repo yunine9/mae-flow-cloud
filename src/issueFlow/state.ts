@@ -368,12 +368,14 @@ export interface IssueMrGateRecord {
 }
 
 /** 终止原因(#541):稳定英文值是协议,界面渲染中文——resolved=问题已
- * 处理(默认)/accidental=误发起/wrong_module=业务模块绑错/
+ * 处理(默认)/accidental=无需处理(原文案「误发起」,2026-11-03 更名
+ * 只动文案,ADR-0072)/wrong_module=业务模块绑错/
  * inaccurate=分析不准确/slow=速度太慢/disobedient=指令不遵从/
  * unclear_plan=方案未明确/other=其他(附选填说明)。下拉顺序=排除类
  * 在前。统计侧只有负面原因计一次解决率失败;resolved、accidental
- * (发起失误)、wrong_module(模块绑错,重开登记即可)与无原因取消
- * 待遇相同(不进统计)。 */
+ * (无需处理)、wrong_module(模块绑错,重开登记即可)与无原因取消
+ * 待遇相同(不进统计)。resolved 与 accidental 的终止另联动自动接单
+ * 单级排除(ADR-0072,联动在 service 取消收口)。 */
 export type IssueCancelReason =
   | "resolved"
   | "accidental"
@@ -391,12 +393,19 @@ export const ISSUE_CANCEL_REASONS: readonly IssueCancelReason[] = [
 ];
 
 /** 负面原因(#542):这些原因终止的有单会话进一次解决率分母记失败;
- *  resolved(问题已处理)、accidental(误发起)、wrong_module(业务模
+ *  resolved(问题已处理)、accidental(无需处理)、wrong_module(业务模
  *  块绑错)与无原因取消(历史数据)待遇相同,不进任何统计。显式列举
  *  词表——将来新增中性/负面原因时各自显式表态,不靠
  *  「非 resolved 即负面」的隐式推导漂移。 */
 export const ISSUE_NEGATIVE_CANCEL_REASONS: readonly IssueCancelReason[] = [
   "inaccurate", "slow", "disobedient", "unclear_plan", "other",
+];
+
+/** 终止联动排除的原因(ADR-0072):断言这张单不再需要处理的完结类——
+ *  有单会话以这些原因终止时,取消收口联动写自动接单单级排除(写入在
+ *  service 取消分支)。与负面码表同款显式列举,将来新增原因各自表态。 */
+export const ISSUE_CANCEL_EXCLUSION_LINK_REASONS: readonly IssueCancelReason[] = [
+  "resolved", "accidental",
 ];
 
 /** 词表外终止原因的统一报错(#540 复审):路由白名单与服务的 fail-loud
@@ -600,6 +609,10 @@ export interface IssueSessionState {
 
 export interface IssueSummary extends IssueSessionState {
   has_environment: boolean;
+  /** 该单已被排除出自动接单(ADR-0070 单级排除;与 DTS 列表行的同名
+   *  字段同一口径,稀疏在场,缺席=允许):终止确认框据此抑制「将改为
+   *  排除」的事前提示(ADR-0072)——已排除的单无需再提示。 */
+  auto_claim_excluded?: true;
   /** 进入代码交付后的持续检视投影；原始流水线/MR 账仍各自权威。 */
   feedback?: FeedbackRecord[];
 }
