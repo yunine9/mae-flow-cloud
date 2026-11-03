@@ -37,7 +37,7 @@ import {
   type Dirent,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { loadSkills } from "@earendil-works/pi-coding-agent";
+import { loadSkills, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { packageDigest } from "./hostSkillRuntime.ts";
 import { isExecutableSkillFile } from "./skillFilePermissions.ts";
 import { durableWriteFileSync } from "./durableWrite.ts";
@@ -74,11 +74,18 @@ const SEGMENT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
 const PACKAGE_SEGMENT_PATTERN = /^[\p{L}\p{N}][\p{L}\p{N}._-]{0,79}$/u;
 
 export class SkillLibraryError extends Error {}
+export class SkillVersionConflictError extends SkillLibraryError {}
 
 export interface SkillUploadFile {
   /** 包内相对路径(POSIX 斜杠),如 "SKILL.md"、"templates/case.md"。 */
   path: string;
   content_base64: string;
+}
+
+export interface SkillPackageUpdate {
+  mode: "edit" | "replace";
+  expected_package_digest: string;
+  files: SkillUploadFile[];
 }
 
 export interface HostSkillDocument {
@@ -703,6 +710,46 @@ export function updateHostSkillKnowledgeMetadata(
       return installStaged(dataDir, stagingRoot, directory, operator,
         "update", staged,
         `更新知识属性：${selected.nature}`);
+    } finally {
+      rmSync(stagingRoot, { recursive: true, force: true });
+    }
+  });
+}
+
+/** 已发布 Skill 直接在平台维护；编辑保留附件，替换以完整新包为准。 */
+export function updateHostSkillPackage(
+  dataDir: string,
+  directory: string,
+  update: SkillPackageUpdate,
+  operator: string,
+): Promise<SkillOperationRecord> {
+  return serialized(() => {
+    const current = readHostSkillDocument(dataDir, directory);
+    if (!update.expected_package_digest) throw new SkillLibraryError("缺少当前 Skill 版本，请重新打开后操作");
+    if (current.package_digest !== update.expected_package_digest) {
+      throw new SkillVersionConflictError("Skill 已被更新，请保留本次修改，重新打开最新版本后再保存");
+    }
+    if (update.mode !== "edit" && update.mode !== "replace") throw new SkillLibraryError("请选择编辑或整包替换");
+    if (!Array.isArray(update.files) || !update.files.length || update.files.length > MAX_FILES) {
+      throw new SkillLibraryError(`请选择 1 至 ${MAX_FILES} 个文件`);
+    }
+    if (update.files.some(file => !file || typeof file.path !== "string" || typeof file.content_base64 !== "string")) {
+      throw new SkillLibraryError("Skill 文件格式无效");
+    }
+    const stagingRoot = stageDirectory(dataDir, directory);
+    try {
+      if (update.mode === "edit") {
+        copyOrdinaryDirectory(join(dataDir, LIVE_DIR, directory), join(stagingRoot, directory));
+      }
+      const staged = materializeToStaging(stagingRoot, directory, update.files, readSkillKnowledgeMetadata(current.content));
+      const nextContent = readFileSync(join(stagingRoot, directory, "SKILL.md"), "utf8");
+      const name = (content: string) => parseFrontmatter(content).frontmatter.name ?? directory;
+      if (name(current.content) !== name(nextContent)) {
+        throw new SkillLibraryError("更新不能修改 Skill 的 name，请保持与当前 Skill 一致");
+      }
+      if (staged.packageDigestValue === current.package_digest) throw new SkillLibraryError("内容与当前版本相同，无需保存");
+      return installStaged(dataDir, stagingRoot, directory, operator, "update", staged,
+        update.mode === "edit" ? "在线编辑 Skill" : "替换完整 Skill 包");
     } finally {
       rmSync(stagingRoot, { recursive: true, force: true });
     }

@@ -2159,6 +2159,20 @@ export async function updateSkillKnowledgeMetadata(
   return parseJson(response);
 }
 
+export async function updateSkillPackage(
+  directory: string,
+  mode: "edit" | "replace",
+  expectedPackageDigest: string,
+  files: SkillUploadFile[],
+): Promise<SkillOperationRecord> {
+  const response = await fetch(`/skills/${encodeURIComponent(directory)}/package`, {
+    method: "PATCH",
+    body: JSON.stringify({ mode, expected_package_digest: expectedPackageDigest, files }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return parseJson(response);
+}
+
 export async function listSkillSubmissions(): Promise<SkillSubmissionRecord[]> {
   const response = await fetch("/skills/submissions");
   if (!response.ok) throw new Error(await errorText(response));

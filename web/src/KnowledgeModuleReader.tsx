@@ -25,6 +25,7 @@ import { KnowledgeModuleLocation } from "./KnowledgeModuleLocation";
 import { KnowledgeModuleScope } from "./KnowledgeModuleScope";
 import { resolveKnowledgeReference } from "./knowledgeStructure";
 import { startKnowledgeDocumentRead } from "./knowledgeDocumentRetry";
+import { SkillPackageEditor } from "./SkillPackageEditor";
 
 export interface KnowledgeModuleReaderProps {
   moduleKey: string;
@@ -61,6 +62,8 @@ function readablePath(doc: ModuleDocument): string[] {
 export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, onResearch, onAsk }: KnowledgeModuleReaderProps) {
   const { stacks } = useTechnologyStacks();
   const [updating, setUpdating] = useState(false), [updateMessage, setUpdateMessage] = useState(""), [updateBusy, setUpdateBusy] = useState(false), [updateError, setUpdateError] = useState("");
+  const [skillEditor, setSkillEditor] = useState<{ directory: string; mode: "edit" | "replace"; path: string }>();
+  const [skillSaved, setSkillSaved] = useState("");
   const [inspectionMode, setInspectionMode] = useState(false);
   const [inspectionIssue, setInspectionIssue] = useState(""), [inspectionDescription, setInspectionDescription] = useState("");
   const [loaded, setData] = useState(cachedKnowledgeModules), [error, setError] = useState(""), [reload, setReload] = useState(0);
@@ -215,12 +218,14 @@ export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, o
       <div className="knowledge-page-title"><KnowledgeBackButton onClick={onBack} /><h2 className="truncate text-base font-semibold">{module?.name || "知识目录"}</h2></div>
       <div className="flex shrink-0 items-center gap-2">{onAsk && <Button variant="outline" size="sm" onClick={() => onAsk(moduleKey, current?.form === "skill" ? undefined : current?.id)}><MessageSquare size={15} />提问</Button>}<Button variant="ghost" size="sm" aria-expanded={showTree} onClick={() => setShowTree(v => !v)}>{showTree ? <PanelLeftClose /> : <PanelLeftOpen />}{showTree ? "收起目录" : "展开目录"}</Button>
         {canInspect && <Button size="sm" variant="outline" disabled={!inspectionDocument} onClick={() => { setInspectionMode(true); setUpdating(true); setUpdateError(""); }} title="检视本模块的正式正文，自动排除 AGENTS.md"><ClipboardCheck size={15} />{inspectionDocument ? "开始检视" : "暂无可检视正文"}</Button>}
-        {(!canInspect || !gitKnowledge) && current?.research_source && <Button variant="outline" size="sm" onClick={openUpdate}><RefreshCw />更新知识</Button>}
+        {current?.skillDirectory && <><Button variant="outline" size="sm" onClick={() => { setSkillSaved(""); setSkillEditor({ directory: current.skillDirectory!, mode: "edit", path: skillPath }); }}>编辑</Button><Button variant="outline" size="sm" onClick={() => { setSkillSaved(""); setSkillEditor({ directory: current.skillDirectory!, mode: "replace", path: skillPath }); }}>替换</Button></>}
+        {!current?.skillDirectory && (!canInspect || !gitKnowledge) && current?.research_source && <Button variant="outline" size="sm" onClick={openUpdate}><RefreshCw />更新知识</Button>}
         <KnowledgeContentSearch contentRef={searchableContent} contentKey={`${currentKey}:${detail?.revision || ""}`} disabled={body === undefined || !usage} /><span ref={setNotesToolbar} className="flex items-center" />
         {engineering && <DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label="管理组件知识" />}><MoreHorizontal size={18} /></DropdownMenuTrigger><DropdownMenuContent align="end" className="tw-root"><DropdownMenuItem onClick={() => { setDeleteDocumentId(current?.form !== "skill" ? current?.id : undefined); setDeleting(true); }}><Trash2 size={16} />删除组件知识</DropdownMenuItem></DropdownMenuContent></DropdownMenu>}
         {module?.category === "business" && <KnowledgeModuleScope key={module.id} moduleId={module.id} moduleName={module.name} />}
       </div>
     </header>
+    {skillSaved && <p role="status" className="border-b border-line px-4 py-2 text-sm text-muted-foreground">{skillSaved}</p>}
     {module?.category === "business" && <KnowledgeModuleLocation key={module.id} moduleId={module.id} onSynced={refreshKnowledge} />}
     {error && <div role="alert" className="flex items-center gap-3 p-4 text-sm text-danger">{error}<Button variant="outline" onClick={refreshKnowledge}>重试</Button></div>}
     <ResizableKnowledgePanes className="km-reader-panes" treeHidden={!showTree}>
@@ -254,6 +259,8 @@ export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, o
         </div>}
       </div>
     </ResizableKnowledgePanes>
+    {skillEditor && <SkillPackageEditor key={`${skillEditor.directory}:${skillEditor.mode}`} directory={skillEditor.directory} mode={skillEditor.mode} initialPath={skillEditor.path}
+      onClose={() => setSkillEditor(undefined)} onSaved={() => { setSkillSaved(`Skill ${skillEditor.directory} 已更新，旧版已保留。`); if (skillEditor.mode === "replace") setSkillPath("SKILL.md"); setSkillEditor(undefined); refreshKnowledge(); }} />}
     <Dialog open={updating} onOpenChange={next => { if (!updateBusy) setUpdating(next); }}><DialogContent className="tw-root max-w-xl"><DialogHeader><DialogTitle>{inspectionMode ? "开始检视正式知识" : "基于正式版本更新"}</DialogTitle></DialogHeader>
       <p className="text-sm leading-relaxed text-muted-foreground">{inspectionMode ? "创建独立检视任务，冻结本模块当前筛选范围内的正式正文并进入全屏，自动排除 AGENTS.md。可连续提出行、整篇和整体意见，结束检视后才由 Agent 修改；MR 合入前知识库保持原内容。" : `${detail?.title} · 当前版本 ${detail?.revision.slice(0, 10)}。创建更新任务后修改文稿，再提交 MR。`}</p>
       {inspectionMode ? <><label className="grid gap-2 text-sm">关联单号（必填）<Input aria-label="检视关联单号" maxLength={120} value={inspectionIssue} onChange={event => setInspectionIssue(event.target.value)} placeholder="本次修订 MR 关联的需求或问题单号" /></label><label className="grid gap-2 text-sm">单号描述（必填）<Input aria-label="检视单号描述" maxLength={2000} value={inspectionDescription} onChange={event => setInspectionDescription(event.target.value)} placeholder="将原样用于 MR 标题" /></label></> : detail?.research_source?.job_id.startsWith("dkx-") ? <Textarea aria-label="本次更新要求" rows={3} value={updateMessage} onChange={e => setUpdateMessage(e.target.value)} placeholder="需要关注哪些变化？留空则核对来源并生成增量建议。" /> : <p className="text-sm text-muted-foreground">创建后按能力核对来源、修改文稿，再提交 MR。</p>}

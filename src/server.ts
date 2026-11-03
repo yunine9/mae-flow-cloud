@@ -166,6 +166,8 @@ import { EnvironmentRegistry } from "./environmentRegistry.ts";
 import { handleEnvironmentRoutes } from "./environmentRegistryRoutes.ts";
 import {
   SkillLibraryError,
+  SkillVersionConflictError,
+  updateHostSkillPackage,
   approveSkillSubmission,
   listSkillOperations,
   listSkillSubmissions,
@@ -1826,8 +1828,8 @@ export function createTaskServer(
         }
         return json(response, 404, { error: "未知知识提取接口" });
       }
-      // 团队 Skill 资产库(货架的写半边):读与货架同口径(登录即可),
-      // 写只归管理员,操作人逐条进留痕。写进数据目录即对下一单生效,
+      // 团队 Skill 资产库：登录成员可维护已发布包，操作人逐条记录。
+      // 写进数据目录即对下一单生效，
       // 快照器每任务从源重造——这里不用通知任何运行时组件。
       // GET 也必须先于静态托管兜底,否则会被当前端资源接管。
       if (parts[0] === "skills") {
@@ -1877,6 +1879,15 @@ export function createTaskServer(
             return json(response, 200, { ...record, production: projectKnowledgeProduction({ kind: "skill-submission", record }) });
           }
           const operator = viewer?.username ?? "本地部署";
+          if (request.method === "PATCH" && parts.length === 3 && parts[2] === "package") {
+            const body = await readBody(request);
+            return json(response, 200, await updateHostSkillPackage(
+              dataDir, decodeURIComponent(parts[1]), {
+                mode: body.mode,
+                expected_package_digest: body.expected_package_digest,
+                files: body.files,
+              }, operator));
+          }
           if (request.method === "PATCH" && parts.length === 3
               && parts[2] === "classification") {
             const body = await readBody(request);
@@ -1912,6 +1923,9 @@ export function createTaskServer(
             return json(response, 200, { ...record, production: projectKnowledgeProduction({ kind: "skill-submission", record }) });
           }
         } catch (error) {
+          if (error instanceof SkillVersionConflictError) {
+            return json(response, 409, { error: error.message });
+          }
           if (error instanceof SkillLibraryError) {
             return json(response, 400, { error: error.message });
           }
