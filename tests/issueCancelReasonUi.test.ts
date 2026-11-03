@@ -62,12 +62,12 @@ test("原因下拉八项必选:默认「问题已处理」,稳定英文值与界
     ["resolved", "accidental", "wrong_module", "inaccurate", "slow",
      "disobedient", "unclear_plan", "other"],
     "八个稳定英文值必须齐且按词表顺序");
-  for (const label of ["问题已处理", "误发起", "业务模块绑错", "分析不准确", "速度太慢", "指令不遵从", "方案未明确", "其他原因"]) {
+  for (const label of ["问题已处理", "无需处理", "业务模块绑错", "分析不准确", "速度太慢", "指令不遵从", "方案未明确", "其他原因"]) {
     assert.ok(labels.includes(label), `下拉必须有中文项「${label}」`);
   }
   assert.match(dialogSource,
-    /import \{ CANCEL_REASON_OPTIONS \} from "\.\/cancelReasons";/,
-    "确认框下拉必须消费共享词表");
+    /import \{ CANCEL_REASON_OPTIONS, EXCLUSION_LINK_CANCEL_REASONS \} from "\.\/cancelReasons";/,
+    "确认框下拉与联动提示词表必须消费共享词表");
   assert.match(dialogSource, /items=\{CANCEL_REASON_OPTIONS\}/);
   // 必选不可跳过:状态初值就是默认档,每次打开重置(没有"不选"的路)。
   assert.match(dialogSource,
@@ -90,6 +90,39 @@ test("「其他原因」展开选填说明:条件渲染文本框,提交才携带
   assert.match(dialogSource,
     /\.\.\.\(reason === "other" && text \? \{ reasonText: text \} : \{\}\),/,
     "非 other 或空说明不携带 reasonText");
+});
+
+test("终止联动事前提示(ADR-0072):有单+完结类原因+未排除才显示,两入口都传单号与旗标", () => {
+  // 联动提示是事前告知不是事后弹窗:确认前用户已知道「将同时把该单
+  // 自动接单改为排除」。条件=有单号(ticket)且未已排除
+  // (autoClaimExcluded)且选中原因属完结类(词表集合,镜像服务端
+  // ISSUE_CANCEL_EXCLUSION_LINK_REASONS);不加勾选框、不做事后二次弹窗
+  // (拍板见 ADR-0072 曾考虑段)。
+  assert.match(dialogSource,
+    /\{ticket && !autoClaimExcluded[\s\S]*?EXCLUSION_LINK_CANCEL_REASONS\.has\(reason\)[\s\S]*?&& <p/,
+    "提示行必须三条件齐备才渲染:有单、未排除、完结类原因(词表集合判定)");
+  assert.match(dialogSource,
+    /终止后将同时把该单的自动接单改为「排除」，见DTS列表自动接单列/,
+    "提示文案是拍板原句,指路 DTS 列表自动接单列");
+  // 完结类词表镜像:两端各自显式列举,不在条件式里散写字面量。
+  const cancelReasons = readFileSync(
+    resolve("web/src/issues/cancelReasons.ts"), "utf-8");
+  assert.match(cancelReasons,
+    /EXCLUSION_LINK_CANCEL_REASONS[^\n]*\n[^\n]*new Set\(\["resolved", "accidental"\]\)/,
+    "前端完结类词表要显式列举 resolved/accidental(镜像服务端联动词表)");
+  // 两个入口都把单号与已排除旗标传进共享确认框(摘要/详情投影的
+  // auto_claim_excluded 稀疏字段,服务端 ADR-0072 富集)。
+  assert.match(issueBoard,
+    /ticket=\{issue\.ticket\} autoClaimExcluded=\{issue\.auto_claim_excluded\}/,
+    "列表卡片入口要传单号与已排除旗标");
+  assert.match(sessionView,
+    /ticket=\{detail\.ticket\} autoClaimExcluded=\{detail\.auto_claim_excluded\}/,
+    "工作台头部入口要传单号与已排除旗标");
+  // 镜像:IssueSummary 要有稀疏旗标字段(服务端已排除才在场)。
+  const summary = api.slice(api.indexOf("export interface IssueSummary"),
+    api.indexOf("export interface IssueWaitingCard"));
+  assert.match(summary, /auto_claim_excluded\?: true;/,
+    "IssueSummary 镜像要有 auto_claim_excluded 稀疏字段");
 });
 
 test("「返回」无副作用:关框不发请求,只有确认才发 cancel", () => {
