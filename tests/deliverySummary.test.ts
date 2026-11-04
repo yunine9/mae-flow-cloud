@@ -57,6 +57,7 @@ query --> user : 空数组（修改）
 沿用既有服务进程，本次差异无部署配置变更。
 ### 场景视图（+1）
 见进程视图的查询流程；空结果关联 TC-01（函数 UT）、TC-02（模块 UT），执行结果未确认。
+**设计一致性**　空结果的模块级行为缺少运行证据，TC-02 待确认。
 ## 测试报告
 ### 验证范围与结论
 查询行为，执行证据不足，当前版本的逐项结果未确认。
@@ -69,6 +70,17 @@ query --> user : 空数组（修改）
 需核对对应测试代码与真实执行证据，不能凭整体绿灯确认这两条用例通过。
 `;
 const misplacedDiagram = "## 测试报告\n```plantuml\n@startuml\nA -> B: 测试\n@enduml\n```\n## 改动点 4+1\n### 逻辑视图\n只分析 diff，没有图。";
+const reviewType = "design-consistency-review";
+const reviewAssignment = "派发过程标记，不应进入交付报告";
+const reviewTime = "2026-10-15T00:01:00Z";
+function spawnReviewer(log: EventLog, call: string, type = reviewType, ts = reviewTime, sessionId = "main") {
+  log.append({ eventId: log.lastEventId() + 1, taskId: "task-15", sessionId, ts, kind: "agent_spawned",
+    payload: { call_id: call, child_session_id: `child-${call}`, agent_type: type, description: "检视", prompt: reviewAssignment } });
+}
+function finishReviewer(log: EventLog, call: string, text: string, lifecycle = "returned", child = `child-${call}`, sessionId = "main") {
+  log.append({ eventId: log.lastEventId() + 1, taskId: "task-15", sessionId, ts: reviewTime, kind: "agent_finished",
+    payload: { call_id: call, child_session_id: child, lifecycle, final_text: text } });
+}
 function fixture() {
   const repo = mkdtempSync(join(tmpdir(), "delivery-summary-"));
   const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
@@ -214,6 +226,7 @@ test("真实 Pi 子会话只读固定 diff/源码及执行证据，修正图后�
     { tool: { name: "delivery_source", input: { action: "read", path: "service.cpp" } } },
     { tool: { name: "delivery_evidence", input: { action: "list" } } },
     { tool: { name: "delivery_evidence", input: { action: "read", id: "design:1" } } },
+    { tool: { name: "delivery_evidence", input: { action: "read", id: "design-review:2" } } },
     { text: misplacedDiagram },
     { text: diagram },
   ], "scripted-v1", { linear: true });
@@ -221,6 +234,9 @@ test("真实 Pi 子会话只读固定 diff/源码及执行证据，修正图后�
     f.task.summary.ticket = "REQ1";
     mkdirSync(join(f.repo, ".mae-flow-work/REQ1"), { recursive: true });
     writeFileSync(join(f.repo, ".mae-flow-work/REQ1/story.md"), "# Story\nTC-01 函数 UT：空结果返回空数组。\nTC-02 模块 UT（MST）：查询入口遇空记录返回空数组。");
+    const taskLog = new EventLog(join(f.repo, "events.jsonl"));
+    spawnReviewer(taskLog, "query");
+    finishReviewer(taskLog, "query", "检视证据标记：针对 TC-02，模块级空结果行为仍缺运行证据。");
     await model.start();
     let notified = 0;
     f.task.summary.luban_account = "owner";
@@ -234,15 +250,21 @@ test("真实 Pi 子会话只读固定 diff/源码及执行证据，修正图后�
     assert.equal(notified, 1);
     const events = new EventLog(join(f.repo, "delivery-summary/events.jsonl")).replay();
     const finished = events.filter(e => e.kind === "tool_finished");
-    assert.equal(finished.length, 4);
+    assert.equal(finished.length, 5);
     assert.ok(finished.every(e => !e.payload.is_error), JSON.stringify(finished));
     assert.match(JSON.stringify(finished), /first delivery/);
     assert.match(JSON.stringify(finished), /TC-02/);
+    assert.match(String(finished.at(-1)?.payload.result), /检视证据标记/);
+    assert.doesNotMatch(JSON.stringify(finished), new RegExp(reviewAssignment));
     const published = readFileSync(join(f.repo, DELIVERY_SUMMARY_FILE), "utf8");
+    assert.equal(published.match(/设计一致性/g)?.length, 1);
+    assert.match(published, /TC-02 待确认/);
+    assert.doesNotMatch(published, /检视证据标记|派发过程标记/);
     for (const part of ["测试报告", "模块 UT（MST）", "逻辑视图", "开发视图", "进程视图", "物理视图", "场景视图（+1）"])
       assert.ok(published.includes(part), part);
     const names = (model.requests[0].tools as Array<{ name: string }>).map(tool => tool.name);
     assert.deepEqual(names, ["delivery_source", "delivery_evidence"]);
+    assert.match(JSON.stringify(model.requests[0].messages), /设计一致性/);
     assert.match(JSON.stringify(model.requests.at(-1)), /其他章节的图不能代替/);
     assert.equal(f.git("rev-parse", "HEAD"), f.head);
   } finally { await model.stop(); f.dispose(); }
@@ -323,6 +345,7 @@ test("报告证据包含完整设计与真实命令输出，排除自述和上�
     writeFileSync(join(dir, ".ticket-id"), "REQ1");
     writeFileSync(join(dir, "spec.md"), "# 规格\n[TC-01] 空结果返回空数组\n" + "设计说明\n".repeat(9000) + "最后一条验收");
     writeFileSync(join(dir, "implementation.md"), "# 实施附录\nMST-01：旧版模块用例，查询失败时保留原记录。");
+    writeFileSync(join(dir, "decisions.md"), "# 确认决定\n最新决定：空结果返回空数组。");
     f.task.summary.continuation = { state: "active", at: "2026-10-15T00:00:00Z", text: "补充空结果测试" };
     const log = new EventLog(join(f.repo, "events.jsonl"));
     log.append({ eventId: 1, taskId: "task-15", sessionId: "main", ts: "2026-10-14T00:00:00Z", kind: "tool_finished",
@@ -331,10 +354,11 @@ test("报告证据包含完整设计与真实命令输出，排除自述和上�
     log.append({ eventId: 3, taskId: "task-15", sessionId: "child", ts: "2026-10-15T00:02:00Z", kind: "tool_finished",
       payload: { call_id: "test", name: "Bash", input: { command: "node --test test/query.test.js" }, is_error: false, result: "ok 1 TC-01\n# pass 1\n# fail 0" } });
     const evidence = await collectReportEvidence(f.repo, f.task.summary);
-    assert.equal(evidence.records.length, 3);
+    assert.equal(evidence.records.length, 4);
     const spec = evidence.records.find(row => row.source.endsWith("/spec.md"))!;
     assert.match(spec.content, /最后一条验收/);
     assert.match(evidence.records.find(row => row.source.endsWith("/implementation.md"))!.content, /MST-01/);
+    assert.match(evidence.records.find(row => row.source.endsWith("/decisions.md"))!.content, /最新决定/);
     const execution = evidence.records.find(row => row.id.startsWith("execution:"))!;
     assert.match(execution.content, /ok 1 TC-01/); assert.match(execution.content, /未绑定提交版本/);
     assert.doesNotMatch(JSON.stringify(evidence), /old result|所有测试通过/);
@@ -343,6 +367,45 @@ test("报告证据包含完整设计与真实命令输出，排除自述和上�
     const row = JSON.parse((await tool.execute("read", { action: "read", id: spec.id, offset: 32000 })).content[0].text);
     assert.equal(row.offset, 32000); assert.ok(row.total > 32000);
     await assert.rejects(tool.execute("read", { action: "read", id: "../../secret" }), /未找到/);
+  } finally { f.dispose(); }
+});
+
+test("设计检视依据只取本轮主会话中配对的有效返回，缺口不冒充结论", async () => {
+  const f = fixture();
+  try {
+    f.task.summary.continuation = { state: "active", at: "2026-10-15T00:00:00Z", text: "调整查询" };
+    const log = new EventLog(join(f.repo, "events.jsonl"));
+    spawnReviewer(log, "previous", reviewType, "2026-10-14T23:59:59Z");
+    finishReviewer(log, "previous", "之前交付的迟到结论");
+    spawnReviewer(log, "other", "build-verify-agent");
+    finishReviewer(log, "other", "其他类型子任务返回");
+    spawnReviewer(log, "wrong-child");
+    finishReviewer(log, "wrong-child", "不匹配的子会话返回", "returned", "child-elsewhere");
+    spawnReviewer(log, "not-main", reviewType, reviewTime, "other-session");
+    finishReviewer(log, "not-main", "另一会话的检视结果", "returned", "child-not-main", "other-session");
+    spawnReviewer(log, "timeout");
+    finishReviewer(log, "timeout", "失败前的陈旧断言：没有偏离", "failed");
+    spawnReviewer(log, "empty");
+    finishReviewer(log, "empty", "  ");
+    spawnReviewer(log, "pending");
+    const prepush = new EventLog(join(f.repo, "prepush/1/events.jsonl"));
+    spawnReviewer(prepush, "prepush");
+    finishReviewer(prepush, "prepush", "推送前验证的旁路返回");
+    const missing = await collectReportEvidence(f.repo, f.task.summary);
+    assert.deepEqual(missing.records.filter(row => row.id.startsWith("design-review:")), []);
+    assert.ok(missing.limitations.some(row => row.includes("未取得") && row.includes("设计检视")));
+
+    spawnReviewer(log, "current");
+    finishReviewer(log, "current", "TC-02 的模块运行行为仍未确认。");
+    const current = await collectReportEvidence(f.repo, f.task.summary);
+    const reviews = current.records.filter(row => row.id.startsWith("design-review:"));
+    assert.deepEqual(reviews.map(row => row.id), [`design-review:${log.lastEventId()}`]);
+    assert.equal(reviews[0]!.source, `events.jsonl#${log.lastEventId()}`);
+    assert.match(reviews[0]!.content, /TC-02 的模块运行行为仍未确认/);
+    assert.match(reviews[0]!.content, /未绑定提交版本/);
+    assert.ok(current.limitations.some(row => row.includes("设计检视") && row.includes("有效结论")));
+    assert.ok(current.limitations.some(row => row.includes("设计检视") && row.includes("返回")));
+    assert.doesNotMatch(JSON.stringify(current.records), /派发过程标记|之前交付|其他类型|不匹配|另一会话|陈旧断言|旁路返回/);
   } finally { f.dispose(); }
 });
 

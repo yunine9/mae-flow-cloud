@@ -327,7 +327,9 @@ class NativeGuidanceSemanticTests(unittest.TestCase):
         self.assertIn("exactly once per full story", text)
         self.assertIn("code reviewer", text)
         self.assertIn("runs once before human review", text)
-        self.assertIn("accepted fixes do not schedule another reviewer pass", text)
+        self.assertIn("accepted fixes do not restart a full code review", text)
+        self.assertIn("focused design-to-implementation follow-up", text)
+        self.assertNotIn("accepted fixes do not schedule another reviewer pass", text)
         self.assertIn("integration review", text)
         for risk in (
                 "cross-module coupling", "shared state", "interface change",
@@ -373,6 +375,41 @@ class NativeGuidanceSemanticTests(unittest.TestCase):
 
 
 class NativeGuidanceLoaderTests(unittest.TestCase):
+    def test_design_review_dispatch_and_unresolved_results_add_no_gate(self):
+        from mae_flow_core.application.hooks.event_policies import agent_kind
+        from mae_flow_core.application.hooks.agent_completion import (
+            AgentCompletionPorts, handle_agent_completion)
+
+        text = native_module(self).load_native_guidance("review")
+        prompt = text.split("### 检视子 Agent 提示\n", 1)[1].strip()
+        self.assertIn("subagent_type: design-consistency-review", text)
+        task = {"subagent_type": "design-consistency-review",
+                "description": "设计与实现一致性检视", "prompt": prompt}
+        self.assertEqual("", agent_kind(task),
+                         "实际检视提示不能误触已退役角色的任务卡要求")
+        for status, expected in (("returned", "returned"),
+                                 ("failed", "interrupted"),
+                                 ("canceled", "interrupted"),
+                                 ("timeout", "timeout")):
+            with self.subTest(status=status):
+                recorded = []
+                ports = AgentCompletionPorts(
+                    state_path="/repo/.mae-flow.json",
+                    latest_started=lambda **_kwargs: "design-review-1",
+                    record_finished=lambda *args: recorded.append(args),
+                    record_execution=lambda *_args: None,
+                    scope_violation=lambda *_args: "",
+                    log=lambda _message: None,
+                )
+                response = handle_agent_completion({
+                    "invocation_id": "design-review-1",
+                    "tool_input": task, "lifecycle": status,
+                    "assistant_text": "D1 仍存在；真实部署证据不足。",
+                }, ports)
+                self.assertEqual(0, response.exit_code)
+                self.assertEqual(expected, recorded[0][2])
+                self.assertIn("D1 仍存在", recorded[0][3])
+
     def test_loader_reads_only_the_requested_named_guidance(self):
         module = native_module(self)
         with tempfile.TemporaryDirectory(prefix="mae guidance ") as root:

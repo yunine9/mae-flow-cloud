@@ -32,4 +32,4 @@ If implementation exposes a real deviation from the confirmed Spec or Story, rec
 
 Compilation is mandatory and delegated to compile-agent. Its generated task card must identify the exact project root, changed source/build files, execution roots, and configured build Skill or command. The main Agent must not replace this evidence with an ad-hoc local build.
 
-Keep code uncommitted for the optional one-time read-only CODE Agent precheck and the user's IDE review. Revisions return to main-Agent editing and compile-agent verification before another user review.
+Keep code uncommitted for the optional one-time full read-only CODE Agent precheck and the user's IDE review. Focused design-to-implementation follow-up uses `.mae-flow-work/plugin-resources/guidance/review.md` and does not restart the full CODE precheck. The main Agent edits and records the affected validation before returning results to the existing human review; an unresolved Agent finding does not create another approval or workflow gate.

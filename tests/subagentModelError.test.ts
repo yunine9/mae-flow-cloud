@@ -10,7 +10,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedModelServer, type Scene, type ScriptedModelOptions } from "../src/scriptedModel.ts";
@@ -30,7 +30,8 @@ const DISPATCH: Scene = {
 
 async function run(
   script: Scene[],
-  beforeScene?: (model: ScriptedModelServer, requestNumber: number) => void,
+  beforeScene?: (model: ScriptedModelServer, requestNumber: number) => void | Promise<void>,
+  configure?: (session: CloudSession) => void | (() => Promise<void>),
 ) {
   const workspace = mkdtempSync(join(tmpdir(), "mfc-child-error-"));
   const options: ScriptedModelOptions = { linear: true };
@@ -40,6 +41,7 @@ async function run(
   const agentDir = join(workspace, "pi-agent");
   mkdirSync(agentDir, { recursive: true });
   writeFileSync(join(agentDir, "models.json"), JSON.stringify(model.modelsJson()));
+  writeFileSync(join(workspace, "review-input.md"), "设计要求：重复请求不重复记账。\n");
   const eventLog = new EventLog(join(workspace, "events.jsonl"));
   const logs: string[] = [];
   const session = await CloudSession.create({
@@ -55,8 +57,12 @@ async function run(
     log: (line) => logs.push(line),
   });
   try {
+    const settle = configure?.(session);
     const outcome = await session.start("开始");
-    return { outcome, events: eventLog.replay(), requests: model.requests, logs, model };
+    if (typeof settle === "function") await settle();
+    return { outcome, events: eventLog.replay(), requests: model.requests, logs, model,
+      forbiddenWritten: existsSync(join(workspace, "forbidden.txt")),
+      parentNote: existsSync(join(workspace, "parent-note.txt")) ? readFileSync(join(workspace, "parent-note.txt"), "utf8") : undefined };
   } finally {
     session.dispose();
     await model.stop();
@@ -84,6 +90,77 @@ test("子 Agent 的模型请求失败:按 failed 返回并带错误原文,主 Ag
   assert.match(JSON.stringify(result.requests.at(-1)), /insufficient_quota/);
   assert.ok(result.logs.some((line) => /模型层错误/.test(line)),
     "错误原文必须进日志,以后再出沉默返回有据可查");
+});
+
+test("只读检视子 Agent 不提供写入或执行工具，主 Agent 仍可处理检视结果", async () => {
+  const result = await run([
+    { tool: { name: "Task", input: { subagent_type: "general-purpose", description: "设计一致性检视",
+      prompt: "只读 review-input.md 并报告设计偏离。", read_only: true, timeout_seconds: 10 } } },
+    { tool: { name: "write", input: { path: "forbidden.txt", content: "子 Agent 不应写入" } } },
+    { tool: { name: "read", input: { path: "review-input.md" } } },
+    { text: "D1：重复请求缺少幂等判断，需主 Agent 核实修复。" },
+    { tool: { name: "write", input: { path: "parent-note.txt", content: "主 Agent 已收到 D1，继续处理。" } } },
+    { text: "已接收设计检视意见。" },
+  ]);
+  assert.equal(result.outcome.status, "turn_finished");
+  const names = (result.requests[1].tools as Array<{ name: string }>).map(tool => tool.name.toLowerCase());
+  assert.ok(names.includes("read"));
+  for (const name of ["write", "edit", "bash", "task", "askuserquestion"]) assert.ok(!names.includes(name), name);
+  assert.equal(result.forbiddenWritten, false);
+  assert.match(result.parentNote ?? "", /已收到 D1/);
+  assert.match(JSON.stringify(result.requests.at(-1)), /D1/);
+  assert.equal(result.events.find(e => e.kind === "agent_finished")?.payload.lifecycle, "returned");
+});
+
+test("单次检视超时中止子会话并把未完成原因交回，主 Agent 能继续且不接收迟到成功", async () => {
+  const result = await run([
+    { tool: { name: "Task", input: { subagent_type: "general-purpose", description: "设计一致性检视",
+      prompt: "检查本次设计。", read_only: true, timeout_seconds: 1 } } },
+    { text: "迟到的报告不应成为成功结果。" },
+    { tool: { name: "write", input: { path: "parent-note.txt", content: "检视未完成，保留缺口并继续。" } } },
+    { text: "已保留检视缺口。" },
+  ], async (_model, requestNumber) => {
+    if (requestNumber === 2) await new Promise(resolve => setTimeout(resolve, 1500));
+  });
+  assert.equal(result.outcome.status, "turn_finished");
+  const finished = result.events.filter(e => e.kind === "agent_finished");
+  assert.equal(finished.length, 1);
+  assert.notEqual(finished[0].payload.lifecycle, "returned");
+  assert.match(String(finished[0].payload.final_text), /超过 1 秒.*未完成/);
+  assert.match(result.parentNote ?? "", /保留缺口并继续/);
+  assert.equal(result.events.filter(e => e.kind === "agent_spawned").length, 1);
+});
+
+test("检视创建尚未完成也受单次期限约束，迟到会话只释放不启动", async () => {
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  let prompted = 0, disposed = 0;
+  const result = await run([
+    { tool: { name: "Task", input: { subagent_type: "general-purpose", description: "设计一致性检视",
+      prompt: "检查本次设计。", read_only: true, timeout_seconds: 1 } } },
+    { text: "创建超时，记录未完成并继续。" },
+  ], undefined, session => {
+    (session as any).openSession = async () => {
+      await pending;
+      return { prompt: async () => { prompted++; }, dispose: () => { disposed++; }, abort: async () => {} };
+    };
+    return async () => { release(); await new Promise(resolve => setTimeout(resolve, 0)); };
+  });
+  assert.equal(result.outcome.status, "turn_finished");
+  assert.equal(prompted, 0);
+  assert.equal(disposed, 1);
+  assert.match(String(result.events.find(e => e.kind === "agent_finished")?.payload.final_text), /超过 1 秒/);
+});
+
+test("新增执行期限只用于只读任务，不把写入型子 Agent 变成超时后仍可能写入的后台任务", async () => {
+  const result = await run([
+    { tool: { name: "Task", input: { subagent_type: "general-purpose", description: "写代码",
+      prompt: "修改生产代码。", timeout_seconds: 1 } } },
+    { text: "没有启动写入型子任务，沿原任务继续。" },
+  ]);
+  assert.equal(result.outcome.status, "turn_finished");
+  assert.equal(result.events.filter(e => e.kind === "agent_spawned").length, 0);
+  assert.match(JSON.stringify(result.requests.at(-1)), /只适用于只读子 Agent/);
 });
 
 test("子 Agent 正常返回:lifecycle 仍是 returned,最终报告原样交回", async () => {

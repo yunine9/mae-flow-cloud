@@ -47,13 +47,13 @@ export async function collectReportEvidence(repo: string, summary: TaskSummary):
   const records: ReportEvidence[] = [], limitations: string[] = [];
   const sources = { taskMaterialRoot: summary.workspace };
   for (const doc of listArtifactDocuments(repo, sources).filter(doc =>
-    /(?:^|\/)(?:spec|story|implementation|overall-story|chain-plan)\.md$/i.test(doc.name)
+    /(?:^|\/)(?:spec|story|implementation|decisions|overall-story|chain-plan)\.md$/i.test(doc.name)
     && (!summary.ticket || doc.name.startsWith(`${summary.ticket}/`) || doc.name.startsWith("task-materials/")))) {
     const document = readArtifact(repo, doc.name, sources);
     if (document?.content) records.push({ id: `design:${records.length + 1}`, source: doc.name, content: document.content });
     if (document?.truncated) limitations.push(`${doc.name} 超过材料读取上限，末尾内容未纳入，不能声称已覆盖全部设计用例。`);
   }
-  if (!records.length) limitations.push("未找到本次 Spec/Story/实施附录，不能编造编码前用例设计或设计对照。");
+  if (!records.some(row => !row.source.endsWith("/decisions.md"))) limitations.push("未找到本次 Spec/Story/实施附录，不能编造编码前用例设计或设计对照。");
   const paths = ["events.jsonl"];
   try {
     const rounds = (await readdir(join(summary.workspace, "prepush"), { withFileTypes: true }))
@@ -71,12 +71,26 @@ export async function collectReportEvidence(repo: string, summary: TaskSummary):
       let text = buffer.subarray(0, bytesRead).toString("utf8");
       if (start) { text = text.slice(text.indexOf("\n") + 1); limitations.push(`${path} 只读取末尾 8 MiB，早期执行记录未纳入。`); }
       const executions: ReportEvidence[] = [];
+      const pendingReviews = new Map<string, string>();
       for (const line of text.split("\n")) {
         if (!line.trim()) continue;
         let event: any;
         try { event = JSON.parse(line); } catch { limitations.push(`${path} 有不完整记录，已跳过，不能视为执行成功。`); continue; }
         if (summary.continuation?.at && event.ts < summary.continuation.at) continue;
         const p = event.payload;
+        if (path === "events.jsonl" && event.taskId === summary.id && event.sessionId === "main"
+          && typeof p?.call_id === "string" && typeof p.child_session_id === "string") {
+          if (event.kind === "agent_spawned" && p.agent_type === "design-consistency-review") {
+            pendingReviews.set(p.call_id, p.child_session_id);
+          } else if (event.kind === "agent_finished" && pendingReviews.get(p.call_id) === p.child_session_id) {
+            pendingReviews.delete(p.call_id);
+            if (p.lifecycle === "returned" && typeof p.final_text === "string" && p.final_text.trim()) {
+              records.push({ id: `design-review:${event.eventId}`, source: `${path}#${event.eventId}`,
+                content: JSON.stringify({ at: event.ts, final_text: p.final_text,
+                  revision: "检视意见未绑定提交版本，须对照报告 head 的代码与实际验证结果。" }) });
+            } else limitations.push("有设计检视未取得有效结论，其涉及范围须以其他有效证据核实。");
+          }
+        }
         if (event.kind !== "tool_finished" || !p || !["Bash", "Write", "Edit"].includes(p.name)) continue;
         const result = String(p.result ?? ""), truncated = result.length > 32000;
         if (truncated && p.name === "Bash") limitations.push(`${path} 的部分命令输出过长，仅保留开头和末尾，不能据此声称逐项结果完整。`);
@@ -88,11 +102,13 @@ export async function collectReportEvidence(repo: string, summary: TaskSummary):
             result: p.name === "Bash" ? (truncated ? `${result.slice(0, 8000)}\n[中间输出省略]\n${result.slice(-24000)}` : result) : undefined,
             truncated, revision: "该事件未绑定提交版本；须与后续修改和本次版本核对，不能直接作为当前版本通过依据" }) });
       }
+      if (pendingReviews.size) limitations.push("部分设计检视尚无返回结果。");
       if (executions.length > 250) limitations.push(`${path} 仅保留最近 250 条命令与文件修改记录。`);
       records.push(...executions.slice(-250));
     } catch { limitations.push(`${path} 无法读取，相关执行情况未确认。`); }
     finally { await file?.close(); }
   }
+  if (!records.some(row => row.id.startsWith("design-review:"))) limitations.push("未取得本轮独立设计检视结论。");
   const pipeline = await collectPipelineEvidence(summary);
   records.push(...pipeline.records); limitations.push(...pipeline.limitations);
   return { records, limitations: [...new Set(limitations)] };

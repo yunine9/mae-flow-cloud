@@ -1027,6 +1027,7 @@ export class CloudSession {
   private async openSession(config: {
     sessionId: string;
     customTools: unknown[];
+    readOnly?: boolean;
     /** 缺省继承驱动级 extraTools(主会话形态);子 Agent 派发时必须传
      *  仅继承只读 knowledge——complete_stage/push_branch 这类业务工具只能存在于主会话,
      *  否则模型派个平行会话就能绕过主上下文推进阶段机(2026-09-06)。 */
@@ -1366,10 +1367,17 @@ export class CloudSession {
       agentDir, cwd: workspace, resume: config.sessionId === this.sessionId && this.options.resumeSession === true,
       log: this.options.log });
     if (config.sessionId === this.sessionId) this.checkpoint = checkpoint;
+    const readOnlyTools = ["read", "grep", "find", "ls",
+      ...childKnowledgeTools(config.extraTools ?? []).map((tool: any) => tool.name),
+      ...(this.options.vision ? ["inspect_image"] : [])];
+    const allowedTools = config.readOnly
+      ? readOnlyTools.filter(name => !this.options.allowedTools
+        || this.options.allowedTools.some(allowed => allowed.toLowerCase() === name))
+      : this.options.allowedTools;
     const { session } = await createAgentSession({
       cwd: workspace,
       agentDir,
-      tools: this.options.allowedTools ? [...this.options.allowedTools] : undefined,
+      tools: allowedTools ? [...allowedTools] : undefined,
       model: resolved,
       modelRuntime: this.modelRuntime,
       resourceLoader: loader,
@@ -1779,6 +1787,11 @@ export class CloudSession {
         }),
         description: Type.String({ description: "一句话任务描述" }),
         prompt: Type.String({ description: "完整任务卡内容" }),
+        read_only: Type.Optional(Type.Boolean({
+          description: "只开放读取、检索和只读知识工具，适用于独立检视；默认期限 180 秒。",
+        })),
+        timeout_seconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 3600,
+          description: "只读子任务的执行期限；须同时设置 read_only。到期中止并返回未完成，不改变其他子任务。" })),
       }),
       async execute(toolCallId: string, params: any) {
         const text = await driver.runSubagent(String(toolCallId), params ?? {});
@@ -1816,6 +1829,14 @@ export class CloudSession {
     callId: string,
     params: Record<string, any>,
   ): Promise<string> {
+    const readOnly = params.read_only === true;
+    if (!readOnly && params.timeout_seconds !== undefined) {
+      throw new Error("单次执行期限只适用于只读子 Agent；请同时设置 read_only，写入型子任务沿用原执行方式");
+    }
+    const timeoutSeconds = params.timeout_seconds ?? (readOnly ? 180 : undefined);
+    if (timeoutSeconds !== undefined && (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 3600)) {
+      throw new Error("子任务执行期限必须是 1～3600 秒的整数");
+    }
     this.childCount += 1;
     const childId = `child-${this.childCount}`;
     // 派发意图先过内核 pretooluse:记 started 观察、验任务卡契约;
@@ -1844,36 +1865,57 @@ export class CloudSession {
     let lifecycle: "returned" | "interrupted" | "failed" = "returned";
     let child: Awaited<ReturnType<CloudSession["openSession"]>> | undefined;
     let setupError = "";
+    let timedOut = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = timeoutSeconds === undefined ? undefined : new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        timedOut = true;
+        // 只读旁路超时应让主会话继续，不能再等待子会话的取消请求返回。
+        void Promise.resolve().then(() => child?.abort()).catch(() => {});
+        reject(new Error(`子 Agent 超过 ${timeoutSeconds} 秒执行期限，本次未完成；保留缺口，不自动重派。`));
+      }, timeoutSeconds * 1000);
+    });
     try {
-      child = await this.openSession({
-        sessionId: childId,
-        customTools: [
-          this.refusalTool(childId, "AskUserQuestion",
-            "AskUserQuestion", "Ask User Question", refusal),
-          this.refusalTool(childId, "Task",
-            "Task", "Dispatch Agent", refusal),
-        ],
-        // 复用同一知识范围；阶段推进和推送工具只归主会话。
-        extraTools: childKnowledgeTools(this.options.extraTools),
-      });
-      this.childSessions.set(childId, child);
-      let prompt = String(params.prompt ?? "");
-      if (params.subagent_type === COMPONENT_ANALYST) {
-        let directory: ComponentAnalysisContext | undefined;
-        let directoryError: string | undefined;
-        try { directory = this.options.componentAnalysisContext?.(); }
-        catch (error) {
-          directoryError = String(error);
-          this.options.log?.(`组件分析启动目录读取未完成：${directoryError}`);
+      const work = (async () => {
+        child = await this.openSession({
+          sessionId: childId,
+          readOnly,
+          customTools: [
+            this.refusalTool(childId, "AskUserQuestion",
+              "AskUserQuestion", "Ask User Question", refusal),
+            this.refusalTool(childId, "Task",
+              "Task", "Dispatch Agent", refusal),
+          ],
+          // 复用同一知识范围；阶段推进和推送工具只归主会话。
+          extraTools: childKnowledgeTools(this.options.extraTools),
+        });
+        if (timedOut) {
+          child.dispose();
+          return;
         }
-        prompt = componentAnalysisPrompt(prompt, directory, directoryError);
-      }
-      await child.prompt(prompt);
+        if (this.aborted) throw new Error("子 Agent 启动已取消");
+        this.childSessions.set(childId, child);
+        let prompt = String(params.prompt ?? "");
+        if (params.subagent_type === COMPONENT_ANALYST) {
+          let directory: ComponentAnalysisContext | undefined;
+          let directoryError: string | undefined;
+          try { directory = this.options.componentAnalysisContext?.(); }
+          catch (error) {
+            directoryError = String(error);
+            this.options.log?.(`组件分析启动目录读取未完成：${directoryError}`);
+          }
+          prompt = componentAnalysisPrompt(prompt, directory, directoryError);
+        }
+        await child.prompt(prompt);
+      })();
+      if (deadline) await Promise.race([work, deadline]);
+      else await work;
     } catch (error) {
       lifecycle = child ? "interrupted" : "failed";
       setupError = String(error);
       this.options.log?.(`子 Agent ${childId} 中断: ${String(error)}`);
     } finally {
+      clearTimeout(timer);
       this.childSessions.delete(childId);
       child?.dispose();
     }
