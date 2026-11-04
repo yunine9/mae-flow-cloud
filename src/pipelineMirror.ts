@@ -79,16 +79,18 @@ export async function mirrorPipelineArtifacts(input: {
   headers?: Record<string, string>;
   /** 非 404 失败(网络断/5xx/坏响应)的人话告警口:fail-open 返回空,
    *  但调用方的日志要能看见"为什么没产物"。 */
-  log?: (message: string) => void;
+  log?: (message: string, retryable?: boolean) => void;
   timeoutMs?: number;
   current?: () => boolean;
 }): Promise<string[]> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), input.timeoutMs ?? 120_000);
+  let readingRemote = false;
   try {
     if (input.current && !input.current()) return [];
     const generation = scopePipelineArtifacts(input.dir, input.sha, true);
     const repo = encodeURIComponent(input.repo);
+    readingRemote = true;
     const response = await fetch(
       `${input.platformUrl}/pipeline/artifacts?sha=${input.sha}`
       + `&repo=${repo}`
@@ -97,7 +99,8 @@ export async function mirrorPipelineArtifacts(input: {
       { headers: input.headers, signal: controller.signal });
     if (response.status === 404) return [];
     if (!response.ok) {
-      input.log?.(`流水线产物镜像失败(HTTP ${response.status}),走摘要通道`);
+      const retryable = response.status >= 500 || response.status === 408 || response.status === 429;
+      input.log?.(`流水线产物镜像失败(HTTP ${response.status}),走摘要通道`, retryable);
       return [];
     }
     let body: { files?: unknown; sha?: string };
@@ -105,9 +108,10 @@ export async function mirrorPipelineArtifacts(input: {
       body = await response.json() as { files?: unknown; sha?: string };
     } catch (error) {
       input.log?.(`流水线产物镜像失败(响应非 JSON),走摘要通道: ${
-        String(error)}`);
+        String(error)}`, !(error instanceof SyntaxError));
       return [];
     }
+    readingRemote = false;
     const files = (Array.isArray(body.files) ? body.files : [])
       .filter((file: any) => typeof file?.name === "string"
         && typeof file?.text === "string");
@@ -136,7 +140,7 @@ export async function mirrorPipelineArtifacts(input: {
     // 网络失败/坏 JSON/落盘异常都不抛:镜像缺席时红灯主链路照走,
     // 但要在调用方日志里留一句"为什么没产物"。
     input.log?.(`流水线产物镜像失败(网络/落盘异常),走摘要通道: ${
-      String(error)}`);
+      String(error)}`, readingRemote);
     return [];
   } finally {
     clearTimeout(timer);

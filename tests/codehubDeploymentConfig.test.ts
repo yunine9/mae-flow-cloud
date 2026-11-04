@@ -134,6 +134,19 @@ test("discussion host timeout leaves room for the configured CLI budget", async 
     delivery: { mr_id: 3384 } }), { kind: "available", items: [] });
 });
 
+test("#583 MR 门禁宿主等待时间覆盖升级后的适配器预算", async t => {
+  const { fetchMrGates } = await import("../src/mrGateClient.ts");
+  const timeout = AbortSignal.timeout.bind(AbortSignal);
+  t.mock.method(AbortSignal, "timeout", (milliseconds: number) => {
+    assert(milliseconds > config.mr_gates.timeout_s * 1000);
+    return timeout(milliseconds);
+  });
+  t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify({ mr_state: "opened", gates: [] })));
+  const view = await fetchMrGates({ platformUrl: "http://adapter", repo: "g/r", headers: {},
+    requireExisting: true, delivery: { mr_id: 1 } });
+  assert.equal(view?.mrState, "opened");
+});
+
 test("deployment merge tool cannot produce a config missing MR discovery or discussions", () => {
   const temp = mkdtempSync(join(tmpdir(), "adapter-merge-test-"));
   try {
@@ -192,6 +205,7 @@ test("prod and test upgrades replace script paths and retire the participant upd
       const destination = join(temp, `${environment}.candidate.json`);
       // 故意从包含生产绝对路径的旧配置升级，测试环境也必须全部改写。
       const oldSettings = { ...structuredClone(config), port: 9988,
+        mr_gates: { ...config.mr_gates, timeout_s: 9 },
         mr_participants: { command: ["python3", "/data/mae-flow-cloud/repo/deploy/adapter-tools/mr-participants.py"], contract: true },
       };
       for (const name of ["mr_create", "mr_create_knowledge"]) delete oldSettings[name].participant_flags;
@@ -204,6 +218,7 @@ test("prod and test upgrades replace script paths and retire the participant upd
       assert.equal(candidate.port, 9988);
       assert.equal(Object.hasOwn(candidate, "mr_participants"), false);
       assert.deepEqual(candidate.mr_approver_members, config.mr_approver_members);
+      assert.equal(candidate.mr_gates.timeout_s, 30);
       for (const name of ["mr_create", "mr_create_knowledge"]) {
         assert.deepEqual(candidate[name].participant_flags, {
           reviewers: "--approval-reviewers", approval_approvers: "--approval-approvers",
@@ -245,6 +260,8 @@ def invoke(detail, gates=None, rc=0, http_error=False, mr="2931", timeout=False)
     assert 'fixture-token' not in stdout.getvalue() + stderr.getvalue()
     if cli.called:
         args, kwargs = cli.call_args
+        assert opener.open.call_args.kwargs['timeout'] > 9.17
+        assert 9.17 < kwargs['timeout'] < 30
         assert '--token' not in args[0]
         assert kwargs['env']['CODEHUB_TOKEN'] == 'fixture-token'
         assert args[0][args[0].index('--project')+1] == 'group/repo'

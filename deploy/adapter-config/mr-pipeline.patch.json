@@ -240,7 +240,7 @@
       "merge_request_id",
       "merge_request_switch"
     ],
-    "timeout_s": 9,
+    "timeout_s": 30,
     "reason": {
       "json": "gates.reason"
     },

@@ -145,3 +145,64 @@ test("#578 摘要已有编译错误时不等待产物，直接进入修复", asy
     assert.match(f.prompts[0], /流水线终态失败摘要/);
   } finally { await f.stop(); }
 });
+
+const statusNoise = "devtest_hdt.sh\n" + "processing stage\n".repeat(400) + "构建失败=1\n";
+const gateFailure = "access_control.py 门禁检查 exit code 1, Error message is empty";
+
+test("#583 无失败维度和具体报错，502 后补取同一提交的产物", async () => {
+  const f = await fixture(n => n === 1 ? { status: 502 } : {
+    files: [{ name: "build_log_gate.txt", text: gateFailure }],
+  });
+  try {
+    await f.settle({ status: "failed", log: statusNoise, checks: [] });
+    assert.equal(f.attempts(), 2);
+    assert.equal(f.prompts.length, 1);
+    assert.match(f.prompts[0], /build_log_gate\.txt/);
+    assert.equal(readFileSync(join(f.live.root, "pipeline", "build_log_gate.txt"), "utf8"), gateFailure);
+    assert.equal(f.live.state.pipelines[repo].reds, 1);
+  } finally { await f.stop(); }
+});
+
+test("#583 长摘要末尾已有报错，Agent 收到原文且不等待空镜像", async () => {
+  for (const [checks, cause] of [
+    [[], gateFailure],
+    [[{ dimension: "COMPILE", status: "failed" }], gateFailure],
+    [[{ dimension: "COMPILE", status: "failed" }], "   L94: python access_control.py\n>> L95: exit code 1, Error message is empty"],
+    [[{ dimension: "COMPILE", status: "failed" }], "src/parser.cc:212: error: missing return"],
+  ] as const) {
+    const f = await fixture(() => ({ status: 502 }));
+    try {
+      await f.settle({ status: "failed", log: statusNoise + cause, checks: [...checks] });
+      assert.equal(f.attempts(), 1);
+      assert.ok(f.prompts[0].includes(cause), "判断有证据的错误必须交给 Agent");
+    } finally { await f.stop(); }
+  }
+});
+
+test("#583 只有失败计数但产物查询正常为空或未配置，不新增重试", async () => {
+  for (const result of [{ files: [] }, { status: 404 }, { status: 403 }]) {
+    const f = await fixture(() => result);
+    try {
+      await f.settle({ status: "failed", log: statusNoise, checks: [] });
+      assert.equal(f.attempts(), 1);
+      assert.equal(f.prompts.length, 1);
+    } finally { await f.stop(); }
+  }
+});
+
+test("#583 自定义适配器的大日志保留中间错误，恢复用的内容与修复消息一致", async () => {
+  const noise = "normal output\n".repeat(2500);
+  const cause = "src/parser.cc:212: error: missing return";
+  let persisted: string | undefined;
+  const f = await fixture(() => {
+    persisted = f.disk().pipelines[repo].evidence_failure_log;
+    return { status: 502 };
+  });
+  try {
+    await f.settle({ status: "failed", checks: [{ dimension: "COMPILE", status: "failed" }],
+      log: noise + cause + "\n" + noise });
+    assert.equal(f.attempts(), 1);
+    assert.ok(persisted && persisted.length <= 16_000 && persisted.includes(cause));
+    assert.ok(f.prompts[0].includes(persisted));
+  } finally { await f.stop(); }
+});

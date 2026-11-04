@@ -32,8 +32,9 @@ try:
     url = api + '/projects/' + urllib.parse.quote(project, safe='') + '/merge_requests/' + mr
     opener = urllib.request.build_opener(urllib.request.ProxyHandler(dict()))
     request = urllib.request.Request(url, headers=dict([('Private-Token', token)]))
-    deadline = time.monotonic() + 8
-    with opener.open(request, timeout=4) as response:
+    # 给适配器 30 秒的进程时限留出启动和输出时间。
+    deadline = time.monotonic() + 25
+    with opener.open(request, timeout=12) as response:
         detail = json.load(response)
     if not isinstance(detail, dict) or str(detail.get('iid', '')) != mr:
         raise GateError('MR 详情未返回匹配的 iid')
@@ -43,7 +44,7 @@ try:
     # 已合入/已关闭时无需再查门禁，门禁故障也不能遮蔽生命周期事实。
     gates = dict()
     if state in ('opened', 'locked'):
-        remaining = min(4, deadline - time.monotonic())
+        remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError('MR 查询超时')
         env = os.environ.copy()

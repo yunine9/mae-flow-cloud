@@ -84,8 +84,8 @@ import {
   type TaskContainerLimits,
 } from "../containerRuntime.ts";
 import { mirrorPipelineArtifacts, isBlindPipelineInput, MISSING_FAILURE_PLACEHOLDER } from "../pipelineMirror.ts";
-import { assessPipelineRepairEvidence } from "../pipelineEvidence.ts";
-import { repairBudget, pipelineEvidenceLines } from "./pipelineRepair.ts";
+import { assessPipelineRepairEvidence, hasActionablePipelineSummary } from "../pipelineEvidence.ts";
+import { repairBudget, pipelineEvidenceLines, repairStatusSummary } from "./pipelineRepair.ts";
 import { collectRepoContextFiles } from "./repoContextFiles.ts";
 import { perRepoBuildCacheMounts } from "../buildCacheMounts.ts";
 import {
@@ -6998,6 +6998,7 @@ export class IssueFlowService {
     // 掉的现场——恢复直挂续表绕过 armPipelineWatch、推送后 AI 同回合
     // 补举的验证卡——到红灯这里必须让失败事实正常送达,不再停靠旧卡。
     this.dismissStaleGate(live, repo, sha, "red");
+    run = { ...run, log: repairStatusSummary(run.log) };
     const evidence = await this.collectPipelineEvidence(live, repo, sha, run, current);
     if (!evidence || !current()) return;
     const { artifacts, lines: evidenceLines } = evidence;
@@ -7101,7 +7102,7 @@ export class IssueFlowService {
         : []),
       "**失败摘要**",
       "",
-      describePipelineRun(run),
+      describePipelineRun(run, { fullSummary: true }),
       "",
       "**逐维度明细**(含工具)",
       "",
@@ -7138,13 +7139,18 @@ export class IssueFlowService {
     const budget = (this.options.settings?.runtime?.().poll_timeout_s ?? 1_800) * 1000;
     const deadline = Number.isFinite(priorDeadline) ? priorDeadline : Date.now() + budget;
     watch.evidence_retry_deadline = new Date(deadline).toISOString();
-    watch.evidence_failure_log = run.log?.slice(0, 2000);
+    // 取证中重启也要用同一份状态摘要评估并交给 Agent，包括末尾的报错。
+    watch.evidence_failure_log = run.log;
     watch.watching = true;
     saveState(live.root, live.state);
     for (;;) {
       if (!current()) return;
       const diagnostics: string[] = [];
-      const artifacts = await this.mirrorPipelineArtifactsFor(live, repo, sha, current, diagnostics);
+      let transientFailure = false;
+      const artifacts = await this.mirrorPipelineArtifactsFor(live, repo, sha, current, (message, retryable) => {
+        diagnostics.push(message);
+        if (retryable) transientFailure = true;
+      });
       if (!current()) return;
       const texts = artifacts.flatMap(name => {
         try { return [{ name, text: readFileSync(join(live.root, "pipeline", name), "utf8") }]; }
@@ -7154,7 +7160,8 @@ export class IssueFlowService {
         artifacts: texts, failureSummary: run.log });
       const allMissing = assessment.failedDimensions.length
         ? assessment.availableDimensions.length === 0
-        : isBlindPipelineInput(run.log?.trim() || MISSING_FAILURE_PLACEHOLDER, texts.length > 0);
+        : isBlindPipelineInput(run.log?.trim() || MISSING_FAILURE_PLACEHOLDER, texts.length > 0)
+          || (transientFailure && !texts.length && !hasActionablePipelineSummary(run.log ?? ""));
       watch.evidence_retry_attempts = (watch.evidence_retry_attempts ?? 0) + 1;
       const expired = Date.now() >= deadline;
       // 已派过同提交或关闭自动修复时保留原停机规则，不额外等待取证。
@@ -7197,7 +7204,7 @@ export class IssueFlowService {
     repo: string,
     sha: string,
     current?: () => boolean,
-    diagnostics?: string[],
+    onDiagnostic?: (message: string, retryable?: boolean) => void,
   ): Promise<string[]> {
     if (!this.options.platformUrl) return Promise.resolve([]);
     const mrUrl = live.state.mrs?.find((item) => item.repo === repo)?.url;
@@ -7207,8 +7214,8 @@ export class IssueFlowService {
       current,
       dir: join(live.root, "pipeline"),
       headers: this.platformHeaders(live.state.account),
-      log: (message) => {
-        diagnostics?.push(message);
+      log: (message, retryable) => {
+        onDiagnostic?.(message, retryable);
         this.log(`[issue-flow] ${live.id} ${message}`);
       },
     }).catch(() => [] as string[]);

@@ -44,6 +44,8 @@ const UT_ERROR = /(?:tests? (?:run:.*)?fail(?:ed|ure)?|\btest case failed\b|\bte
 const UT_CASE_ERROR = /(?:^\s*(?:\[ERROR\]\s*)?[\w.$]+Test\.[\w$]+:\d+|^\s*[\w.$]+Test\s*>\s*.+\s+FAILED\b|^\s*FAILED\s+\S+\.py(?:::\S+)+\b|^\s*--- FAIL:\s*Test\S+|^\s*test\s+\S+\s+\.\.\.\s+FAILED\b|^\s*Failed\s+[\w.]+\s+\[\d+\s*(?:ms|s)\])/im;
 const PATH_WITH_LINE = /(?:[A-Za-z]:)?[^\s"']+\.(?:c|cc|cpp|cxx|h|hpp|java|kt|py|js|jsx|ts|tsx|go|rs|cs|xml):\d+/i;
 const TEST_FILE_PATH = /\.(?:test|spec)\.(?:js|jsx|ts|tsx|java|kt|py)\b/i;
+// 带脚本名的非零退出能指向出错的命令；单独的失败计数不能。
+const SCRIPT_EXIT_ERROR = /\.(?:py|sh)\b[^\r\n]*(?:\r?\n[^\r\n]*)?\bexit\s+(?:code|status)\s*[:=]?\s*-?[1-9]\d*\b/i;
 
 const TOOL_DIMENSIONS: Array<[RegExp, PipelineDimension]> = [
   [/^(?:cloudbuild2\.0|build2\.0)$/i, "COMPILE"],
@@ -123,6 +125,14 @@ function actionableCodecheck(text: string): boolean {
   return PATH_WITH_LINE.test(text)
     && /(?:rule|codecheck|checker|severity|缺陷|[A-Z](?:\.[A-Z0-9_-]+){2,})/i
       .test(text);
+}
+
+/** 没有逐项检查时，只有摘要里实际出现的诊断才能代替一次失败的产物请求。 */
+export function hasActionablePipelineSummary(summary: string): boolean {
+  // stage/job、工具名本身只能说明哪一项失败。
+  const diagnostic = summary.replace(/^\s*FAILED stage=.*$/gm, "").replace(/\bCPP_UT\b/gi, "");
+  return sniffDimensions(diagnostic).length > 0 || SCRIPT_EXIT_ERROR.test(diagnostic)
+    || actionableCodecheck(diagnostic);
 }
 
 // 指标型质量门缺陷的指标名关键词。word 表保持克制:说明文/规则描述
@@ -224,7 +234,7 @@ export function assessPipelineRepairEvidence(input: {
 
   const summary = input.failureSummary?.trim() ?? "";
   if (meaningful(summary)) {
-    if (failedDimensions.includes("COMPILE") && COMPILE_ERROR.test(summary)) {
+    if (failedDimensions.includes("COMPILE") && (COMPILE_ERROR.test(summary) || SCRIPT_EXIT_ERROR.test(summary))) {
       addSource(sources, "COMPILE", "流水线终态失败摘要");
     }
     if (failedDimensions.includes("UT") && UT_ERROR.test(summary)) {

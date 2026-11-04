@@ -7,8 +7,32 @@
  * 修复会话就是会话自己(容器在场),平台回合即派单。产物全文镜像的
  * 公共实现在 src/pipelineMirror.ts,直接从那里 import。
  */
-import { PIPELINE_DIMENSION_TEXT, type PipelineArtifactText,
+import { hasActionablePipelineSummary, PIPELINE_DIMENSION_TEXT, type PipelineArtifactText,
   type PipelineEvidenceAssessment } from "../pipelineEvidence.ts";
+
+/** 仓内适配器最多返回 8,000 字符。也兼容直接返回大段日志的自定义适配器，
+ * 将同一份有界摘要用于取证、重启恢复和修复消息。 */
+export function repairStatusSummary(log: string | undefined): string | undefined {
+  if (!log || log.length <= 16_000) return log;
+  const head = log.slice(0, 2_000);
+  const tail = log.slice(-4_000);
+  const evidence: string[] = [];
+  let remaining = 8_000;
+  let previous = "";
+  for (const [line] of log.slice(head.length, -tail.length).matchAll(/[^\r\n]{1,1600}/g)) {
+    const excerpt = previous ? `${previous}\n${line}` : line;
+    if (hasActionablePipelineSummary(excerpt)) {
+      const picked = excerpt.slice(0, Math.min(2_000, remaining));
+      evidence.push(picked);
+      remaining -= picked.length + 1;
+      if (remaining <= 0) break;
+      previous = "";
+    } else {
+      previous = line.slice(-240);
+    }
+  }
+  return [head, "...（过长日志已摘录）...", ...evidence, tail].join("\n");
+}
 
 /** 采证结果随失败事实发送，修复与举卡仍由会话 Agent 判断。 */
 export function pipelineEvidenceLines(

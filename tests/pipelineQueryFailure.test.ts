@@ -11,7 +11,7 @@ import { parsePipelineStatus } from "../src/pipelineClient.ts";
 const script = resolve("deploy/adapter-tools/pipeline-status.sh");
 const sha = "a".repeat(40);
 const token = "query-fixture-secret";
-type ResponseMode = { status?: number; body?: string; disconnect?: boolean };
+type ResponseMode = { status?: number; body?: string; disconnect?: boolean; logs?: Array<[string, string]> };
 
 async function fixture(t: TestContext, mode: ResponseMode) {
   const directory = mkdtempSync(join(tmpdir(), "pipeline-query-failure-"));
@@ -19,12 +19,33 @@ async function fixture(t: TestContext, mode: ResponseMode) {
   // 不调用真实 CodeHub CLI；可选质量信息获取失败不应抹掉已查到的运行事实。
   writeFileSync(cli, `#!/bin/sh\nprintf '%s\\n' '${token}: optional quality unavailable' >&2\nexit 1\n`);
   chmodSync(cli, 0o755);
+  if (mode.logs) {
+    writeFileSync(join(directory, "logs.json"), JSON.stringify(mode.logs));
+    writeFileSync(join(directory, "mcp-token"), "fixture");
+    writeFileSync(join(directory, "mcp_sse_client.py"), `import json, pathlib
+class SSEMcpClient:
+    def __init__(self, *args): pass
+    def connect(self): pass
+    def initialize(self): pass
+    def close(self): pass
+    def get_mr_pipeline_info(self, mr):
+        return {'defects': [{'toolName':'build2.0','record_ids':['fixture'],'x_auth_groups':['group']}]}
+    def download_build_logs(self, *args):
+        return json.loads(pathlib.Path(__file__).with_name('logs.json').read_text())
+`);
+  }
   const requests: string[] = [];
   const server = createServer((req, res) => {
     requests.push(req.url ?? "");
     assert.equal(req.headers["private-token"], token);
     if (mode.disconnect) { req.socket.destroy(); return; }
     const listing = new URL(req.url!, "http://fixture").pathname.endsWith("/pipelines");
+    if (mode.logs && !listing) {
+      const payload = req.url!.includes("/merge_requests?") ? [{ web_url: "https://example.test/mr/1" }]
+        : req.url!.endsWith("/jobs") ? { stages: [] } : { ref: "feature" };
+      res.end(JSON.stringify(payload));
+      return;
+    }
     res.writeHead(listing ? mode.status ?? 200 : 503, { "content-type": "application/json" });
     res.end(listing ? mode.body ?? "[]" : '{"error":"optional information unavailable"}');
   });
@@ -37,6 +58,7 @@ async function fixture(t: TestContext, mode: ResponseMode) {
   // 将假密钥放入测试 URL，以验证错误摘要和 adapter 日志都经过脱敏。
   const api = `http://127.0.0.1:${(server.address() as { port: number }).port}/${token}/api/v4`;
   const command = ["env", `MFC_CODEHUB_API=${api}`, `PATH=${directory}:${process.env.PATH}`,
+    `MFC_MCP_CLIENT_DIR=${directory}`, `MFC_MCP_TOKEN_FILE=${join(directory, "mcp-token")}`,
     "PYTHONDONTWRITEBYTECODE=1", "bash", script, "{repo_path}", "{sha}", "{token}"];
   const run = () => new Promise<{ code: number | string | null | undefined; stdout: string; stderr: string }>(done => {
     execFile(command[0], [...command.slice(1, -3), "group%2Frepo", sha, token],
@@ -122,4 +144,20 @@ test("附属质量和日志读取失败仍保留真实流水线结果", async t 
   assert.ok(f.requests.some(url => url.endsWith("/jobs")));
   assert.ok(f.requests.some(url => url.endsWith("/pipelines/42")));
   assert.ok(!result.stderr.includes(token));
+});
+
+test("#583 单个及多个长 job 汇总后，保留中间 job 的命令和失败原文", async t => {
+  const noise = "devtest_hdt.sh " + "x".repeat(150) + "\n";
+  const logs: Array<[string, string]> = ["one", "two", "three"].map(id => [id,
+    noise.repeat(93) + `python access_control_${id}.py\nexit code 1, Error message is empty (${id})\n`
+    + noise.repeat(95) + "构建失败=1"]);
+  const f = await fixture(t, { body: JSON.stringify([{ id: 42, sha, status: "failed" }]), logs });
+  const result = await f.run();
+  assert.equal(result.code, 0, result.stderr);
+  const summary: string = JSON.parse(result.stdout)[0].fail_summary;
+  assert.ok(summary.length <= 8000);
+  for (const [id] of logs) {
+    assert.ok(summary.includes(`access_control_${id}.py`), id);
+    assert.ok(summary.includes(`Error message is empty (${id})`), id);
+  }
 });

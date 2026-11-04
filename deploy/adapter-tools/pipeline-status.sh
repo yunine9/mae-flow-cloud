@@ -126,7 +126,7 @@ FAILURE_PATTERNS = [
         r'killed signal',
         r'signal\s*9\b',
         r'terminated by signal',
-        r'exit\s+(?:code|status)\b',
+        r'exit\s+(?:code|status)\s*[:=]?\s*-?[1-9]\d*\b',
         r'\btimeout\b',
         r'timed out',
         r'no space left',
@@ -210,17 +210,45 @@ def select_failure_ranges(lines, context_before=3, context_after=3, max_windows=
     return ranges, omitted
 
 
-def smart_truncate(text, max_chars=8000, head_chars=2800):
-    """超限时保留头尾,避免最终 exit code / 根因在尾部被截掉。"""
+def keep_ends(text, max_chars, head_chars):
     if len(text) <= max_chars:
         return text
-
     marker = '\n\n...(中间内容因长度限制截断)...\n\n'
-    tail_chars = max_chars - head_chars - len(marker)
-    if tail_chars <= 0:
-        return text[-max_chars:]
-
+    if max_chars <= len(marker):
+        return text[:max_chars]
+    head_chars = min(head_chars, (max_chars - len(marker)) // 2)
+    tail_chars = max_chars - len(marker) - head_chars
     return text[:head_chars] + marker + text[-tail_chars:]
+
+
+def smart_truncate(text, max_chars=8000, head_chars=2800):
+    """单 job 和最终摘要都先为带行号的失败原文留空间。"""
+    if len(text) <= max_chars:
+        return text
+    by_job = {}
+    job = ''
+    previous = ''
+    for line in text.splitlines():
+        if line.startswith('  === job '):
+            job = line
+        if re.match(r'^>> L\d+:', line):
+            hits = by_job.setdefault(job, {})
+            # 错误行有时只有退出码，上一行才是执行的命令。
+            if re.match(r'^\s+L\d+:', previous):
+                hits[previous] = None
+            hits[line] = None
+        previous = line
+    if not by_job:
+        return keep_ends(text, max_chars, head_chars)
+
+    # 多个 job 平分失败原文的预算，避免中间的 job 整段消失。
+    per_job = max_chars // (2 * len(by_job))
+    excerpts = []
+    for job, hits in by_job.items():
+        block = '\n'.join(filter(None, [job, *hits]))
+        excerpts.append(keep_ends(block, per_job, per_job // 2))
+    evidence = keep_ends('--- 失败原文 ---\n' + '\n'.join(excerpts) + '\n', max_chars // 2, max_chars // 4)
+    return evidence + keep_ends(text, max_chars - len(evidence), head_chars)
 
 
 def summarize_log(log_content, max_head=20, max_tail=50):

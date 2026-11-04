@@ -82,7 +82,7 @@ export async function fetchMrGates(options: {
         const response = await fetch(`${platformUrl}/mr/gates?${params}`, { headers: options.headers, signal });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         return await readJson(response);
-      }, 10_000, options.signal);
+      }, 40_000, options.signal);
     } catch (error) {
       if (error instanceof SyntaxError) {
         return failed("交付平台响应不完整：MR 状态响应不是合法 JSON");

@@ -213,9 +213,12 @@ export function parsePipelineStatus(body: Record<string, unknown>): PipelineStat
 }
 
 /** 给"喂给 AI 的失败摘要"用的格式化:红项逐条列出,绿项一句带过。 */
-export function describePipelineRun(run: PipelineRun | PipelineStatus | { status: "not_found" }): string {
+export function describePipelineRun(run: PipelineRun | PipelineStatus | { status: "not_found" },
+  options: { fullSummary?: boolean } = {}): string {
   const lines = [`流水线状态: ${run.status}`];
-  if ("log" in run && run.log) lines.push(`日志(截断): ${run.log.slice(0, 1_500)}`);
+  if ("log" in run && run.log) {
+    lines.push(options.fullSummary ? `日志摘要: ${run.log}` : `日志(截断): ${run.log.slice(0, 1_500)}`);
+  }
   if ("checks" in run && run.checks?.length) {
     for (const check of run.checks) {
       lines.push(`- ${check.dimension} ${check.status}`
