@@ -1,4 +1,4 @@
-import { runCodecheckPrepush, type CodecheckRunner, type CodecheckResult } from "./codecheckPrepush.ts";
+import { runCodecheckPrepush, type CodecheckRunner } from "./codecheckPrepush.ts";
 import { runCodecheckSkillSession } from "./codecheckSkillSession.ts";
 import { createContainerBashOperations } from "./issueFlow/containerBash.ts";
 import { assertNoCodecheckCommits, CodecheckArtifactCommitError } from "./codecheckArtifacts.ts";
@@ -29,7 +29,7 @@ import { memoryFeedbackEvidence } from "./memoryFeedback.ts";
 import { progressAdvanced, taskProgressTimestamp } from "./taskProgressTime.ts";
 import type { ComponentRepository } from "./componentRepositories.ts";
 import { importExternalReviews, importStoredExternalReviews, notifyExternalReviews } from "./externalReviewInbox.ts";
-import { awaitTaskDeliveryAnalytics, buildDeliveryAnalysis, hasFinalMrSample, observeDeliveryCode, recordDeliveryPublication } from "./deliveryAnalytics.ts";
+import { awaitTaskDeliveryAnalytics, buildDeliveryAnalysis, observeDeliveryCode, recordDeliveryPublication } from "./deliveryAnalytics.ts";
 import { concurrentWorkPrompt } from "./concurrentWorkPrompt.ts";
 import { resolveProductBranch } from "./configurationCenter.ts";
 import { createMemoryContext } from "./memoryContext.ts";
@@ -138,7 +138,7 @@ import { KnowledgeSearch, resolveKnowledgeModules, type KnowledgeContext } from 
 import { createKnowledgeTool } from "./knowledgeTools.ts";
 import { ComponentKnowledgeConsumption } from "./componentKnowledgeConsumption.ts";
 import { ComponentPlan } from "./componentPlan.ts";
-import type { ComponentKnowledgeCheckReport } from "./componentKnowledgeCheck.ts";
+import type { TaskDeliverySummary } from "./taskDeliverySummary.ts";
 import { DELIVERY_SPLIT_GUIDANCE } from "./deliverySplitGuidance.ts";
 import { createSplitProposalTool, type SplitProposalInput } from "./splitProposalTool.ts";
 import { projectKernelFeedback } from "./feedbackProjection.ts";
@@ -366,7 +366,6 @@ import {
   selectTerminalRun,
   summarizeFailedChecks,
   type PipelineCheck,
-  type PipelineDimension,
 } from "./pipelineContract.ts";
 import {
   assessPipelineRepairEvidence,
@@ -546,9 +545,10 @@ import {
   type CommitSubjectRecord,
 } from "./commitPolicy.ts";
 import { continuationTarget, finalMrContinuationBlock } from "./finalMrContinuationPolicy.ts";
-import { captureOriginalMr, originalMr, finalMrRecord, type InitialDeliveryMr, type FinalDeliveryMr } from "./taskFinalMr.ts";
-import { prepareFinalMrObjects, retainInitialMrCommit } from "./finalMrGitObjects.ts";
-import { readFinalDeliveryMr, normalizeRepairMrUrl, readMrVersionBase } from "./mrImport.ts";
+import { applyFinalMrLink, refreshLinkedFinalMr } from "./taskFinalMrTracking.ts";
+import { captureOriginalMr, type FinalDeliveryMr } from "./taskFinalMr.ts";
+import { FinalMrSamples, type MrSamplingState } from "./finalMrSamples.ts";
+import { readFinalDeliveryMr, normalizeRepairMrUrl } from "./mrImport.ts";
 import { HostGitSandbox, runGitProcess } from "./hostGitSandbox.ts";
 import { preserveGitAiNotes, publishGitAiNotes } from "./gitAiNotes.ts";
 import { archiveContinuationRuntime, continuationInstructions, continuationPending, resetContinuationBranch, snapshotContinuation, type TaskContinuation, type TaskDeliveryHistory } from "./taskContinuation.ts";
@@ -1165,148 +1165,7 @@ export interface TaskSummary {
   >;
   /** Git 交付事实(§10):MR 链接/状态、流水线结果、或没交付的原因。
    * sha = 流水线绑定的代码版本,也是重启后续轮的锚。 */
-  delivery?: {
-    component_knowledge?: ComponentKnowledgeCheckReport;
-    initial_mr?: InitialDeliveryMr;
-    final_mr?: FinalDeliveryMr;
-    mr_url?: string;
-    /** MR 标识(平台返回的 id/iid):门禁与讨论查询要带回去。 */
-    mr_id?: number | string;
-    mr_participants?: MrParticipantsResult;
-    /** 交付分支对(门禁查询与冲突修复都要用,重启后不靠重读状态文件)。 */
-    source_branch?: string;
-    target_branch?: string;
-    mr_state?: string;
-    /** 平台合入事实；独立于 sha/git_push，不能覆盖旧验证和推送记录。 */
-    merged_sha?: string;
-    pipeline?: string;
-    /** 当前 SHA 的验证是否只是编码期间的旁路观察，重启时据此续接。 */
-    pipeline_background?: boolean;
-    /** 平台按质量维度返回的 Job 结果（可选诊断增强）。契约已声明三项
-     * 均由该权威流水线覆盖时，总体 success 可聚合核销；若逐项明确
-     * failed / pending，内核仍以更精确事实裁决 RED / INCOMPLETE。 */
-    checks?: PipelineCheck[];
-    /** 最近一次推送的起点，仅用于代码增量展示，不参与审批或收据核验。 */
-    last_push_base_sha?: string;
-    /** Cloud 在 Agent 会话释放后完成的推送收据；内核要求它与流水线
-     * SHA、工作区 HEAD 三者一致，避免模型接触个人 Token。 */
-    git_push?: {
-      sha: string;
-      ref: string;
-      remote: string;
-      url?: string;
-    };
-    /** 分支上的外来提交(本任务没推过、却已在远端的提交)。它只可能是
-     * 人为介入,默认可信:宿主把自己的提交接到它后面,不举卡也不拦。
-     * 记账是为了两件不能忘的事——机械重组的锚不许比 base_sha 更老
-     * (否则一次 reset 就把人推上去的东西抹了),派给 Agent 的每一轮
-     * 都要点名"这些不是你写的,别回滚"。 */
-    foreign_commits?: {
-      /** 吸收时的远端分支头:此后一切机械重组的最老锚。 */
-      base_sha: string;
-      absorbed_at: string;
-      count: number;
-      /** `<短 SHA> <标题>`,只用于对人/对 Agent 披露。 */
-      subjects: string[];
-    };
-    /** Cloud 按需运行的独立编译/UT 会话，不是必经步骤或审批门禁。
-     * 真实结果按 SHA + 工作区指纹记录，不由推送成功推断编译通过。 */
-    prepush?: PrePushVerificationState;
-    /** 推送前上传 Skill 的实际结果，不参与任务阶段转换。 */
-    codecheck?: CodecheckResult;
-    /** 读侧活性事实，不落盘。prepush.state=preparing 只表示领域阶段，
-     * 不能再被页面误当成当前进程确实持有 runner/容器。 */
-    prepush_runtime?: {
-      state: PrePushRuntimeState;
-      message: string;
-    };
-    /** 当前 push 检视卡的只读说明与比较锚。卡片销毁即清除。 */
-    push_review?: PushReviewPresentation;
-    /** 历史目录限制卡，仅为兼容读取；恢复或继续验证时清理。 */
-    scope_violation?: { paths: string[]; noted_at: string };
-    /** 最近一次人真正看过的 HEAD：推送确认卡通过或返工时记录，
-     * 复检的“这次修改”以此为比较起点，不控制推送许可。 */
-    last_reviewed_head?: string;
-    sha?: string;
-    skipped?: string;
-    /** 内核对流水线证据的裁决戳(如 "PASS@abc123456789"):终态时宿主
-     * 把平台事实喂给内核 `pipeline record`,内核绑工作区 HEAD 裁决并
-     * 写进 .mae-flow.json 的 quality.pipeline——这里只是那份现场记录
-     * 的镜像。"未裁决(...)"= 登记失败留痕，并阻止进入 await_merge。 */
-    attested?: string;
-    /** 挂起等待的人话(等审批/等投票……):MR 闭环里"没人动它"和
-     * "出了问题"必须让人一眼分得开。 */
-    waiting_on?: string;
-    /** 外部验证自愈预算的到期时刻(ISO)。重启后照旧对表,不重新开表
-     * ——否则每重启一次就白送半小时。 */
-    verify_deadline?: string;
-    /** 自愈已停,等人工介入的原因。设了它:retry 放行、页面亮牌子、
-     * 通知发出。这是"验证中"这潭水里唯一诚实的出口——没有它的时候
-     * 任务会既不完成也不失败也不重试,人连重跑都点不动(实测)。 */
-    stalled?: string;
-    /** 停摆类别(stallPolicy.ts):人接手要做的是等恢复、补材料、让 Agent
-     * 重做、修配置,还是先核实完整性。与 stalled 同生同灭。 */
-    stall_class?: StallClass;
-    /** 红灯维度缺少具体报错时的宿主级取证状态。它不属于内核流程，
-     * 不消耗修复 round；平台证据恢复或人工批注回灌后自动清除。 */
-    evidence_gap?: {
-      sha: string;
-      state: "retrying" | "waiting_human" | "partial";
-      missing_dimensions: PipelineDimension[];
-      available_dimensions: PipelineDimension[];
-      reasons: string[];
-      attempts: number;
-      failure_log?: string;
-      retry_deadline?: string;
-      notified_at?: string;
-      human_evidence?: string;
-      human_dimensions?: PipelineDimension[];
-    };
-    /** 修复环账本(小状态机):MR 合入是最终目标。失败先分类再派单
-     * (检视>冲突>CI,同时多项只修最高优先级那一路——冲突不解 CI
-     * 白跑);round 只数 CI 修复(检视/冲突触发时清零,流程性问题
-     * 不许耗掉代码修复的额度);max 默认 20,数字=可配手刹。
-     * CI 按已配置轮数预算收敛，不用交付 SHA 推断 Agent 已放弃；冲突保留独立恢复规则，
-     * 检视=同一批讨论 id 修过一轮仍未解决即停;加上提示词里的
-     * "原地打转必须换思路或出诊断"。
-     * diagnosis=修复会话停下时留给人的话(缺什么、去哪配)。 */
-    loop?: {
-      round: number;
-      max?: number;
-      /** repairing 只表示修复 Agent 本身正在运行；会话收口后进入
-       * verifying，覆盖新 SHA 的 prepush、push 与权威流水线验证。 */
-      state: "repairing" | "verifying" | "green" | "merged" | "exhausted" | "halted";
-      /** 最近一次派的修复类型:回程(settle 后)按它走收尾动作。 */
-      kind?: "ci" | "review" | "conflict";
-      /** review 的来源决定是否还需要人裁决：MR 讨论只是别人提的意见，
-       * workspace 则是任务责任人已经在工作台明确提交的修改要求。 */
-      review_source?: "platform" | "workspace";
-      /** 本地检视可能并入正在运行的 CI/冲突会话；独立标记让 push 边界
-       * 知道这一轮新增业务文件也已由用户的修改要求授权。 */
-      workspace_review_pending?: boolean;
-      /** 人工意见引发的修改必须回到人手里复检；纯流水线修复不设置。 */
-      workspace_review_recheck_required?: boolean;
-      /** 本轮需要逐条闭环的批注。空数组表示只有整体补充说明，仍需总检。 */
-      workspace_review_annotation_ids?: string[];
-      failure?: string;
-      last_sha?: string;
-      /** 检视修复的刹车锚:上一轮讨论 id+revision 集(排序拼接)。 */
-      review_ids?: string;
-      /** 已把回复发布到平台的讨论 id+revision 集。与 review_ids 相等 = 这批
-       * 意见都答复过了,门禁还红只是检视人没点"已解决"——那是等人,
-       * 不是修不动(报告 D3:既有框架刻意不代检视人 resolve)。 */
-      replied_ids?: string;
-      /** 同一批本地检视缺回执时，原会话已经自动补交过一次。值绑定
-       * review_ids，防止模型继续漏写时无限催办；换一批意见自然重置。 */
-      workspace_review_receipt_retry_for?: string;
-      /** 任意非工作台反馈缺结构化逐条回执时原会话只补交一次。 */
-      feedback_receipt_retry_for?: string;
-      diagnosis?: string;
-    };
-    /** 推送卡前发现检视意见没处理完时,已为哪一批(id:版本 指纹)重新派过
-     * Agent。同一批只派一次:派过仍没完成就如实举卡让人返工,不空转。 */
-    review_processing_dispatched_for?: string;
-  };
+  delivery?: TaskDeliverySummary;
   /** 旧版文件选择记录，仅供历史兼容和清理旧 ignore，不再新增或控制提交。 */
   delivery_selection?: {
     paths: string[];
@@ -1700,7 +1559,7 @@ function latestBuildMilestone(text: string): TaskProgress["milestone"] {
   }
 }
 
-interface TaskState {
+export interface TaskState extends MrSamplingState {
   summary: TaskSummary;
   /** 持久化在 task.json 的内部台账；不属于流程状态，也不更新推进时间。 */
   tokenUsage: TokenUsageState;
@@ -1727,8 +1586,6 @@ interface TaskState {
   containerReopen?: Promise<TaskCommandContainer>;
   /** 合入监控环的防重入锁(内存态):一任务只挂一环。 */
   mergeWatchActive?: boolean;
-  initialMrBaseLookup?: string;
-  finalMrAnalysis?: { key: string; running: boolean; work: Promise<void> };
   /** 同一次平台冲突只补充一次指令；门禁恢复后允许通知下一次冲突。 */
   conflictNotice?: string;
   deliveryActive?: boolean;
@@ -1984,7 +1841,16 @@ export class TaskService {
   /** 原位重跑与彻底删除共享同一把逐任务锁，防止两个破坏性请求在
    * projection await 期间都拿着旧 TaskState 继续执行。 */
   private historyMutationActive = new Set<string>();
-  private finalMrAnalysisLane: Promise<void> = Promise.resolve();
+  private readonly finalMrSamples = new FinalMrSamples<TaskState>({
+    current: task => !this.shuttingDown && this.tasks.get(task.summary.id) === task,
+    platformUrl: () => this.effectivePlatformUrl(),
+    settings: task => ({ credential: this.options.gitCredential?.(task.summary.luban_account),
+      dataDir: this.options.dataDir, log: this.options.log }),
+    detail: (task, url) => this.readFinalMr(task, url),
+    save: task => this.writeTaskState(task),
+    sampled: task => this.considerDeliveryImprovement(task),
+    background: (task, description, work) => this.bypass(task, description, work),
+  });
   /** 每次体积扫描都可能很重；自动回收与管理员手动回收不许重叠。 */
   private buildCacheReclaimActive = false;
   /** 平台探测是异步的，launchOptions 只消费最近一次事实。serve 在开放
@@ -2751,7 +2617,7 @@ export class TaskService {
 
   deliveryAnalysis(retry = false): ReturnType<typeof buildDeliveryAnalysis> {
     for (const task of this.tasks.values()) {
-      if (task.summary.delivery?.final_mr) this.scheduleFinalMrAnalysis(task, retry);
+      if (task.summary.delivery?.final_mr) this.finalMrSamples.schedule(task, retry);
       else if (task.summary.delivery?.git_push?.sha) observeDeliveryCode(task.summary, task.cwd, task.summary.delivery.git_push.sha, retry);
     }
     const summaries = [...this.tasks.values()].map(task => ({ ...task.summary, token_usage: tokenUsageSnapshot(task.tokenUsage) }));
@@ -8646,7 +8512,7 @@ export class TaskService {
           this.counter = Math.max(this.counter, Number(name.slice("task-".length)) || 0);
           restored++;
           this.replayProjection(task);
-          if (summary.status === "completed") this.scheduleFinalMrAnalysis(task);
+          if (summary.status === "completed") this.finalMrSamples.schedule(task);
           continue;
         }
         if (ticketCorrectionBlocks(summary.ticket_correction)) {
@@ -18210,36 +18076,7 @@ export class TaskService {
       if (ticketCorrectionBlocks(task.summary.ticket_correction) || task.mergeSettlement || task.transportActive
           || task.hostActionActive || task.mrCreateActive || task.reviewOutboxFlush)
         throw new TaskControlError("当前 MR 操作仍在结束，请稍后关联最终 MR");
-      const initial = originalMr(task.summary);
-      if (!initial.head) {
-        // 使用任务工具创建的历史 MR 还可能留有当时的创建收据。
-        try {
-          const creation = new TaskHostLedger(task.summary).read().operations.find(op =>
-            op.input.action === "create_mr" && op.mr_receipt?.url === initial.url && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(op.sha ?? ""));
-          if (creation) initial.head = creation.sha;
-        } catch { /* 只有原 MR 链接也能关联，代码分析会标出缺少的版本。 */ }
-      }
-      const final = finalMrRecord(mr);
-      const waiting = task.summary.waiting && task.humanGate.get(task.summary.waiting.waiting_id);
-      if (waiting?.status === "waiting") task.humanGate.supersede(waiting.waiting_id,
-        { stateVersion: waiting.state_version, notes: "已关联最终 MR" });
-      d.initial_mr = initial;
-      d.final_mr = final;
-      d.merged_sha = undefined;
-      d.stalled = undefined;
-      d.stall_class = undefined;
-      d.verify_deadline = undefined;
-      task.assistantEpoch = (task.assistantEpoch ?? 0) + 1;
-      task.pauseRequested = false;
-      task.pendingAssistantHandoff = undefined;
-      task.pendingResume = undefined;
-      task.mission = undefined;
-      task.summary.status = "await_merge";
-      task.summary.waiting = undefined;
-      interruptDeveloperAssistant(task.summary.workspace, "已关联最终 MR，开发助手停止");
-      interruptWarmupReceipt(task.summary.baseline_build);
-      if (d.loop) { d.loop.state = "halted"; d.loop.diagnosis = "云端已停止修复，跟踪最终 MR"; }
-      this.setFinalMrWaiting(task, final);
+      const final = applyFinalMrLink(task, mr);
       this.persist(task, true);
       if (final.state === "merged") {
         await this.settleMergeState(task, "merged", final.head ?? final.merge_commit_sha, final);
@@ -18268,105 +18105,15 @@ export class TaskService {
     return mr;
   }
 
-  private setFinalMrWaiting(task: TaskState, final: FinalDeliveryMr): void {
-    const d = task.summary.delivery!;
-    const closed = final.state === "closed";
-    d.mr_state = closed ? "已关闭" : final.state === "merged" ? "已合入（内核终态待对账）" : "等待合入";
-    d.waiting_on = closed ? "最终 MR 已关闭，未确认交付；可关联其他 MR"
-      : final.state === "merged" ? "最终 MR 已合入，正在登记完成" : "等待最终 MR 合入";
-    task.summary.detail = d.waiting_on;
-  }
-
-  private async refreshFinalMr(task: TaskState, linked: FinalDeliveryMr): Promise<void> {
-    if (task.mergeSettlement || ["completed", "canceled"].includes(task.summary.status)) return;
-    if (linked.state === "merged" && (linked.head || linked.merge_commit_sha) && task.summary.delivery?.final_mr === linked) {
-      await this.settleMergeState(task, "merged", linked.head ?? linked.merge_commit_sha, linked);
-      return;
-    }
-    const mr = await this.readFinalMr(task, linked.url);
-    if (this.shuttingDown || this.tasks.get(task.summary.id) !== task || task.mergeSettlement
-        || task.summary.delivery?.final_mr !== linked || ["completed", "canceled"].includes(task.summary.status)) return;
-    const d = task.summary.delivery;
-    const final = finalMrRecord(mr);
-    if (String(final.id) !== String(linked.id)) throw new TaskControlError("最终 MR 标识已变化，请重新核对链接");
-    if (linked.state === "merged") {
-      // 已经观察到的合入事实不能被平台的旧响应撤销。这里只补同一次合入缺失的版本。
-      if (final.state !== "merged") {
-        this.options.log?.(`任务 ${task.summary.id} 已记录最终 MR 合入，本次查询返回 ${final.state}，将继续查询缺失的版本`);
-        return;
-      }
-      final.source_branch = linked.source_branch || final.source_branch;
-      final.target_branch = linked.target_branch || final.target_branch;
-      final.merged_at = linked.merged_at ?? final.merged_at;
-      final.base = linked.base ?? final.base;
-    }
-    const wasStalled = !!d.stalled;
-    if (wasStalled && final.state !== "merged") {
-      const failures = await this.stopMrExecution(task);
-      if (failures.length || task.summary.delivery?.final_mr !== linked || ["completed", "canceled"].includes(task.summary.status)) return;
-      d.stalled = undefined; d.stall_class = undefined;
-      task.summary.status = "await_merge";
-    }
-    if (final.state === "merged") {
-      if (d.stall_class === "evidence_missing" && !final.head && !final.merge_commit_sha && linked.state === "merged" && !linked.head && !linked.merge_commit_sha) return;
-      d.final_mr = final;
-      await this.settleMergeState(task, "merged", final.head ?? final.merge_commit_sha, final);
-    } else if (wasStalled || JSON.stringify(final) !== JSON.stringify(linked) || task.summary.status !== "await_merge" || d.waiting_on !== task.summary.detail) {
-      d.final_mr = final;
-      this.setFinalMrWaiting(task, final);
-      this.persist(task);
-    }
-  }
-
-  private scheduleFinalMrAnalysis(task: TaskState, retry = false): void {
-    const final = task.summary.delivery?.final_mr, initial = task.summary.delivery?.initial_mr, cwd = task.cwd;
-    if (this.shuttingDown || !cwd || final?.state !== "merged" || (!retry && !final.head) || task.summary.status !== "completed"
-        || task.summary.workspace_reclaimed_at || continuationPending(task.summary)) return;
-    const key = JSON.stringify([task.summary.delivery_generation, initial?.url, initial?.head, final.url]);
-    if (task.finalMrAnalysis?.key === key && (!retry || task.finalMrAnalysis.running)) return;
-    if (hasFinalMrSample(task.summary, retry)) return;
-    const snapshot = task.summary;
-    const stillLinked = () => !this.shuttingDown && this.tasks.get(snapshot.id) === task && task.summary === snapshot
-      && snapshot.delivery?.final_mr === final && snapshot.delivery?.initial_mr === initial;
-    const work = this.finalMrAnalysisLane.then(async () => {
-      if (!stillLinked()) return;
-      if (!final.head) {
-        // 合入时间已登记；手动刷新只补充与同一合入结果匹配的源代码版本。
-        const latest = await this.readFinalMr(task, final.url);
-        if (!stillLinked() || latest.state !== "merged" || !latest.sha || String(final.id) !== latest.iid
-            || latest.source_branch !== final.source_branch || latest.target_branch !== final.target_branch
-            || (final.merge_commit_sha && latest.merge_commit_sha !== final.merge_commit_sha)
-            || (final.merged_at && latest.merged_at && Date.parse(final.merged_at) !== Date.parse(latest.merged_at))) return;
-        final.head = latest.sha;
-        final.base ??= latest.base_sha;
-        this.writeTaskState(task);
-      }
-      const platformUrl = this.effectivePlatformUrl(), credential = this.options.gitCredential?.(task.summary.luban_account);
-      if (platformUrl) {
-        const anchors = [initial, final].filter((mr): mr is InitialDeliveryMr => !!mr?.head && !mr.base);
-        const bases = await Promise.allSettled(anchors.map(mr => readMrVersionBase({ platformUrl, url: mr.url, head: mr.head!, credential })));
-        if (!stillLinked()) return;
-        let changed = false;
-        bases.forEach((result, index) => {
-          if (result.status === "fulfilled" && result.value) { anchors[index].base = result.value; changed = true; }
-        });
-        if (changed) this.writeTaskState(task);
-      }
-      try {
-        await prepareFinalMrObjects(cwd, final.repo, [initial ?? {}, final], new HostGitSandbox(this.options.dataDir, this.options.log),
-          credential);
-      } catch (error) { this.options.log?.(`最终 MR 代码对象暂不完整 ${snapshot.id}：${String(error)}`); }
-      if (!stillLinked()) return;
-      observeDeliveryCode(snapshot, cwd, final.head!, true);
-      await awaitTaskDeliveryAnalytics(snapshot);
-    }).finally(() => {
-      if (task.finalMrAnalysis?.work !== work) return;
-      task.finalMrAnalysis.running = false;
-      if (stillLinked()) this.considerDeliveryImprovement(task);
+  private refreshFinalMr(task: TaskState, linked: FinalDeliveryMr): Promise<void> {
+    return refreshLinkedFinalMr(task, linked, {
+      read: url => this.readFinalMr(task, url),
+      current: () => !this.shuttingDown && this.tasks.get(task.summary.id) === task,
+      stop: () => this.stopMrExecution(task),
+      settle: final => this.settleMergeState(task, "merged", final.head ?? final.merge_commit_sha, final),
+      persist: () => this.persist(task),
+      log: this.options.log,
     });
-    this.finalMrAnalysisLane = work.catch(() => {});
-    task.finalMrAnalysis = { key, work, running: true };
-    this.bypass(task, "最终 MR 代码对比", work);
   }
 
   async refreshRemoteDelivery(id: string, actor?: string, selected?: string,
@@ -18532,7 +18279,7 @@ export class TaskService {
         ? closeEvent.unpushed_local_paths.length : 0;
       task.summary.detail = delivery.final_mr ? "最终 MR 已合入，需求已交付" : mergedCompletionDetail(unpushedCommits, unpushedPaths);
       if (delivery.final_mr?.merged_at) task.summary.completed_at = delivery.final_mr.merged_at;
-      if (delivery.final_mr) this.scheduleFinalMrAnalysis(task);
+      if (delivery.final_mr) this.finalMrSamples.schedule(task);
       this.persist(task);
       this.bypass(undefined, "依赖任务解锁", this.pump());
       const account = task.summary.luban_account;
@@ -18576,37 +18323,12 @@ export class TaskService {
     if (changed || interrupted) this.persist(task);
   }
 
-  private captureInitialMrBase(task: TaskState, createdMr: boolean): void {
-    const d = task.summary.delivery, initial = d?.initial_mr, platformUrl = this.effectivePlatformUrl();
-    if (!platformUrl || !initial?.head || initial.base || d?.final_mr) return;
-    const key = JSON.stringify([task.summary.delivery_generation, initial.url, initial.head]);
-    if (task.initialMrBaseLookup === key) return;
-    task.initialMrBaseLookup = key;
-    if (createdMr && task.cwd) this.bypass(task, "保留初版 MR 提交", retainInitialMrCommit(task.cwd, initial.head));
-    const lookup = async () => {
-      if (this.shuttingDown || this.tasks.get(task.summary.id) !== task || task.summary.delivery?.initial_mr !== initial
-          || task.summary.delivery.final_mr) return;
-      const base = createdMr ? await this.readFinalMr(task, initial.url).then(mr => mr.sha === initial.head ? mr.base_sha : undefined)
-        : await readMrVersionBase({ platformUrl, url: initial.url, head: initial.head!,
-          credential: this.options.gitCredential?.(task.summary.luban_account) });
-      const current = task.summary.delivery;
-      if (!base || this.shuttingDown || this.tasks.get(task.summary.id) !== task || current?.final_mr
-          || !current?.initial_mr || task.initialMrBaseLookup !== key
-          || current.initial_mr.url !== initial.url || current.initial_mr.head !== initial.head) return;
-      current.initial_mr.base = base;
-      this.writeTaskState(task);
-    };
-    const work = createdMr ? lookup() : this.finalMrAnalysisLane.then(lookup);
-    if (!createdMr) this.finalMrAnalysisLane = work.catch(() => {});
-    this.bypass(task, "读取初版 MR 比较基线", work);
-  }
-
   private ensureMergeWatch(task: TaskState, createdMr = false): void {
     if (this.shuttingDown || !this.effectivePlatformUrl()
         || (process.env.MAE_FLOW_UI_FIXTURE_MODE === "1" && task.summary.ui_fixture === true)
         || ["completed", "canceled"].includes(task.summary.status)
         || (!task.summary.delivery?.mr_url && task.summary.delivery?.mr_id === undefined)) return;
-    this.captureInitialMrBase(task, createdMr);
+    this.finalMrSamples.captureInitialBase(task, createdMr);
     this.bypass(task, "合入监控", this.watchMerge(task, task.controlEpoch, true));
   }
 
