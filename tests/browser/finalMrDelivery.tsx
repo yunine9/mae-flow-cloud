@@ -133,26 +133,31 @@ async function run() {
     assert(calls.filter(call => call.url.includes("final-mr-comparison")).length === 1, "同一轮交付的证据按需读取一次");
     button(sourceFile).click(); await pause();
   } else if (scenario === "task") {
+    const initialTask = task;
     renderWorkspace();
     await until(() => [...document.querySelectorAll("button")].some(el => el.textContent?.startsWith("任务详情")), "应能从工作台打开任务详情");
     button("任务详情 ↗").click(); await until(() => document.querySelector('[data-slot="dialog-content"]'), "打开详情");
     button("关联最终 MR").click(); await pause();
     const field = document.querySelector<HTMLInputElement>('input[type="url"]')!;
     const form = field.closest("form")!;
-    assert(form.textContent?.includes("停止本轮改码和推送") && form.textContent.includes("本轮无法切回平台改码")
-      && form.textContent.includes("原目标分支 main") && form.textContent.includes("新建任务"), "保存前应说明本轮不可切回、合入后如何继续");
+    assert(button("关联并切换为只读跟踪").disabled, "首次关联应说明会切换为只读，填入链接才可提交");
+    assert(!form.querySelector("p"), "首次关联表单不应附加平台只读或下一轮分支说明");
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field, finalUrl);
     field.dispatchEvent(new Event("input", { bubbles: true })); await pause();
-    button("保存关联").click();
+    button("关联并切换为只读跟踪").click();
     await until(() => document.body.textContent?.includes("最终 MR 不属于当前仓库"), "被拒绝时应留在表单并显示原因");
     rejectLink = false;
-    button("保存关联").click();
+    button("关联并切换为只读跟踪").click();
     await until(() => document.querySelector('a[href="' + finalUrl + '"]'), "成功后出现最终 MR 链接");
     assert(document.querySelector('a[href="' + initialUrl + '"]'), "关联后原 MR 仍可打开");
     assert(calls.filter(call => call.method === "POST").every(call => call.url === "/tasks/task-orders/final-mr" && JSON.parse(call.body!).url === finalUrl), "关联只提交最终链接");
     renderWorkspace(false); await pause();
     assert(![...document.querySelectorAll("button")].some(el => el.textContent === "更换最终 MR"), "只读访客不可更换最终 MR");
-    renderWorkspace(); await pause(); button("更换最终 MR").click(); await pause();
+    renderWorkspace(false, true); await pause();
+    assert(button("更换最终 MR"), "管理员可更换尚未合入的最终 MR");
+    // 截图保留用户首次关联时看到的表单。
+    task = initialTask;
+    renderWorkspace(); await pause(); button("关联最终 MR").click(); await pause();
   } else {
     const verifying = scenario === "verifying";
     const state = scenario === "tracking" ? "opened" : scenario === "closed" ? "closed" : "merged";
@@ -171,13 +176,21 @@ async function run() {
       assert(![...document.querySelectorAll("button")].some(el => el.textContent === "更换最终 MR"), "已合入待登记不能随意改绑");
       button("关闭任务详情").click(); await pause();
     } else if (state !== "merged") {
-      await until(() => document.body.textContent?.includes("本轮平台只读"), "最终 MR 关联后工作台应主动显示只读说明");
-      const nextStep = state === "closed" ? "更换最终 MR" : "本地修改并推送";
-      assert(document.body.textContent?.includes(nextStep), "工作台应说明可以去哪里继续");
+      await until(() => document.querySelector('a[href="' + finalUrl + '"]'), "工作台应能打开正在跟踪的最终 MR");
+      const mrLink = [...document.querySelectorAll<HTMLAnchorElement>("a")].find(item => item.href === finalUrl && item.textContent?.includes("打开最终 MR"));
+      const line = mrLink?.parentElement;
+      assert(line?.textContent?.includes(state === "closed" ? "最终 MR 已关闭" : "等待最终 MR 合入"), "最终 MR 链接旁应显示当前状态");
+      assert(!line.querySelector("p"), "正常等待或关闭时，工作台不应重复显示操作说明");
       button("任务详情 ↗").click(); await pause();
-      assert(document.querySelector('[data-slot="dialog-content"]')?.textContent?.includes(nextStep), "任务详情也应说明下一步");
-      assert(document.querySelector('a[href="' + finalUrl + '"]'), "允许前往最终 MR");
-      if (state === "closed") assert(button("更换最终 MR"), "允许在原任务更换最终 MR");
+      const mrRow = document.querySelector('[data-slot="dialog-content"] a[href="' + finalUrl + '"]')?.closest("dd");
+      assert(mrRow?.textContent?.includes(state === "closed" ? "已关闭" : "待合入"), "任务详情应保留最终 MR 状态与链接");
+      assert(!mrRow.querySelector("small, p") && !mrRow.textContent.includes("dev/retry-order"), "合入请求行不应附加分支和下一步说明");
+      if (state === "closed") {
+        button("更换最终 MR").click(); await pause();
+        const input = mrRow.querySelector<HTMLInputElement>('input[type="url"]');
+        assert(input?.value === finalUrl && !button("保存更换").disabled, "更换表单应预填现有关联，可保存更换");
+        assert(!mrRow.querySelector("form p"), "更换表单不应附加只读或下一轮说明");
+      }
     } else {
       await until(() => document.querySelector('[aria-label="继续修改与交付历史"]'), "在任务完成页展示下一轮提示");
       const panel = document.querySelector('[aria-label="继续修改与交付历史"]')!;

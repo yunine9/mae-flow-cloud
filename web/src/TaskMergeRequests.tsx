@@ -4,12 +4,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { linkFinalMr, type TaskSummary } from "./api";
 
-export function finalMrNextStep(state: "opened" | "closed" | "merged"): string {
-  if (state === "opened") return "本轮平台只读。请在本地修改并推送，到 CodeHub 检视、合入最终 MR。";
-  if (state === "closed") return "本轮平台只读。要继续交付，可在本地准备新的 MR，由负责人在任务详情中更换最终 MR。";
-  return "最终 MR 已合入，平台正在登记交付结果。";
-}
-
 export function TaskMergeRequests({ task, canOperate, onChanged }: {
   task: TaskSummary; canOperate: boolean; onChanged?: () => void;
 }) {
@@ -19,7 +13,6 @@ export function TaskMergeRequests({ task, canOperate, onChanged }: {
   const [error, setError] = useState("");
   const initial = task.delivery?.initial_mr?.url || task.delivery?.mr_url;
   const final = task.delivery?.final_mr;
-  const originalTarget = task.delivery?.target_branch ?? task.baseline;
   const correction = task.ticket_correction;
   const analysisTask = !task.parent_task_id && (task.requirement_analysis_requested || (task.repositories?.length ?? 0) > 1);
   const canLink = canOperate && initial && final?.state !== "merged" && !analysisTask && !["completed", "canceled", "coordinating"].includes(task.status)
@@ -51,21 +44,16 @@ export function TaskMergeRequests({ task, canOperate, onChanged }: {
           setError(""); setUrl(final?.url ?? ""); setEditing(true);
         }}>{final ? "更换最终 MR" : "关联最终 MR"}</Button>}
       </div>
-      {final && <small className="break-all text-xs text-muted-foreground">{final.source_branch || "未知源分支"} → {final.target_branch || "未知目标分支"}</small>}
-      {final && final.state !== "merged" && !editing && <p className="m-0 text-xs leading-relaxed text-muted-foreground">
-        {finalMrNextStep(final.state)}
-      </p>}
       {canLink && editing && <form className="grid gap-3 rounded-lg border border-line bg-surface-2 p-3" onSubmit={event => { event.preventDefault(); void submit(); }}>
         <label className="grid gap-1.5 text-sm font-medium">最终 MR 链接
           <Input type="url" required autoFocus maxLength={2048} value={url} disabled={busy}
             onChange={event => setUrl(event.target.value)} placeholder="粘贴本仓库的合入请求链接" /></label>
-        <p className="m-0 text-xs leading-relaxed text-muted-foreground">保存后，平台停止本轮改码和推送。请在本地继续开发，本轮无法切回平台改码。平台只读跟踪最终 MR，合入后可对比两版代码。</p>
-        <p className="m-0 text-xs leading-relaxed text-muted-foreground">{originalTarget
-          ? <>最终 MR 合入原目标分支 <code className="break-all">{originalTarget}</code> 后，可在平台开始下一轮。合入其他分支时，请从该分支新建任务。</>
-          : "原目标分支未知。合入后如需继续修改，请从最终 MR 的目标分支新建任务。"}</p>
         {error && <p className="m-0 text-sm text-danger" role="alert">{error}</p>}
         <div className="flex gap-2">
-          <Button type="submit" size="sm" disabled={busy || !url.trim()}>{busy ? "正在关联…" : "保存关联"}</Button>
+          <Button type="submit" size="sm" disabled={busy || !url.trim()}
+            title={final ? undefined : "关联后，本轮无法切回平台改码"}>
+            {busy ? "正在关联…" : final ? "保存更换" : "关联并切换为只读跟踪"}
+          </Button>
           <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => setEditing(false)}>取消</Button>
         </div>
       </form>}

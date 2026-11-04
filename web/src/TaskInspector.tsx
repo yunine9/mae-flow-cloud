@@ -107,12 +107,10 @@ export function TaskInspector({ task, kind, onClose, onInspect, onOpenProcess, c
           <nav className="grid gap-3 border-t border-line pt-4 sm:grid-cols-2" aria-label="任务执行信息">
             <Button type="button" variant="outline"
               className="h-auto w-full justify-between gap-4 whitespace-normal px-4 py-3 text-left"
-              onClick={() => onInspect("usage")}><span><strong className="text-sm font-semibold">模型用量</strong>
-              <small className="mt-1 block text-xs text-muted-foreground">{task.token_usage ? `累计 ${task.token_usage.total_tokens.toLocaleString()} Token` : "提供方暂未返回用量"}</small></span><i className="not-italic text-ink" aria-hidden>→</i></Button>
+              onClick={() => onInspect("usage")}><span>模型用量{task.token_usage && ` · ${task.token_usage.total_tokens.toLocaleString()} Token`}</span><i className="not-italic text-ink" aria-hidden>→</i></Button>
             <Button type="button" variant="outline"
               className="h-auto w-full justify-between gap-4 whitespace-normal px-4 py-3 text-left"
-              onClick={() => onInspect("workflow")}><span><strong className="text-sm font-semibold">执行方案</strong>
-              <small className="mt-1 block text-xs text-muted-foreground">本任务采用的流程版本与定制</small></span><i className="not-italic text-ink" aria-hidden>→</i></Button>
+              onClick={() => onInspect("workflow")}>执行方案<i className="not-italic text-ink" aria-hidden>→</i></Button>
           </nav>
         </div>}
         {kind === "logs" && <ExecutionPanel task={task} defaultOpen />}

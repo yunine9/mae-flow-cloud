@@ -58,7 +58,6 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "cn";
 import { KnowledgeFootprint } from "./KnowledgeFootprint";
 import { TaskJourney } from "./TaskJourney";
-import { finalMrNextStep } from "./TaskMergeRequests";
 import { TaskContinueDelivery } from "./TaskContinueDelivery";
 import { TaskInspector, type TaskInspectorKind } from "./TaskInspector";
 import { taskHealthFacts } from "./taskHealth";
@@ -323,7 +322,6 @@ function MergeWaitLine({ task, canOperate }: {
     : <em className="not-italic text-faint">平台尚未返回 MR 链接，请稍后刷新。</em>;
   if (finalMr) return <div className="grid gap-1.5 text-sm">
     <strong>{finalMr.state === "closed" ? "最终 MR 已关闭，任务尚未完成" : finalMr.state === "merged" ? "最终 MR 已合入" : "等待最终 MR 合入"}</strong>
-    <p className="m-0 text-xs leading-relaxed text-muted-foreground">{finalMrNextStep(finalMr.state)}</p>
     {task.delivery?.stalled && <p className="m-0 text-sm text-danger" role="status">{task.delivery.stalled} · 可刷新 MR 状态。</p>}
     {mrLink}
   </div>;
