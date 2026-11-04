@@ -123,7 +123,7 @@ export async function calculateDeliveryCode(input: {
     }
     const category = origin(sha);
     const originEvidence = afterPublication?.has(sha) && inferred?.origin === "review" && !inferred.explicitRepair
-      ? ["初版 MR 发布后的修改。缺少明确的流水线修复证据，归入检视及其他修改。"] : inferred?.evidence;
+      ? ["初版 MR 发布后的修改。提交记录未显示明确的流水线修复依据。"] : inferred?.evidence;
     metric.commits.push({ sha, at, subject: message[0] ?? "", origin: category, additions, deletions, ...(originEvidence ? { origin_evidence: originEvidence } : {}) });
     if (category !== "first") metric.rework[category] += additions + deletions;
   }

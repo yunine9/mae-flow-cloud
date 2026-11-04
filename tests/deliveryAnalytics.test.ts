@@ -566,9 +566,14 @@ test("最终 MR 三类行以最终代码为分母，合主干、删除行和 CI 
   const dir = join(f.dir, ".delivery-analysis");
   const file = join(dir, readdirSync(dir).find(name => name.endsWith(".json") && !name.endsWith(".patch.json"))!);
   const legacy = JSON.parse(readFileSync(file, "utf8"));
+  const localCommit = legacy.metric.commits.find((c: {sha:string}) => c.sha === final);
+  localCommit.origin_evidence = ["初版 MR 发布后的修改。缺少明确的流水线修复证据，归入检视及其他修改。"];
+  writeFileSync(file, JSON.stringify(legacy));
+  const displayed = buildDeliveryAnalysis([f.summary]).rows[0].metric?.commits.find(c => c.sha === final);
+  assert.deepEqual(displayed?.origin_evidence, ["初版 MR 发布后的修改。缺少明确的流水线修复证据，归入检视修改。"]);
   delete legacy.final_size;
   legacy.metric.retained = { first: 1, pipeline: 2, review: 0, other: 0 };
-  legacy.metric.commits.find((c: {sha:string}) => c.sha === final).origin = "pipeline";
+  localCommit.origin = "pipeline";
   writeFileSync(file, JSON.stringify(legacy));
   const beforeUpgrade = buildDeliveryAnalysis([f.summary]).rows[0];
   assert.equal(beforeUpgrade.final_code_lines, 3); assert.equal(beforeUpgrade.metric, undefined);

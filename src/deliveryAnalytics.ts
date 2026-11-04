@@ -323,9 +323,13 @@ export function buildDeliveryAnalysis(tasks: TaskSummary[], modules: Array<{ id:
         for (const counts of [metric.retained, metric.rework]) {
           counts.review += counts.other; counts.other = 0;
         }
-        for (const commit of metric.commits) if (commit.origin === "other") {
-          commit.origin = "review";
-          commit.origin_evidence = ["按统计口径：归入检视及其他修改，缺少明确的流水线修复线索"];
+        for (const commit of metric.commits) {
+          if (commit.origin === "other") {
+            commit.origin = "review";
+            commit.origin_evidence = ["后续调整按检视修改统计。记录中没有明确的流水线修复依据。"];
+          } else if (commit.origin === "review" && commit.origin_evidence) {
+            commit.origin_evidence = commit.origin_evidence.map(note => note.replace("归入检视及其他修改", "归入检视修改"));
+          }
         }
       }
       const evidenceMetric = metric ?? exactFinalMetric;

@@ -90,7 +90,7 @@ async function verifyCoverage() {
   const team = panel.textContent ?? "";
   assert(team.includes("交付代码行数 72 行") && team.includes("已统计行数 4/5 次交付，已追溯来源 2/5 次交付"), "分别展示包含纯行数样本的总行数和归因覆盖");
   assert(team.includes("占比按已追溯的 60 行计算") && panel.querySelector(".delivery-donut-center strong")?.textContent === "80.0%", "首次实现占比为 48/60，按可归因行数加权");
-  assert(panel.querySelector(".delivery-legend")?.textContent?.includes("检视及其他修改9 行15.0%"), "三类图例包含检视与无法确认流水线原因的后续修改");
+  assert(panel.querySelector(".delivery-legend")?.textContent?.includes("检视修改9 行15.0%"), "三类图例包含检视与无法确认流水线原因的后续修改");
   assert(taskRow("task-money").textContent?.includes("平台外协作"), "同一 MR 有平台外协作事实时要展示");
   for (const id of ["orders", "task-export", "task-timeout"]) {
     assert(!taskRow(id).textContent?.includes("平台外协作"), "主任务及缺少平台外协作事实的任务不能被标记 " + id);
@@ -115,7 +115,7 @@ async function verifyCoverage() {
     assert(detail.textContent?.includes("平台外协作") && detail.textContent.includes("按整个最终版本统计"), "详情须解释平台外协作标识的影响");
     assert(sources.textContent?.includes("交付代码行数 40 行") && sources.textContent.includes("已追溯来源 1/1"), "归因覆盖一次完整交付");
     assert(sources.querySelector(".delivery-donut-center strong")?.textContent === "75.0%", "详情展示该交付的占比");
-    assert(detail.querySelector(".delivery-timeline")?.textContent?.includes("检视及其他修改"), "提交记录和团队沿用相同分类");
+    assert(detail.querySelector(".delivery-timeline")?.textContent?.includes("检视修改"), "提交记录和团队沿用相同分类");
   }
 }
 async function run() {

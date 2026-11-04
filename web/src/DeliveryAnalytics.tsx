@@ -157,7 +157,7 @@ const donutColors = { first: "#0d9488", rework: "#8b5cf6", external: "#d97706" }
 const categories: Array<{ key: CodeOrigin; label: string; color: string }> = [
   { key: "first", label: "首次实现", color: donutColors.first },
   { key: "pipeline", label: "流水线修复", color: donutColors.rework },
-  { key: "review", label: "检视及其他修改", color: donutColors.external },
+  { key: "review", label: "检视修改", color: donutColors.external },
 ];
 /** DTS 生成工作行三分类环的切片(2026-10-20 指标收敛,见 IssueAnalyticsTab 注)。 */
 const worklineSlices = (lines: { first: number; rework: number; external: number }) => [
@@ -222,7 +222,7 @@ function DeliverySources({ summary }: { summary: DeliverySummary }) {
       ariaLabel={summary.available ? `已追溯来源 ${num(summary.total)} 行，首次实现占比 ${share}` : "暂无可追溯的代码来源"}
       slices={categories.map(c => ({ label: c.label, color: c.color, value: summary.retained[c.key] }))} />
     <p className="delivery-muted">已统计行数 {summary.codeAvailable}/{summary.tasks} 次交付，已追溯来源 {summary.available}/{summary.tasks} 次交付。
-      {coverage}<br />检视及其他修改包括检视修改，以及没有流水线修复证据的后续修改。</p>
+      {coverage}<br />检视修改包括按意见修改和开发者自查后的调整。</p>
   </section>;
 }
 const collaborationNote = "这次交付有环节在平台外完成。代码行数和占比按整个最终版本统计，平台外修改的原因需结合提交记录判断。";
@@ -866,7 +866,7 @@ export function DeliveryAnalytics({ onOpenTask, initialTab, role }: {
       return <Fragment key={id}>{parent && <TaskMetricRow id={id} title={`${tasks[0].parent_title ?? "主任务"} · 主任务汇总`} tasks={tasks} ledger={report?.task_tokens} parent onSelect={setSelected} />}{[...new Set(tasks.map(row => row.id))].map(taskId => <TaskMetricRow key={taskId} id={taskId} title={tasks.find(row => row.id === taskId)!.title} tasks={tasks.filter(row => row.id === taskId)} ledger={report?.task_tokens} onSelect={setSelected} child={parent} />)}</Fragment>;
     })}</tbody></table></div>{groupRows.length > 10 && <div className="delivery-pagination"><span>第 {currentPage + 1} / {Math.ceil(groupRows.length / 10)} 页</span><Button variant="outline" disabled={!currentPage} onClick={() => setPage(currentPage - 1)}>上一页</Button><Button variant="outline" disabled={(currentPage + 1) * 10 >= groupRows.length} onClick={() => setPage(currentPage + 1)}>下一页</Button></div>}{!rows.length && <p className="delivery-empty">{busy ? "正在读取交付记录…" : "当前条件下没有需求任务"}</p>}</section>
     {report?.improvement_policy && <ImprovementPolicyControl key={JSON.stringify(report.improvement_policy)} policy={report.improvement_policy} onSaved={policy => setReport(previous => previous ? { ...previous, improvement_policy: { ...policy, can_configure: previous.improvement_policy?.can_configure } } : previous)} />}
-    <details className="delivery-method"><summary>统计口径与数据边界</summary><p>交付代码行数统计最终 MR 相对目标分支新增或修改的行。来源占比只纳入能追溯这些行的交付，按行数加权。仅能核实行数的交付仍计入行数和业务模块占比。{merged.some(row => row.final_deleted_lines !== undefined || row.metric) && `有删除记录的交付共删除 ${num(summary.deleted)} 行。`}</p><p>首次实现包含首次修复之前的提交。已关联最终 MR 时，初版发布后的修改归入后两类。普通交付缺少修复线索时，暂按首次实现统计。统计范围包括源码、测试、脚本和配置，排除 Markdown、二进制、依赖目录、构建产物和平台运行文件。</p><p>后续修改根据实际修复记录和对应的提交范围分类，缺少记录时参考提交说明。有流水线修复证据的归入「流水线修复」，检视修改和其余没有流水线修复证据的后续修改归入「检视及其他修改」。每条提交的分类依据可在任务明细查看。</p><p>Token 使用已有模型用量台账，输入与输出相加；主任务汇总包含自身分析及当前筛选范围的子任务，每个任务只计一次。不要求已推送或已有代码统计；没有上报的历史消耗显示暂无记录。</p><p>这不是代码质量评分；不同任务规模与范围不同。覆盖不足时请结合任务明细解读统计。采集在推送后后台进行，稍后刷新可查看结果，不阻塞开发交付。</p></details>
+    <details className="delivery-method"><summary>统计口径与数据边界</summary><p>交付代码行数统计最终 MR 相对目标分支新增或修改的行。来源占比只纳入能追溯这些行的交付，按行数加权。仅能核实行数的交付仍计入行数和业务模块占比。{merged.some(row => row.final_deleted_lines !== undefined || row.metric) && `有删除记录的交付共删除 ${num(summary.deleted)} 行。`}</p><p>首次实现包含首次修复之前的提交。已关联最终 MR 时，初版发布后的修改归入后两类。普通交付缺少修复线索时，暂按首次实现统计。统计范围包括源码、测试、脚本和配置，排除 Markdown、二进制、依赖目录、构建产物和平台运行文件。</p><p>后续修改根据实际修复记录和对应的提交范围分类，缺少记录时参考提交说明。有流水线修复依据的归入「流水线修复」，其余后续调整按「检视修改」统计，包括开发者在本地自查后的修改。每条提交的分类依据可在任务明细查看。</p><p>Token 使用已有模型用量台账，输入与输出相加；主任务汇总包含自身分析及当前筛选范围的子任务，每个任务只计一次。不要求已推送或已有代码统计；没有上报的历史消耗显示暂无记录。</p><p>这不是代码质量评分；不同任务规模与范围不同。覆盖不足时请结合任务明细解读统计。采集在推送后后台进行，稍后刷新可查看结果，不阻塞开发交付。</p></details>
     <Sheet open={selected !== null} onOpenChange={open => { if (!open) setSelected(null); }}>
       <SheetContent initialFocus={detailTitle} className="delivery-detail-sheet bg-(--surface) gap-0 data-[side=right]:w-[min(760px,58vw)] data-[side=right]:sm:max-w-[min(760px,58vw)]">
         <SheetHeader><SheetTitle ref={detailTitle} tabIndex={-1}>{selected} · {selectedParent ? "主任务汇总" : "交付分析"}</SheetTitle><SheetDescription>{selectedParent ? `${detailRows[0]?.parent_title ?? "主任务"} · 当前筛选范围内 ${new Set(detailRows.map(row => row.id)).size} 个子任务` : detailRows[0]?.title ?? "交付记录"}</SheetDescription></SheetHeader>
