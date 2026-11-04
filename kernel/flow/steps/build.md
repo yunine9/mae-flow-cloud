@@ -30,9 +30,9 @@
   派发前读取 `.mae-flow-work/plugin-resources/guidance/review.md` 的“设计与实现一致性检视”，
   将其中的子 Agent 提示与本轮材料一并交给它，并按同一指引核实意见、修复和定向复查。
   缺少设计、检视失败或无法继续验证时保留缺口，沿既有流程继续，不等待审查通过标记。
-- **写代码前查语言规范**。编写或修改 C++、Java 代码前，先查对应语言的编码规范技能。
-  C++ 查 `huawei-cleancode-cpp-kb`，Java 查 `geek-java-cleancode-kb`。按本次改动选读相关条目。会话中没有对应技能时，直接继续编码。
-  委派子 Agent 编码时，把本次适用的条目写进工单。
+- **按需查语言规范**。写 C++ 或 Java 时，遇到需要决定实现约定的地方（如接口失败时返回什么、资源由谁释放），或拿不准现有写法是否适用，动笔前先查相关规范条目。
+  C++ 查 `huawei-cleancode-cpp-kb`，Java 查 `geek-java-cleancode-kb`。沿用明确约定就能完成的机械修改（如局部变量改名）可直接做。会话中没有对应技能时，继续编码。
+  委派子 Agent 编码时，把已查到的适用条目写进工单。
 - **编译自检派通用子 Agent**:编译尽量不在自己上下文里跑——完整构建日志会淹掉
   你正在写的代码现场。用 Task 派一个通用子 Agent(subagent_type 如
   `build-verify-agent`,不要用 compile-agent 等保留名,那些卡已退役),工单写清:
