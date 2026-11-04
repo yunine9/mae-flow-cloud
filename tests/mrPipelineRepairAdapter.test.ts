@@ -12,13 +12,14 @@ const mr = { url, iid: "12", repo: "https://codehub.test/group/repo.git", title:
 test("MR 详情端点返回权威仓库和分支；详情不完整不能导入", async () => {
   const dir = mkdtempSync(join(tmpdir(), "mr-detail-adapter-"));
   try {
-    for (const output of [mr, { ...mr, repo: "" }, { ...mr, iid: "99" }]) {
+    const merged = { ...mr, state: "merged", base_sha: "b".repeat(40), merged_at: "2026-10-31T08:15:00.000Z" };
+    for (const output of [mr, merged, { ...mr, repo: "" }, { ...mr, iid: "99" }]) {
       const config = JSON.parse(readFileSync("deploy/adapter-config/adapter.codehub.json", "utf8"));
       config.mr_detail.command = [process.execPath, "-e", `process.stdout.write(${JSON.stringify(JSON.stringify(output))})`];
       config.token = "fixture-token";
       const file = join(dir, "adapter.json"); writeFileSync(file, JSON.stringify(config));
       const adapter = new PlatformAdapter(file, () => {});
-      if (output === mr) assert.deepEqual((await adapter.handle("GET", "/mr/detail", new URLSearchParams({ mr_url: url }), {}, {})).payload, mr);
+      if (output === mr || output === merged) assert.deepEqual((await adapter.handle("GET", "/mr/detail", new URLSearchParams({ mr_url: url }), {}, {})).payload, output);
       else await assert.rejects(adapter.handle("GET", "/mr/detail", new URLSearchParams({ mr_url: url }), {}, {}));
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -37,7 +38,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         origin = 'http://127.0.0.1:' + str(self.server.server_port)
         value = dict(id=8, http_url_to_repo=origin + '/group/repo.git') if self.path.endswith('/projects/8') else dict(
             iid=12, web_url=origin+'/group/repo/merge_requests/12', source_project_id=8,
-            target_project_id=9 if mode == 'fork' else 8, title='fix', source_branch='feature', target_branch='main', sha='a'*40, state='opened')
+            target_project_id=9 if mode == 'fork' else 8, title='fix', source_branch='feature', target_branch='main', sha='a'*40, state='merged', merged_at='2026-10-31T08:15:00Z',
+            diff_refs=dict(base_sha='b'*40, head_sha=('d' if mode == 'stale' else 'a')*40))
+        if '/versions?' in self.path:
+            value = [dict(head_commit_sha='c'*40, base_commit_sha='e'*40), dict(head_commit_sha='d'*40, base_commit_sha='f'*40)]
+            if mode == 'ambiguous' and self.path.endswith('page=1'):
+                value = value * 50
+            elif mode == 'ambiguous':
+                value.append(dict(head_commit_sha='c'*40, base_commit_sha='f'*40))
         self.send_response(200); self.end_headers(); self.wfile.write(json.dumps(value).encode())
     def log_message(self, *args): pass
 server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
@@ -49,7 +57,15 @@ try:
     run = subprocess.run(call, capture_output=True, text=True, env=env, timeout=12)
     assert run.returncode == 0, run.stderr
     assert json.loads(run.stdout)['repo'] == origin+'/group/repo.git'
+    assert json.loads(run.stdout)['base_sha'] == 'b'*40 and json.loads(run.stdout)['merged_at'] == '2026-10-31T08:15:00Z'
     assert len(seen) == 2 and all(row[1] == 'secret-fixture' for row in seen)
+    mode = 'stale'
+    run = subprocess.run(call, capture_output=True, text=True, env=env, timeout=12)
+    assert run.returncode == 0 and json.loads(run.stdout)['base_sha'] is None
+    for mode in ['normal', 'ambiguous']:
+        run = subprocess.run(call + ['c'*40], capture_output=True, text=True, env=env, timeout=12)
+        assert run.returncode == 0, run.stderr
+        assert json.loads(run.stdout)['version'] == (dict(head='c'*40, base='e'*40) if mode == 'normal' else None)
     for mode in ['fork', 'redirect']:
         run = subprocess.run(call, capture_output=True, text=True, env=env, timeout=12)
         assert run.returncode != 0 and run.stdout == '' and 'secret-fixture' not in run.stderr

@@ -8,7 +8,7 @@ import { EventLog } from "./semanticEvents.ts";
 import { TranscriptStore } from "./transcriptStore.ts";
 import { GateService } from "./gateService.ts";
 import { HumanGate } from "./humanGate.ts";
-import { awaitTaskDeliveryAnalytics, buildDeliveryAnalysis, observeDeliveryCode } from "./deliveryAnalytics.ts";
+import { awaitTaskDeliveryAnalytics, buildDeliveryAnalysis, comparisonKey, deliveryAnalysisHead, hasFinalMrSample, observeDeliveryCode, readFinalMrComparison } from "./deliveryAnalytics.ts";
 import { improvementCodeTool, improvementEvidenceTool, freezeImprovementCode, includeImprovementMergeCommits, redactAnalysisText, type AnalysisScope } from "./deliveryImprovementEvidence.ts";
 import type { DeliveryAnalysisRow } from "./deliveryAnalyticsTypes.ts";
 import type { DeliveryCodeMetric } from "./deliveryAnalyticsTypes.ts";
@@ -28,7 +28,9 @@ function atomic(path: string, value: unknown) {
   writeFileSync(temp, JSON.stringify(value, null, 2), { mode: 0o600, flag: "wx" }); renameSync(temp, path);
 }
 function directory(task: TaskSummary) {
-  const key = createHash("sha256").update(task.delivery_generation ?? "initial").digest("hex").slice(0, 20);
+  const scope = comparisonKey(task.delivery);
+  const generation = task.delivery_generation ?? "initial";
+  const key = createHash("sha256").update(scope ? `${generation}:${scope}` : generation).digest("hex").slice(0, 20);
   return join(task.workspace, "delivery-improvement", key);
 }
 export function readImprovementPolicy(dataDir: string): ImprovementPolicy {
@@ -114,7 +116,7 @@ export class DeliveryImprovements<T extends Owner> {
     if (["queued", "running"].includes(publicState.status) && !this.jobs.has(this.key(task))) {
       publicState.status = "failed"; publicState.message = "上次分析因服务中断而结束，可手动重新分析。";
     }
-    return { state: { ...publicState, available, stale: available && report_head !== task.delivery?.git_push?.sha },
+    return { state: { ...publicState, available, stale: available && report_head !== deliveryAnalysisHead(task.delivery) },
       ...(body && available ? { markdown: readFileSync(join(root, report!), "utf8") } : {}) };
   }
   evidence(task: TaskSummary, reference: string) {
@@ -131,12 +133,13 @@ export class DeliveryImprovements<T extends Owner> {
     if (this.stopped || task.summary.origin === "issue" || task.summary.ui_fixture || task.summary.status !== "completed") return;
     const options = this.options(task), policy = readImprovementPolicy(options.dataDir), summary = task.summary;
     if (!policy.enabled || !policy.enabled_after || !summary.completed_at || summary.completed_at < policy.enabled_after || this.considering.has(this.key(summary))) return;
-    const key = this.key(summary), head = summary.delivery?.git_push?.sha;
+    const key = this.key(summary), head = deliveryAnalysisHead(summary.delivery);
     if (!head || read<State>(join(key, "state.json"))?.head === head) return;
+    if (summary.delivery?.final_mr && !hasFinalMrSample(summary)) return;
     this.considering.add(key);
-    observeDeliveryCode(summary, task.cwd, head);
+    if (!summary.delivery?.final_mr) observeDeliveryCode(summary, task.cwd, head);
     void awaitTaskDeliveryAnalytics(summary).then(() => {
-      if (this.stopped || task.summary.delivery?.git_push?.sha !== head) return;
+      if (this.stopped || this.key(task.summary) !== key || deliveryAnalysisHead(task.summary.delivery) !== head) return;
       const fresh = readImprovementPolicy(options.dataDir);
       const row = buildDeliveryAnalysis([task.summary]).rows.find(r => r.delivery_id === (summary.delivery_generation ?? "initial"));
       const counts = row?.metric?.retained, total = counts && Object.values(counts).reduce((a, b) => a + b, 0);
@@ -146,8 +149,9 @@ export class DeliveryImprovements<T extends Owner> {
   start(task: T): ImprovementReport {
     if (this.stopped) throw new Error("分析服务正在停止");
     if (task.summary.origin === "issue" || task.summary.ui_fixture) throw new Error("仅分析真实需求任务，不启动问题流或演示任务");
-    const head = task.summary.delivery?.git_push?.sha;
+    const head = deliveryAnalysisHead(task.summary.delivery);
     if (!head) throw new Error("任务尚无推送版本，无法确定交付分析范围");
+    if (task.summary.delivery?.final_mr && !hasFinalMrSample(task.summary)) throw new Error("最终 MR 的代码比较尚未采集，请刷新交付分析后重试");
     const key = this.key(task.summary);
     if (this.jobs.has(key)) return this.view(task.summary);
     const snapshot = structuredClone(task.summary), root = directory(snapshot), prior = read<State>(join(root, "state.json"));
@@ -168,7 +172,8 @@ export class DeliveryImprovements<T extends Owner> {
       const options = this.options(task);
       const run = `run-${randomUUID()}`, runRoot = join(root, run); mkdirSync(runRoot);
       state.run = run; atomic(join(root, "state.json"), state);
-      observeDeliveryCode(snapshot, task.cwd, head); await awaitTaskDeliveryAnalytics(snapshot);
+      if (!snapshot.delivery?.final_mr) observeDeliveryCode(snapshot, task.cwd, head);
+      await awaitTaskDeliveryAnalytics(snapshot);
       const row = buildDeliveryAnalysis([snapshot]).rows.find(r => r.delivery_id === (snapshot.delivery_generation ?? "initial"));
       const archiveRoot = join(root, "code-archive");
       const savedMetric = read<DeliveryCodeMetric>(join(root, "analysis-metric.json"));
@@ -192,8 +197,13 @@ export class DeliveryImprovements<T extends Owner> {
         const archive = join(snapshot.workspace, "delivery-history", historical.archive);
         if (existsSync(archive)) scopes.delivery = { root: archive, description: "所选历史交付归档，优先于任务当前材料" };
       }
+      const comparison = readFinalMrComparison(snapshot);
+      if (comparison) atomic(join(runRoot, "mr-comparison.json"), comparison);
+      const comparisonNote = !snapshot.delivery?.final_mr ? "" : comparison
+        ? "\n请读取 analysis 范围的 mr-comparison.json。change_patch 记录初版与最终 MR 间的实际变化。comparison_basis 为 head 表示比较两版代码，为 patch 表示比较两份 MR 各自相对基线的增删行。比较结果只能说明改了什么，推断原因时须另引需求、检视、流水线或责任人反馈，并指出证据不足或截断之处。"
+        : "\n最终 MR 缺少完整比较材料。限定结论，不能用初版统计或提交标题补造最终代码和修改动机。";
       const instructions = readFileSync(join(ANALYSIS_PLATFORM_ROOT, "skills/delivery-improvement/SKILL.md"), "utf8")
-        + "\n\n" + readFileSync(join(ANALYSIS_PLATFORM_ROOT, "skills/delivery-improvement/references/dimensions.md"), "utf8");
+        + "\n\n" + readFileSync(join(ANALYSIS_PLATFORM_ROOT, "skills/delivery-improvement/references/dimensions.md"), "utf8") + comparisonNote;
       const template = readFileSync(join(ANALYSIS_PLATFORM_ROOT, "skills/delivery-improvement/references/report.md"), "utf8");
       const manifest = { task: snapshot, row, captured_at: state.started_at,
         delivery_window: { started_at: snapshot.delivery_started_at ?? snapshot.created_at, completed_at: snapshot.completed_at,

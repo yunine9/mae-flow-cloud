@@ -246,6 +246,9 @@ export function workspaceNextActionCopy(
     return { title: "交付验证中", detail: "流水线与自动修复由系统跟进" };
   }
   if (task.status === "await_merge") {
+    if (task.delivery?.final_mr) return task.delivery.final_mr.state === "closed"
+      ? { title: "最终 MR 已关闭", detail: "可在任务详情中更换最终 MR" }
+      : { title: "等待最终 MR 合入", detail: "在 CodeHub 完成检视与合入" };
     return task.delivery?.mr_state === "已关闭"
       ? { title: "MR 已关闭，需要处理", detail: "查看合入状态并决定后续处理" }
       : { title: "等待检视与合入", detail: "前往 CodeHub 完成最后一步" };
@@ -308,13 +311,15 @@ function MergeWaitLine({ task, canOperate }: {
   canOperate: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const mrLink = task.delivery?.mr_url
-    ? <a href={task.delivery.mr_url} target="_blank" rel="noreferrer"
+  const finalMr = task.delivery?.final_mr;
+  const mrUrl = finalMr?.url ?? task.delivery?.mr_url;
+  const mrLink = mrUrl
+    ? <a href={mrUrl} target="_blank" rel="noreferrer"
         className="text-ink underline underline-offset-2 hover:text-ink-hover">
-        打开合入请求 ↗
+        {finalMr ? "打开最终 MR" : "打开合入请求"} ↗
       </a>
     : <em className="not-italic text-faint">平台尚未返回 MR 链接，请稍后刷新。</em>;
-  if (task.delivery?.mr_state === "已关闭") {
+  if (finalMr?.state === "closed" || task.delivery?.mr_state === "已关闭") {
     return (
       <div role="alert"
         className="grid gap-1 rounded-xl border border-danger/40 bg-danger-soft p-3 text-sm">
@@ -332,7 +337,7 @@ function MergeWaitLine({ task, canOperate }: {
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}>
         <span aria-hidden className="size-2 shrink-0 rounded-full bg-merge" />
-        等待合入
+        {finalMr ? "等待最终 MR 合入" : "等待合入"}
         <svg viewBox="0 0 16 16" aria-hidden
           className={cn("size-3.5 text-faint transition-transform", open && "rotate-180")}>
           <path d="m5 6.5 3 3 3-3" /></svg>
@@ -2001,7 +2006,7 @@ export function TaskWorkspace({
             {/* #227 换装:头部控制钮换 shadcn Button(恢复/暂停=outline、
                 取消=ghost、删除=destructive、邀请=outline sm),确认态
                 是一枚危险软底胶囊;原 .ws-head-controls 按钮皮不再依赖。 */}
-            {canRequestReview && task.status !== "canceled" && <Button type="button" variant="outline" size="sm"
+            {canRequestReview && !task.delivery?.final_mr && task.status !== "canceled" && <Button type="button" variant="outline" size="sm"
               aria-haspopup="dialog" aria-expanded={reviewInviteOpen}
               title="选择 Committer 参与代码检视"
               onClick={() => setReviewInviteOpen(true)}>邀请他人检视</Button>}
@@ -2730,7 +2735,7 @@ export function TaskWorkspace({
             }}
             onOpenSteps={() => selectWorkspaceView("execution")}
           />
-          {chainReview && decides ? null : canCollaborate || decides ? (
+          {task.delivery?.final_mr || (chainReview && decides) ? null : canCollaborate || decides ? (
             <Composer task={task}
               recoveryRequest={recoveryRequest}
               isOwner={viewerUsername === (task.luban_account ?? "本地用户")}
@@ -2755,7 +2760,7 @@ export function TaskWorkspace({
           )}
         </section>
       </div>
-      {reviewInviteOpen && canRequestReview && task.status !== "canceled" && <Dialog open
+      {reviewInviteOpen && canRequestReview && !task.delivery?.final_mr && task.status !== "canceled" && <Dialog open
         onOpenChange={(next) => { if (!next) setReviewInviteOpen(false); }}>
         <DialogContent className="tw-root sm:max-w-[460px]">
           <DialogHeader>

@@ -6,6 +6,8 @@ import { listHostSkillShelf } from "./hostSkillShelf.ts";
 import { projectKnowledgeProduction } from "./knowledgeProductionState.ts";
 import { listKnowledgeReviewNotes, saveKnowledgeReviewNote, applyKnowledgeReviewNotes, resolveKnowledgeReviewNotes, type KnowledgeReviewKind, type KnowledgeReviewNoteInput } from "./knowledgeReviewNotes.ts";
 import { componentKnowledgeRoute } from "./componentKnowledgeRoutes.ts";
+import { readFinalMrComparison } from "./deliveryAnalytics.ts";
+import { normalizeRepairMrUrl } from "./mrImportTypes.ts";
 import { continuationHistoryZip } from "./taskContinuation.ts";
 import { domainKnowledgeRoute } from "./domainKnowledgeRoutes.ts";
 import { extractionConfigurationRoute } from "./knowledgeExtractionRoutes.ts";
@@ -3163,6 +3165,25 @@ export function createTaskServer(
               + (target.luban_account ? `,请联系责任人 ${target.luban_account}` : "") });
           }
           return json(response, 200, service.retry(id, viewer?.username));
+        }
+        if (parts.length === 3 && parts[2] === "final-mr" && request.method === "POST") {
+          const task = storedTask(service, id);
+          if (!task) return json(response, 404, { error: `任务 ${id} 不存在` });
+          if (!canOperate(viewer, task.luban_account, !!options.auth))
+            return json(response, 403, { error: "只有任务责任人或管理员可以关联最终 MR" });
+          const body = await readBody(request);
+          let mrUrl: string;
+          try { mrUrl = normalizeRepairMrUrl(body.url); }
+          catch (error) { return json(response, 400, { error: humanError(error) }); }
+          return json(response, 200, await service.linkFinalMr(id, mrUrl));
+        }
+        if (parts.length === 3 && parts[2] === "final-mr-comparison" && request.method === "GET") {
+          const task = storedTask(service, id);
+          if (!task) return json(response, 404, { error: `任务 ${id} 不存在` });
+          const comparison = readFinalMrComparison(task, url.searchParams.get("generation") ?? undefined);
+          if (!comparison) return json(response, 404, { error: "该轮交付的代码对比尚不可用" });
+          response.setHeader("cache-control", "no-store");
+          return json(response, 200, comparison);
         }
         if (request.method === "POST" && parts[2] === "refresh-mr" && parts.length === 3) {
           const target = service.get(id);

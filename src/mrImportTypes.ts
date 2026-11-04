@@ -1,13 +1,20 @@
-export interface RepairMr {
+export interface DeliveryMr {
   url: string;
   iid: string;
   title: string;
   repo: string;
   source_branch: string;
   target_branch: string;
-  sha: string;
+  sha?: string;
+  merge_commit_sha?: string;
+  base_sha?: string;
+  version?: { head: string; base: string };
+  merged_at?: string;
   state: "opened" | "closed" | "merged";
 }
+
+export interface RepairMr extends DeliveryMr { sha: string }
+const validSha = (sha: unknown): sha is string => typeof sha === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(sha);
 
 export function normalizeRepairMrUrl(raw: unknown): string {
   if (typeof raw !== "string" || raw.length > 2048) throw new Error("请填写有效的 MR 链接");
@@ -22,13 +29,13 @@ export function normalizeRepairMrUrl(raw: unknown): string {
 }
 
 /** 仓库地址必须来自平台详情，不从 MR 链接拼接克隆地址。 */
-export function parseRepairMr(raw: unknown, requestedUrl: string): RepairMr {
-  const row = raw as Partial<RepairMr> | null;
+export function parseDeliveryMr(raw: unknown, requestedUrl: string): DeliveryMr {
+  const row = raw as Partial<DeliveryMr> | null;
   if (!row || normalizeRepairMrUrl(row.url) !== normalizeRepairMrUrl(requestedUrl)
     || !/^[1-9]\d*$/.test(String(row.iid))
     || !new URL(requestedUrl).pathname.endsWith(`/merge_requests/${row.iid}`)
     || !["opened", "closed", "merged"].includes(String(row.state))
-    || typeof row.sha !== "string" || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(row.sha)
+    || (row.sha != null && !validSha(row.sha))
     || typeof row.source_branch !== "string" || !row.source_branch || row.source_branch.includes("\0")
     || typeof row.target_branch !== "string" || !row.target_branch || row.target_branch.includes("\0")
     || typeof row.repo !== "string" || !row.repo) {
@@ -42,5 +49,19 @@ export function parseRepairMr(raw: unknown, requestedUrl: string): RepairMr {
   }
   return { url: normalizeRepairMrUrl(row.url), iid: String(row.iid), title: String(row.title || `MR !${row.iid}`),
     repo: repo.toString(), source_branch: row.source_branch, target_branch: row.target_branch,
-    sha: row.sha!, state: row.state! };
+    state: row.state!,
+    ...(validSha(row.sha) ? { sha: row.sha } : {}),
+    ...(row.state === "merged" && validSha(row.merge_commit_sha) ? { merge_commit_sha: row.merge_commit_sha } : {}),
+    ...(validSha(row.base_sha) ? { base_sha: row.base_sha } : {}),
+    ...(row.version && [row.version.head, row.version.base].every(validSha)
+      ? { version: { head: row.version.head, base: row.version.base } } : {}),
+    ...(row.state === "merged" && typeof row.merged_at === "string" && Number.isFinite(Date.parse(row.merged_at))
+      ? { merged_at: new Date(row.merged_at).toISOString() } : {}),
+  };
+}
+
+export function parseRepairMr(raw: unknown, requestedUrl: string): RepairMr {
+  const mr = parseDeliveryMr(raw, requestedUrl);
+  if (!mr.sha) throw new Error("MR 详情没有源提交，无法进行流水线修复");
+  return { ...mr, sha: mr.sha };
 }

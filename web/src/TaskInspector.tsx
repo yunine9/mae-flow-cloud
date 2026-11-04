@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Input } from "@/components/ui/input";
 import { correctTaskTicket, cancelTaskTicketCorrection } from "./api";
+import { TaskMergeRequests } from "./TaskMergeRequests";
 import { PersonName } from "./People";
 import { statusText, type TaskSummary } from "./api";
 import { formatLocalDateTime } from "./time";
@@ -68,7 +69,7 @@ export function TaskInspector({ task, kind, onClose, onInspect, onOpenProcess, c
           </dl>
           <section className="mb-5 rounded-lg border border-line p-4" aria-label="AR 单号">
             <div className="flex items-center justify-between gap-4"><div><span className="mr-3 text-muted-foreground">AR 单号</span><code>{task.ticket || "未填写"}</code></div>
-              {canOperate && !["completed", "canceled", "coordinating"].includes(task.status) && (!correction || correction.state === "completed") &&
+              {canOperate && !task.delivery?.final_mr && !["completed", "canceled", "coordinating"].includes(task.status) && (!correction || correction.state === "completed") &&
                 <Button variant="outline" size="sm" onClick={() => { setEditingTicket(!editingTicket); setError(""); }}>纠正单号</Button>}
             </div>
             {editingTicket && <form className="mt-4 grid gap-3" onSubmit={event => { event.preventDefault(); void submit(); }}>
@@ -91,15 +92,14 @@ export function TaskInspector({ task, kind, onClose, onInspect, onOpenProcess, c
               <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-x-[18px]"><dt className={cn(dtc, "pt-[3px]")}>当前步骤</dt><dd className="m-0 text-base leading-[1.7] [overflow-wrap:anywhere]">{task.progress?.step || task.detail || "暂无步骤记录"}</dd></div>
               {task.progress?.milestone && <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-x-[18px]"><dt className={cn(dtc, "pt-[3px]")}>子任务里程碑</dt><dd className="m-0 text-base leading-[1.7] [overflow-wrap:anywhere]">{task.progress.milestone.title} · {task.progress.milestone.event}
                 {task.progress.milestone.reason && ` · ${task.progress.milestone.reason}`}</dd></div>}
-              <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-x-[18px]"><dt className={cn(dtc, "pt-[3px]")}>合入请求</dt><dd className="m-0 text-base leading-[1.7] [overflow-wrap:anywhere]">{task.delivery?.mr_url ? <Button variant="outline" size="sm" render={<a href={task.delivery.mr_url} target="_blank" rel="noreferrer" />}>
-                打开合入请求 · {task.delivery.mr_state || "查看状态"} ↗</Button> : "尚未记录合入请求"}</dd></div>
-              {task.delivery?.pipeline && <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-x-[18px]"><dt className={cn(dtc, "pt-[3px]")}>流水线</dt><dd className="m-0 text-base leading-[1.7] [overflow-wrap:anywhere]">{task.delivery.pipeline}</dd></div>}
-              {task.delivery?.mr_participants && task.delivery.mr_participants.status !== "failed" && <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-x-[18px]"><dt className={dtc}>MR 人员</dt><dd className="m-0">
+              <TaskMergeRequests key={task.id} task={task} canOperate={!!canOperate} onChanged={onChanged} />
+              {task.delivery?.pipeline && <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-x-[18px]"><dt className={cn(dtc, "pt-[3px]")}>{task.delivery?.final_mr ? "初版流水线" : "流水线"}</dt><dd className="m-0 text-base leading-[1.7] [overflow-wrap:anywhere]">{task.delivery.pipeline}</dd></div>}
+              {task.delivery?.mr_participants && task.delivery.mr_participants.status !== "failed" && <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-x-[18px]"><dt className={dtc}>{task.delivery?.final_mr ? "初版 MR 人员" : "MR 人员"}</dt><dd className="m-0">
                 <MrParticipantsNotice result={task.delivery.mr_participants} />
               </dd></div>}
               {task.delivery?.loop?.failure && <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-x-[18px]"><dt className={cn(dtc, "pt-[3px]")}>流水线失败原文</dt><dd className="m-0 whitespace-pre-wrap font-mono text-xs leading-[1.8]">{task.delivery.loop.failure}</dd></div>}
               {task.workspace_reclaimed_at && <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-x-[18px]"><dt className={cn(dtc, "pt-[3px]")}>现场回收</dt><dd className="m-0 text-base leading-[1.7] [overflow-wrap:anywhere]">{formatLocalDateTime(task.workspace_reclaimed_at, { year: true })}
-                <p className="mt-1 text-xs text-muted-foreground">需求与交付文档仍可阅读和下载，过程记录、交付账本、流水线证据与批注仍保留；代码差异不再可看。</p></dd></div>}
+                <p className="mt-1 text-xs text-muted-foreground">需求与交付文档、过程记录和批注仍可查看。工作区中的代码文件已回收。</p></dd></div>}
             </dl>
             <Button type="button" variant="outline" size="sm"
               className="mt-4 w-fit" onClick={onOpenProcess}>查看工作过程 →</Button>

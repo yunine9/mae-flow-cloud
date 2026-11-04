@@ -765,16 +765,18 @@ export function buildPersonalActionItems({
   for (const task of merges) {
     if (seen.has(task.id)) continue;
     seen.add(task.id);
+    const final = task.delivery?.final_mr;
+    const closed = final?.state === "closed";
+    const mrUrl = final?.url ?? task.delivery?.mr_url;
     items.push({
       key: `merge:${task.id}`,
       task,
-      kicker: "等待你去合入",
+      kicker: closed ? "最终 MR 已关闭" : "等待你去合入",
       title: task.title ?? task.requirement,
-      detail: task.delivery?.mr_url
-        ? `验证已通过，请到 CodeHub 完成检视与合入：${task.delivery.mr_url}`
-        : "验证已通过，请到 CodeHub 完成检视与合入",
-      action: "查看合入请求",
-      href: task.delivery?.mr_url,
+      detail: final ? closed ? "最终 MR 已关闭，可在任务详情中更换。" : "正在等待最终 MR 合入。"
+        : mrUrl ? `验证已通过，请到 CodeHub 完成检视与合入：${mrUrl}` : "验证已通过，请到 CodeHub 完成检视与合入",
+      action: closed ? "打开工作台" : final ? "查看最终 MR" : "查看合入请求",
+      href: closed ? undefined : mrUrl,
     });
   }
   return items;

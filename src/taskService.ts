@@ -29,7 +29,7 @@ import { memoryFeedbackEvidence } from "./memoryFeedback.ts";
 import { progressAdvanced, taskProgressTimestamp } from "./taskProgressTime.ts";
 import type { ComponentRepository } from "./componentRepositories.ts";
 import { importExternalReviews, importStoredExternalReviews, notifyExternalReviews } from "./externalReviewInbox.ts";
-import { awaitTaskDeliveryAnalytics, buildDeliveryAnalysis, observeDeliveryCode, recordDeliveryPublication } from "./deliveryAnalytics.ts";
+import { awaitTaskDeliveryAnalytics, buildDeliveryAnalysis, hasFinalMrSample, observeDeliveryCode, recordDeliveryPublication } from "./deliveryAnalytics.ts";
 import { concurrentWorkPrompt } from "./concurrentWorkPrompt.ts";
 import { resolveProductBranch } from "./configurationCenter.ts";
 import { createMemoryContext } from "./memoryContext.ts";
@@ -545,6 +545,9 @@ import {
   validTaskCommitSubject,
   type CommitSubjectRecord,
 } from "./commitPolicy.ts";
+import { captureOriginalMr, originalMr, finalMrRecord, type InitialDeliveryMr, type FinalDeliveryMr } from "./taskFinalMr.ts";
+import { prepareFinalMrObjects, retainInitialMrCommit } from "./finalMrGitObjects.ts";
+import { readFinalDeliveryMr, normalizeRepairMrUrl, readMrVersionBase } from "./mrImport.ts";
 import { HostGitSandbox, runGitProcess } from "./hostGitSandbox.ts";
 import { preserveGitAiNotes, publishGitAiNotes } from "./gitAiNotes.ts";
 import { archiveContinuationRuntime, continuationInstructions, continuationPending, resetContinuationBranch, snapshotContinuation, type TaskContinuation, type TaskDeliveryHistory } from "./taskContinuation.ts";
@@ -1162,6 +1165,8 @@ export interface TaskSummary {
    * sha = 流水线绑定的代码版本,也是重启后续轮的锚。 */
   delivery?: {
     component_knowledge?: ComponentKnowledgeCheckReport;
+    initial_mr?: InitialDeliveryMr;
+    final_mr?: FinalDeliveryMr;
     mr_url?: string;
     /** MR 标识(平台返回的 id/iid):门禁与讨论查询要带回去。 */
     mr_id?: number | string;
@@ -1720,6 +1725,8 @@ interface TaskState {
   containerReopen?: Promise<TaskCommandContainer>;
   /** 合入监控环的防重入锁(内存态):一任务只挂一环。 */
   mergeWatchActive?: boolean;
+  initialMrBaseLookup?: string;
+  finalMrAnalysis?: { key: string; running: boolean; work: Promise<void> };
   /** 同一次平台冲突只补充一次指令；门禁恢复后允许通知下一次冲突。 */
   conflictNotice?: string;
   deliveryActive?: boolean;
@@ -1975,6 +1982,7 @@ export class TaskService {
   /** 原位重跑与彻底删除共享同一把逐任务锁，防止两个破坏性请求在
    * projection await 期间都拿着旧 TaskState 继续执行。 */
   private historyMutationActive = new Set<string>();
+  private finalMrAnalysisLane: Promise<void> = Promise.resolve();
   /** 每次体积扫描都可能很重；自动回收与管理员手动回收不许重叠。 */
   private buildCacheReclaimActive = false;
   /** 平台探测是异步的，launchOptions 只消费最近一次事实。serve 在开放
@@ -2467,6 +2475,7 @@ export class TaskService {
         ...[...this.knowledgeRepositorySyncs].map(([id, sync]) => ({ taskId: id, role: "知识仓同步", work: sync.work }))];
       for (const task of this.tasks.values()) {
         discardRetainedSession(task);
+        if (task.finalMrAnalysis?.running) backgroundWork.push({ taskId: task.summary.id, role: "最终 MR 代码对比", work: task.finalMrAnalysis.work });
         // 旧回调即使稍后返回，也不能在关机窗口改写业务状态。
         task.controlEpoch += 1;
         task.assistantEpoch = (task.assistantEpoch ?? 0) + 1;
@@ -2727,6 +2736,7 @@ export class TaskService {
   generateDeliveryReport(id: string): TaskSummary {
     const task = this.tasks.get(id);
     if (!task) throw new TaskControlError("任务不存在");
+    if (task.summary.delivery?.final_mr) throw new TaskControlError("已关联最终 MR，请在交付分析中查看最终代码差异");
     if (!task.cwd || task.summary.workspace_reclaimed_at || !existsSync(task.cwd))
       throw new TaskControlError("代码现场已回收或不可用，无法补全实际改动报告");
     if (task.summary.status === "canceled" || continuationPending(task.summary))
@@ -2738,17 +2748,21 @@ export class TaskService {
   }
 
   deliveryAnalysis(retry = false): ReturnType<typeof buildDeliveryAnalysis> {
-    for (const task of this.tasks.values()) if (task.summary.delivery?.git_push?.sha)
-      observeDeliveryCode(task.summary, task.cwd, task.summary.delivery.git_push.sha, retry);
+    for (const task of this.tasks.values()) {
+      if (task.summary.delivery?.final_mr) this.scheduleFinalMrAnalysis(task, retry);
+      else if (task.summary.delivery?.git_push?.sha) observeDeliveryCode(task.summary, task.cwd, task.summary.delivery.git_push.sha, retry);
+    }
     const summaries = [...this.tasks.values()].map(task => ({ ...task.summary, token_usage: tokenUsageSnapshot(task.tokenUsage) }));
     const profiles = resolveRepositoryProfiles(this.options.dataDir, [...new Set(summaries.map(t => t.repo_url).filter((r): r is string => !!r))]).flatMap(r => r.profile ? [r.profile] : []);
     for (const task of this.tasks.values()) this.considerDeliveryImprovement(task);
     const report = buildDeliveryAnalysis(summaries.map(summary => this.moduleOwnership(summary)), listBusinessModules(this.options.dataDir).modules, profiles);
     for (const row of report.rows) {
       const task = this.tasks.get(row.id)!;
+      const delivery = (task.summary.delivery_generation ?? "initial") === row.delivery_id ? task.summary.delivery
+        : task.summary.delivery_history?.find(item => item.id === row.delivery_id)?.delivery;
       row.improvement = this.deliveryImprovements.view({ ...task.summary,
         delivery_generation: row.delivery_id === "initial" ? undefined : row.delivery_id,
-        delivery: { ...task.summary.delivery, git_push: { ...task.summary.delivery?.git_push, sha: row.metric?.published_head ?? row.metric?.head ?? "" } } as TaskSummary["delivery"],
+        delivery: { ...delivery, git_push: { ...delivery?.git_push, sha: row.metric?.published_head ?? row.metric?.head ?? "" } } as TaskSummary["delivery"],
       }).state;
     }
     return { ...report, improvement_policy: readImprovementPolicy(this.options.dataDir) };
@@ -2782,7 +2796,7 @@ export class TaskService {
   }
 
   private considerDeliveryImprovement(task: TaskState) {
-    if (!readImprovementPolicy(this.options.dataDir).enabled) return;
+    if (task.finalMrAnalysis?.running || !readImprovementPolicy(this.options.dataDir).enabled) return;
     try { this.deliveryImprovements.consider(task); }
     catch (error) { this.options.log?.(`交付改进分析未启动：${String(error)}`); }
   }
@@ -6295,6 +6309,7 @@ export class TaskService {
   }> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    if (task.summary.delivery?.final_mr) throw new TaskControlError("已关联最终 MR，云端只跟踪合入结果");
     if (task.summary.status === "canceled") throw new TaskControlError("任务已由用户停止，不能再提交批注");
     const sender = actor ?? "本地用户";
     this.assertAnnotationOwner(task, sender);
@@ -6582,7 +6597,7 @@ export class TaskService {
 
   private hasOpenMergeRequest(task: TaskState): boolean {
     const delivery = task.summary.delivery;
-    if (!delivery?.mr_url) return false;
+    if (!delivery?.mr_url || delivery.final_mr) return false;
     if (["completed", "canceled"].includes(task.summary.status)) {
       return false;
     }
@@ -8443,8 +8458,10 @@ export class TaskService {
     task.summary.updated_at = now;
     task.lastPersistedStatus = task.summary.status;
     this.writeTaskState(task, strict);
-    this.deliveryExperiences.start(task);
-    this.deliverySummaries.start(task);
+    if (!task.summary.delivery?.final_mr) {
+      this.deliveryExperiences.start(task);
+      this.deliverySummaries.start(task);
+    }
     this.considerDeliveryImprovement(task);
     if (task.summary.status === "canceled") this.reviews.cancelTask(task.summary.id);
     // 文件先落袋(它才是真相),投影旁路跟进;失败由投影自己 fail-open。
@@ -8620,6 +8637,14 @@ export class TaskService {
           this.counter = Math.max(
             this.counter, Number(name.slice("task-".length)) || 0);
           restored += 1;
+          continue;
+        }
+        if (summary.delivery?.final_mr) {
+          // 开发者接手后恢复只读监听。旧工作区的验证、检视和推送都不再续跑。
+          this.counter = Math.max(this.counter, Number(name.slice("task-".length)) || 0);
+          restored++;
+          this.replayProjection(task);
+          if (summary.status === "completed") this.scheduleFinalMrAnalysis(task);
           continue;
         }
         if (ticketCorrectionBlocks(summary.ticket_correction)) {
@@ -9023,7 +9048,7 @@ export class TaskService {
     // 独立于恢复分支；修复排队、prepush 恢复的 continue 也不能漏掉 MR。
     for (const task of this.tasks.values()) {
       this.ensureMergeWatch(task);
-      if (needsRemoteRecovery(task.summary, task.cwd, task.mission)) {
+      if (!task.summary.delivery?.final_mr && needsRemoteRecovery(task.summary, task.cwd, task.mission)) {
         if (["running", "queued", "failed"].includes(task.summary.status)) { task.summary.status = "verifying"; this.persist(task); }
         this.bypass(task, "恢复推送确认前核验远端", this.refreshRemoteDelivery(task.summary.id, task.summary.luban_account));
       }
@@ -9148,7 +9173,7 @@ export class TaskService {
         now,
         retentionDays,
         // 状态是收口那一刻写的,清理和收尾可能正擦肩而过:句柄还在就不碰。
-        busy: !!task.driver || !!task.container || !!task.containerReopen || this.deliverySummaries.isRunning(summary.id) || this.deliveryImprovements.isRunning(summary.id),
+        busy: !!task.driver || !!task.container || !!task.containerReopen || !!task.finalMrAnalysis?.running || this.deliverySummaries.isRunning(summary.id) || this.deliveryImprovements.isRunning(summary.id),
       });
       if (!verdict.reclaim) continue;
       try {
@@ -9210,6 +9235,7 @@ export class TaskService {
   ): Promise<TaskSummary> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    if (task.summary.delivery?.final_mr) throw new TaskControlError("已关联最终 MR，云端只跟踪合入结果");
     if (task.prepushActive) {
       throw new TaskControlError("Build-Fix 正在进行中，不能跳过");
     }
@@ -9250,6 +9276,7 @@ export class TaskService {
   async retryPrePush(id: string, actor?: string): Promise<TaskSummary> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    if (task.summary.delivery?.final_mr) throw new TaskControlError("已关联最终 MR，云端只跟踪合入结果");
     if (task.prepushActive) {
       throw new TaskControlError(
         "Build-Fix 正在进行中（本进程内有在途轮），不是卡死；"
@@ -9300,6 +9327,7 @@ export class TaskService {
   async stopPrePush(id: string, actor?: string, pushAfterStop = true): Promise<TaskSummary> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    if (task.summary.delivery?.final_mr) throw new TaskControlError("已关联最终 MR，云端只跟踪合入结果");
     const active = task.prepushActive;
     if (!active) {
       throw new TaskControlError(
@@ -9349,6 +9377,7 @@ export class TaskService {
   retry(id: string, actor?: string): TaskSummary {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    if (task.summary.delivery?.final_mr) throw new TaskControlError("已关联最终 MR，云端只跟踪合入结果");
     const { status, delivery } = task.summary;
     // stalled = 外部验证的自愈预算已经烧完并如实停下(推送一直失败、
     // 流水线迟迟不给可核销结果……)。它必须和修复环停机同等对待:
@@ -9511,6 +9540,7 @@ export class TaskService {
         throw new TaskControlError("请在 MR 已合入的具体代码任务中继续修改；主任务请打开对应子任务");
       }
       if (!this.options.host) throw new TaskControlError("当前部署没有启用需求内核");
+      if (task.finalMrAnalysis) await task.finalMrAnalysis.work;
       if (!pending && !["merged", "已合入"].includes(task.summary.delivery?.mr_state ?? "")) {
         throw new TaskControlError("当前任务没有已合入的 MR，不能开始下一次交付");
       }
@@ -9636,7 +9666,7 @@ export class TaskService {
         || task.prepushActive || task.assistantActive
         || task.mergeSettlement || task.evidenceRetryActive
         || task.repairEvidenceRetryActive
-        || task.deliveryRecoveryActive || task.reviewOutboxFlush || this.deliveryImprovements.isRunning(id)) {
+        || task.deliveryRecoveryActive || task.reviewOutboxFlush || task.finalMrAnalysis?.running || this.deliveryImprovements.isRunning(id)) {
       throw new TaskControlError(
         `任务 ${id} 仍有执行资源或后台收尾动作，暂不能从头重跑`,
       );
@@ -9769,7 +9799,7 @@ export class TaskService {
         || task.prepushActive || task.assistantActive
         || task.mergeSettlement || task.evidenceRetryActive
         || task.repairEvidenceRetryActive
-        || task.deliveryRecoveryActive || task.reviewOutboxFlush || this.deliveryImprovements.isRunning(id))) {
+        || task.deliveryRecoveryActive || task.reviewOutboxFlush || task.finalMrAnalysis?.running || this.deliveryImprovements.isRunning(id))) {
       throw new TaskControlError(
         `任务 ${id} 仍有执行资源或后台收尾动作，拒绝彻底删除`,
       );
@@ -11738,6 +11768,7 @@ export class TaskService {
   ): Promise<TaskSummary> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    if (task.summary.delivery?.final_mr) throw new TaskControlError("已关联最终 MR，云端只跟踪合入结果");
     const message = text.trim();
     if (!message && !references?.length) {
       throw new NotFoundError("插话内容不能为空");
@@ -12529,6 +12560,7 @@ export class TaskService {
   correctTicket(id: string, input: { ticket: string; title: string }, actor: string): TaskSummary {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    if (task.summary.delivery?.final_mr) throw new TaskControlError("已关联最终 MR，云端只跟踪合入结果");
     const ticket = input.ticket.trim(), title = input.title.trim();
     validateCorrectionTicket(ticket, title);
     if (task.summary.ticket_correction?.state === "running" && this.ticketCorrections.has(id)) return { ...task.summary };
@@ -12814,6 +12846,7 @@ export class TaskService {
   async pause(id: string, actor: string): Promise<TaskSummary> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    if (task.summary.delivery?.final_mr) throw new TaskControlError("已关联最终 MR，云端只跟踪合入结果");
     const status = task.summary.status;
     if (status === "coordinating") {
       throw new TaskControlError(
@@ -12873,6 +12906,7 @@ export class TaskService {
   resume(id: string, actor: string): TaskSummary {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    if (task.summary.delivery?.final_mr) throw new TaskControlError("已关联最终 MR，云端只跟踪合入结果");
     if (task.summary.status !== "paused") {
       throw new TaskControlError(
         `任务 ${id} 当前是 ${task.summary.status}，只有已暂停任务可以恢复`);
@@ -13218,7 +13252,12 @@ export class TaskService {
     // 人点停止与平台刚合入可能竞态。能查到已合入就先按平台事实收口，
     // 不能把一单已经合入的交付反写成“用户取消”。查询不可得时仍允许
     // 用户停止，符合明确控制指令。
-    if (task.summary.delivery?.mr_url
+    if (task.summary.delivery?.final_mr) {
+      const final = task.summary.delivery.final_mr;
+      try { await this.refreshFinalMr(task, final); } catch { /* 平台不可用时仍可取消。 */ }
+      if (task.summary.delivery.final_mr?.state === "merged") throw new TaskControlError("最终 MR 已合入，不能取消");
+      status = task.summary.status;
+    } else if (task.summary.delivery?.mr_url
         && ["await_merge", "verifying"].includes(status)) {
       const view = await this.fetchGates(task);
       if (view?.mrState === "merged") {
@@ -13304,6 +13343,7 @@ export class TaskService {
     return !this.shuttingDown
       && this.tasks.get(task.summary.id) === task
       && !continuationPending(task.summary)
+      && !task.summary.delivery?.final_mr
       && task.controlEpoch === epoch
       && !ticketCorrectionBlocks(task.summary.ticket_correction)
       && task.summary.status !== "canceled";
@@ -13585,6 +13625,7 @@ export class TaskService {
     task: TaskState,
   ): KernelCompletionAttestation | undefined {
     if (!this.options.host || this.isRequirementAnalysis(task)) return undefined;
+    if (task.summary.delivery?.final_mr?.state === "merged" && !this.continuousReviewTask(task)) return undefined;
     return inspectKernelTaskCompletion(
       task.cwd,
       this.options.host.kernelRoot,
@@ -13746,7 +13787,7 @@ export class TaskService {
       const [id] = this.queue.splice(readyIndex, 1);
       const task = this.tasks.get(id);
       // 控制动作可能已经把重复/陈旧队列项暂停或取消。
-      if (!task || task.summary.status !== "queued") continue;
+      if (!task || task.summary.status !== "queued" || task.summary.delivery?.final_mr) continue;
       this.runningCount += 1;
       const wasManualRetry = task.summary.detail?.includes("人工重跑") === true;
       task.summary.status = "running";
@@ -13910,7 +13951,7 @@ export class TaskService {
         const state = JSON.parse(readFileSync(join(task.cwd!, ".mae-flow.json"), "utf8"));
         return { ready: await this.preparePush(task, state.config?.["分支名"], state.config?.["基线分支"], actionEpoch, false), prepush: task.summary.delivery?.prepush };
       },
-      watch: () => this.ensureMergeWatch(task),
+      watch: createdMr => this.ensureMergeWatch(task, createdMr),
       watchPush: () => {
         if (!this.effectivePlatformUrl()) return;
         if (this.needsDeliveryBeforePipeline(task)) {
@@ -17194,11 +17235,12 @@ export class TaskService {
                result: mr.raw,
                finishedAt: new Date().toISOString() });
       // MR 一创建就落盘并监听，不能等流水线请求成功，更不能等到绿灯。
-      task.summary.delivery = { ...task.summary.delivery,
+      const initial = captureOriginalMr(task.summary, mr.url, sha);
+      task.summary.delivery = { ...task.summary.delivery, initial_mr: initial,
         mr_url: mr.url, mr_id: mr.id, mr_participants: mr.participants, source_branch: branch,
         target_branch: baseline, git_push: pushReceipt };
       this.persist(task);
-      this.ensureMergeWatch(task);
+      this.ensureMergeWatch(task, !previous?.mr_url);
       this.deliveryExperiences.capture(task);
       const runKey = `pipeline:${sha}`;
       if (existingPushReceipt && !manualPipelineRetry) {
@@ -17235,6 +17277,7 @@ export class TaskService {
           ? { foreign_commits: task.summary.delivery.foreign_commits } : {}),
         last_push_base_sha: task.summary.delivery?.last_push_base_sha,
         git_push: pushReceipt,
+        initial_mr: task.summary.delivery?.initial_mr,
         mr_url: mr.url,
         mr_participants: mr.participants,
         // 平台给了 MR 标识就记下:门禁/讨论查询要带回去(假件给 id,
@@ -18106,12 +18149,185 @@ export class TaskService {
     };
   }
 
+  async linkFinalMr(id: string, rawUrl: string): Promise<TaskSummary> {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    const release = this.beginHistoryMutation(id);
+    try {
+      const d = task.summary.delivery;
+      const url = normalizeRepairMrUrl(rawUrl);
+      if (task.summary.status === "completed" && d?.final_mr?.url === url) return this.project(task);
+      if (!d?.mr_url || task.summary.origin === "issue" || this.isRequirementAnalysis(task)
+          || ["completed", "canceled"].includes(task.summary.status) || continuationPending(task.summary))
+        throw new TaskControlError("请在已有初版 MR 且尚未结束的需求交付任务中关联最终 MR");
+      const epoch = task.controlEpoch;
+      const mr = await this.readFinalMr(task, url);
+      if (this.shuttingDown || this.tasks.get(id) !== task || task.controlEpoch !== epoch
+          || task.summary.delivery !== d || ["completed", "canceled"].includes(task.summary.status))
+        throw new TaskControlError("任务状态已变化，请刷新后重试");
+      if (ticketCorrectionBlocks(task.summary.ticket_correction) || task.mergeSettlement || task.transportActive
+          || task.hostActionActive || task.mrCreateActive || task.reviewOutboxFlush)
+        throw new TaskControlError("当前 MR 操作仍在结束，请稍后关联最终 MR");
+      const initial = originalMr(task.summary);
+      if (!initial.head) {
+        // 使用任务工具创建的历史 MR 还可能留有当时的创建收据。
+        try {
+          const creation = new TaskHostLedger(task.summary).read().operations.find(op =>
+            op.input.action === "create_mr" && op.mr_receipt?.url === initial.url && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(op.sha ?? ""));
+          if (creation) initial.head = creation.sha;
+        } catch { /* 只有原 MR 链接也能关联，代码分析会标出缺少的版本。 */ }
+      }
+      const final = finalMrRecord(mr);
+      const waiting = task.summary.waiting && task.humanGate.get(task.summary.waiting.waiting_id);
+      if (waiting?.status === "waiting") task.humanGate.supersede(waiting.waiting_id,
+        { stateVersion: waiting.state_version, notes: "已关联最终 MR" });
+      d.initial_mr = initial;
+      d.final_mr = final;
+      d.merged_sha = undefined;
+      d.stalled = undefined;
+      d.stall_class = undefined;
+      d.verify_deadline = undefined;
+      task.assistantEpoch = (task.assistantEpoch ?? 0) + 1;
+      task.pauseRequested = false;
+      task.pendingAssistantHandoff = undefined;
+      task.pendingResume = undefined;
+      task.mission = undefined;
+      task.summary.status = "await_merge";
+      task.summary.waiting = undefined;
+      interruptDeveloperAssistant(task.summary.workspace, "已关联最终 MR，开发助手停止");
+      interruptWarmupReceipt(task.summary.baseline_build);
+      if (d.loop) { d.loop.state = "halted"; d.loop.diagnosis = "云端已停止修复，跟踪最终 MR"; }
+      this.setFinalMrWaiting(task, final);
+      this.persist(task, true);
+      if (final.state === "merged") {
+        await this.settleMergeState(task, "merged", final.head ?? final.merge_commit_sha, final);
+      } else {
+        const work = this.stopMrExecution(task).then(failures => {
+          if (failures.length && this.tasks.get(id) === task && task.summary.delivery?.final_mr === final
+              && !["completed", "canceled"].includes(task.summary.status)) {
+            this.markVerificationStalled(task, "无法确认原任务已停止：" + failures.join("；"), "infrastructure");
+          }
+        });
+        task.mergeSettlement = work;
+        try { await work; } finally { if (task.mergeSettlement === work) task.mergeSettlement = undefined; }
+      }
+      this.ensureMergeWatch(task);
+      return this.project(task);
+    } finally { release(); }
+  }
+
+  private async readFinalMr(task: TaskState, url: string) {
+    const platformUrl = this.effectivePlatformUrl();
+    if (!platformUrl) throw new TaskControlError("当前部署未配置 MR 平台");
+    const mr = await readFinalDeliveryMr({ platformUrl, url, credential: this.options.gitCredential?.(task.summary.luban_account) });
+    const repo = task.summary.repo_url ?? this.effectiveDefaultRepo();
+    if (!repo || repositoryIdentity(repo) !== repositoryIdentity(mr.repo))
+      throw new TaskControlError("最终 MR 必须属于本任务的代码仓");
+    return mr;
+  }
+
+  private setFinalMrWaiting(task: TaskState, final: FinalDeliveryMr): void {
+    const d = task.summary.delivery!;
+    const closed = final.state === "closed";
+    d.mr_state = closed ? "已关闭" : final.state === "merged" ? "已合入（内核终态待对账）" : "等待合入";
+    d.waiting_on = closed ? "最终 MR 已关闭，未确认交付；可关联其他 MR"
+      : final.state === "merged" ? "最终 MR 已合入，正在登记完成" : "等待最终 MR 合入";
+    task.summary.detail = d.waiting_on;
+  }
+
+  private async refreshFinalMr(task: TaskState, linked: FinalDeliveryMr): Promise<void> {
+    if (task.mergeSettlement || ["completed", "canceled"].includes(task.summary.status)) return;
+    if (linked.state === "merged" && (linked.head || linked.merge_commit_sha) && task.summary.delivery?.final_mr === linked) {
+      await this.settleMergeState(task, "merged", linked.head ?? linked.merge_commit_sha, linked);
+      return;
+    }
+    const mr = await this.readFinalMr(task, linked.url);
+    if (this.shuttingDown || this.tasks.get(task.summary.id) !== task || task.mergeSettlement
+        || task.summary.delivery?.final_mr !== linked || ["completed", "canceled"].includes(task.summary.status)) return;
+    const d = task.summary.delivery;
+    const final = finalMrRecord(mr);
+    if (String(final.id) !== String(linked.id)) throw new TaskControlError("最终 MR 标识已变化，请重新核对链接");
+    const wasStalled = !!d.stalled;
+    if (wasStalled && final.state !== "merged") {
+      const failures = await this.stopMrExecution(task);
+      if (failures.length || task.summary.delivery?.final_mr !== linked || ["completed", "canceled"].includes(task.summary.status)) return;
+      d.stalled = undefined; d.stall_class = undefined;
+      task.summary.status = "await_merge";
+    }
+    if (final.state === "merged") {
+      if (d.stall_class === "evidence_missing" && !final.head && !final.merge_commit_sha && linked.state === "merged" && !linked.head && !linked.merge_commit_sha) return;
+      d.final_mr = final;
+      await this.settleMergeState(task, "merged", final.head ?? final.merge_commit_sha, final);
+    } else if (wasStalled || JSON.stringify(final) !== JSON.stringify(linked) || task.summary.status !== "await_merge" || d.waiting_on !== task.summary.detail) {
+      d.final_mr = final;
+      this.setFinalMrWaiting(task, final);
+      this.persist(task);
+    }
+  }
+
+  private scheduleFinalMrAnalysis(task: TaskState, retry = false): void {
+    const final = task.summary.delivery?.final_mr, initial = task.summary.delivery?.initial_mr, cwd = task.cwd;
+    if (this.shuttingDown || !cwd || final?.state !== "merged" || (!retry && !final.head) || task.summary.status !== "completed"
+        || task.summary.workspace_reclaimed_at || continuationPending(task.summary)) return;
+    const key = JSON.stringify([task.summary.delivery_generation, initial?.url, initial?.head, final.url]);
+    if (task.finalMrAnalysis?.key === key && (!retry || task.finalMrAnalysis.running)) return;
+    if (hasFinalMrSample(task.summary, retry)) return;
+    const snapshot = task.summary;
+    const stillLinked = () => !this.shuttingDown && this.tasks.get(snapshot.id) === task && task.summary === snapshot
+      && snapshot.delivery?.final_mr === final && snapshot.delivery?.initial_mr === initial;
+    const work = this.finalMrAnalysisLane.then(async () => {
+      if (!stillLinked()) return;
+      if (!final.head) {
+        // 合入时间已登记；手动刷新只补充与同一合入结果匹配的源代码版本。
+        const latest = await this.readFinalMr(task, final.url);
+        if (!stillLinked() || latest.state !== "merged" || !latest.sha || String(final.id) !== latest.iid
+            || latest.source_branch !== final.source_branch || latest.target_branch !== final.target_branch
+            || (final.merge_commit_sha && latest.merge_commit_sha !== final.merge_commit_sha)
+            || (final.merged_at && latest.merged_at && Date.parse(final.merged_at) !== Date.parse(latest.merged_at))) return;
+        final.head = latest.sha;
+        final.base ??= latest.base_sha;
+        this.writeTaskState(task);
+      }
+      const platformUrl = this.effectivePlatformUrl(), credential = this.options.gitCredential?.(task.summary.luban_account);
+      if (platformUrl) {
+        const anchors = [initial, final].filter((mr): mr is InitialDeliveryMr => !!mr?.head && !mr.base);
+        const bases = await Promise.allSettled(anchors.map(mr => readMrVersionBase({ platformUrl, url: mr.url, head: mr.head!, credential })));
+        if (!stillLinked()) return;
+        let changed = false;
+        bases.forEach((result, index) => {
+          if (result.status === "fulfilled" && result.value) { anchors[index].base = result.value; changed = true; }
+        });
+        if (changed) this.writeTaskState(task);
+      }
+      try {
+        await prepareFinalMrObjects(cwd, final.repo, [initial ?? {}, final], new HostGitSandbox(this.options.dataDir, this.options.log),
+          credential);
+      } catch (error) { this.options.log?.(`最终 MR 代码对象暂不完整 ${snapshot.id}：${String(error)}`); }
+      if (!stillLinked()) return;
+      observeDeliveryCode(snapshot, cwd, final.head!, true);
+      await awaitTaskDeliveryAnalytics(snapshot);
+    }).finally(() => {
+      if (task.finalMrAnalysis?.work !== work) return;
+      task.finalMrAnalysis.running = false;
+      if (stillLinked()) this.considerDeliveryImprovement(task);
+    });
+    this.finalMrAnalysisLane = work.catch(() => {});
+    task.finalMrAnalysis = { key, work, running: true };
+    this.bypass(task, "最终 MR 代码对比", work);
+  }
+
   async refreshRemoteDelivery(id: string, actor?: string, selected?: string,
     access?: { administrator?: boolean }) {
     const task = this.tasks.get(id); if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     const owner = task.summary.luban_account ?? "本地用户";
     if (owner !== (actor ?? "本地用户") && access?.administrator !== true) {
       throw new AnnotationPermissionError(`只有任务责任人 ${owner} 或管理员可以刷新 MR 状态`);
+    }
+    const final = task.summary.delivery?.final_mr;
+    if (final) {
+      await this.refreshFinalMr(task, final);
+      this.ensureMergeWatch(task);
+      return { message: task.summary.detail ?? "已刷新最终 MR", proceed: false };
     }
     const epoch = task.controlEpoch;
     const result = await reconcileRemoteDelivery(this.remoteDeliveryHost(task, epoch), selected);
@@ -18136,10 +18352,12 @@ export class TaskService {
     task: TaskState,
     state: "merged" | "closed",
     observedSourceSha?: string,
+    final?: FinalDeliveryMr,
   ): Promise<void> {
     while (task.mergeSettlement) await task.mergeSettlement;
     if (this.shuttingDown || this.tasks.get(task.summary.id) !== task
         || ["completed", "canceled"].includes(task.summary.status)) return;
+    if (task.summary.delivery?.final_mr !== final) return;
     const settlement = this.applyMergeState(task, state, observedSourceSha);
     task.mergeSettlement = settlement;
     try { await settlement; }
@@ -18156,7 +18374,9 @@ export class TaskService {
     abort?.abort();
     const cleanup = await Promise.allSettled([
       activePrepush?.then(() => undefined) ?? Promise.resolve(),
-      driver?.abort() ?? Promise.resolve(), container?.stop() ?? Promise.resolve(),
+      task.summary.delivery?.final_mr
+        ? Promise.all([driver?.abort(), abortAuxiliarySessions(task), task.assistantActive])
+        : driver?.abort() ?? Promise.resolve(), container?.stop() ?? Promise.resolve(),
     ]);
     if (cleanup[1].status === "fulfilled" && task.driver === driver) { task.driver = undefined; driver?.dispose(); }
     if (cleanup[2].status === "fulfilled" && task.container === container) task.container = undefined;
@@ -18190,7 +18410,7 @@ export class TaskService {
         return;
       }
       // writer 已停止，再检查最终 HEAD；检查期间只取对象，不改工作树或分支。
-      if (task.cwd) {
+      if (task.cwd && !delivery.final_mr) {
         const sandbox = this.prepareHostGitSandbox(this.options.gitCredential?.(task.summary.luban_account));
         let included = false;
         try {
@@ -18210,7 +18430,8 @@ export class TaskService {
       if (this.continuousReviewTask(task)) {
         if (!observed) {
           this.markVerificationStalled(task,
-            "平台已报告 MR 合入，但没有返回实际源提交 SHA；无法登记合入版本",
+            delivery.final_mr ? "最终 MR 已合入，代码平台尚未返回源版本或合入提交；将继续查询，取得版本后登记完成"
+              : "平台已报告 MR 合入，但没有返回实际源提交 SHA；无法登记合入版本",
             "evidence_missing");
           return;
         }
@@ -18256,7 +18477,9 @@ export class TaskService {
         ? closeEvent.unpushed_local_commits.length : 0;
       const unpushedPaths = Array.isArray(closeEvent?.unpushed_local_paths)
         ? closeEvent.unpushed_local_paths.length : 0;
-      task.summary.detail = mergedCompletionDetail(unpushedCommits, unpushedPaths);
+      task.summary.detail = delivery.final_mr ? "最终 MR 已合入，需求已交付" : mergedCompletionDetail(unpushedCommits, unpushedPaths);
+      if (delivery.final_mr?.merged_at) task.summary.completed_at = delivery.final_mr.merged_at;
+      if (delivery.final_mr) this.scheduleFinalMrAnalysis(task);
       this.persist(task);
       this.bypass(undefined, "依赖任务解锁", this.pump());
       const account = task.summary.luban_account;
@@ -18266,7 +18489,7 @@ export class TaskService {
           account,
           status: "merged",
           summary: `MR 已合入`
-            + (delivery.mr_url ? `:${delivery.mr_url}` : ""),
+            + (delivery.final_mr?.url || delivery.mr_url ? `:${delivery.final_mr?.url ?? delivery.mr_url}` : ""),
           link: personalTaskLink(
             this.notificationLinkBase(), account, task.summary.id),
         }));
@@ -18300,11 +18523,37 @@ export class TaskService {
     if (changed || interrupted) this.persist(task);
   }
 
-  private ensureMergeWatch(task: TaskState): void {
+  private captureInitialMrBase(task: TaskState, createdMr: boolean): void {
+    const d = task.summary.delivery, initial = d?.initial_mr, platformUrl = this.effectivePlatformUrl();
+    if (!platformUrl || !initial?.head || initial.base || d?.final_mr) return;
+    const key = JSON.stringify([task.summary.delivery_generation, initial.url, initial.head]);
+    if (task.initialMrBaseLookup === key) return;
+    task.initialMrBaseLookup = key;
+    if (createdMr && task.cwd) this.bypass(task, "保留初版 MR 提交", retainInitialMrCommit(task.cwd, initial.head));
+    const lookup = async () => {
+      if (this.shuttingDown || this.tasks.get(task.summary.id) !== task || task.summary.delivery?.initial_mr !== initial
+          || task.summary.delivery.final_mr) return;
+      const base = createdMr ? await this.readFinalMr(task, initial.url).then(mr => mr.sha === initial.head ? mr.base_sha : undefined)
+        : await readMrVersionBase({ platformUrl, url: initial.url, head: initial.head!,
+          credential: this.options.gitCredential?.(task.summary.luban_account) });
+      const current = task.summary.delivery;
+      if (!base || this.shuttingDown || this.tasks.get(task.summary.id) !== task || current?.final_mr
+          || !current?.initial_mr || task.initialMrBaseLookup !== key
+          || current.initial_mr.url !== initial.url || current.initial_mr.head !== initial.head) return;
+      current.initial_mr.base = base;
+      this.writeTaskState(task);
+    };
+    const work = createdMr ? lookup() : this.finalMrAnalysisLane.then(lookup);
+    if (!createdMr) this.finalMrAnalysisLane = work.catch(() => {});
+    this.bypass(task, "读取初版 MR 比较基线", work);
+  }
+
+  private ensureMergeWatch(task: TaskState, createdMr = false): void {
     if (this.shuttingDown || !this.effectivePlatformUrl()
         || (process.env.MAE_FLOW_UI_FIXTURE_MODE === "1" && task.summary.ui_fixture === true)
         || ["completed", "canceled"].includes(task.summary.status)
         || (!task.summary.delivery?.mr_url && task.summary.delivery?.mr_id === undefined)) return;
+    this.captureInitialMrBase(task, createdMr);
     this.bypass(task, "合入监控", this.watchMerge(task, task.controlEpoch, true));
   }
 
@@ -18329,13 +18578,20 @@ export class TaskService {
             || this.tasks.get(task.summary.id) !== task
             || ["completed", "canceled"].includes(task.summary.status)
             || (!task.summary.delivery?.mr_url && task.summary.delivery?.mr_id === undefined)) return;
+        const final = task.summary.delivery.final_mr;
+        if (final) {
+          if (final.state === "closed" && !task.summary.delivery.stalled) return;
+          await this.refreshFinalMr(task, final);
+          await new Promise((tick) => setTimeout(tick, interval).unref());
+          continue;
+        }
         const mrKey = JSON.stringify([task.summary.delivery.mr_url, task.summary.delivery.mr_id]);
         const view = await this.fetchGates(task, true);
         if (this.shuttingDown
             || ticketCorrectionBlocks(task.summary.ticket_correction)
             || this.tasks.get(task.summary.id) !== task
             || ["completed", "canceled"].includes(task.summary.status)) return;
-        if (mrKey !== JSON.stringify([task.summary.delivery?.mr_url, task.summary.delivery?.mr_id])) continue;
+        if (task.summary.delivery?.final_mr || mrKey !== JSON.stringify([task.summary.delivery?.mr_url, task.summary.delivery?.mr_id])) continue;
         if (!view) {
           // 平台暂不可得也不能永久丢掉监听；等待下一拍。timer unref，
           // 服务退出时不会被后台监控吊住，重启恢复会重新挂环。
@@ -18378,7 +18634,7 @@ export class TaskService {
         if (this.shuttingDown || this.tasks.get(task.summary.id) !== task
             || ticketCorrectionBlocks(task.summary.ticket_correction)
             || ["completed", "canceled"].includes(task.summary.status)) return;
-        if (mrKey !== JSON.stringify([task.summary.delivery?.mr_url, task.summary.delivery?.mr_id])) continue;
+        if (task.summary.delivery?.final_mr || mrKey !== JSON.stringify([task.summary.delivery?.mr_url, task.summary.delivery?.mr_id])) continue;
         if (discussions?.kind === "available") {
           observeMrDiscussions(task.summary.workspace, view.sourceSha ?? task.summary.delivery?.sha, discussions.items);
           importExternalReviews(this.annotations(task), { scope: task.summary.delivery?.mr_url ?? mrKey, mrUrl: task.summary.delivery?.mr_url, owner: task.summary.luban_account ?? "本地用户", items: discussions.items });
@@ -19494,6 +19750,7 @@ export class TaskService {
     detail: string,
     continuationMessage = mission,
   ): void {
+    if (task.summary.delivery?.final_mr) return;
     const receipt = this.activeFeedbackReceiptInstructions(task);
     task.mission = [mission, this.foreignCommitNotice(task), receipt]
       .filter(Boolean).join("\n\n");

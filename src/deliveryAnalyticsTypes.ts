@@ -24,6 +24,21 @@ export interface DeliveryCodeMetric {
   excluded_files: number;
   commits: DeliveryCommitMetric[];
 }
+export interface MrComparison {
+  method: "ancestry" | "patch" | "unavailable";
+  initial_head?: string;
+  final_head?: string;
+  retained?: number;
+  removed?: number;
+  added?: number;
+  files?: Array<{ path: string; changed: boolean; retained: number; removed: number; added: number }>;
+  reason?: string;
+}
+export interface MrComparisonDetail {
+  comparison_basis: "head" | "patch";
+  files: Array<{ path: string; change_patch: string; initial_patch: string; final_patch: string; truncated: boolean }>;
+  truncated: boolean;
+}
 export interface DeliveryAnalysisRow {
   id: string;
   delivery_id?: string;
@@ -40,6 +55,8 @@ export interface DeliveryAnalysisRow {
   merged: boolean;
   at: string;
   mr_url?: string;
+  initial_mr_url?: string;
+  mr_comparison?: MrComparison;
   metric?: DeliveryCodeMetric;
   unavailable?: string;
   improvement?: import("./deliveryImprovementTypes.ts").ImprovementView;

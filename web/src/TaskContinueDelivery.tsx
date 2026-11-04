@@ -49,11 +49,14 @@ export function TaskContinueDelivery({ task, canOperate, onChanged }: {
     {!!task.delivery_history?.length && <details className="mt-2 text-sm">
       <summary className="cursor-pointer text-muted-foreground">此前 {task.delivery_history.length} 次交付记录</summary>
       <ul className="my-2 grid list-none gap-2 p-0">
-        {task.delivery_history.map((item, index) => <li key={item.id} className="flex flex-wrap items-center gap-3">
-          <span>第 {index + 1} 次 · {new Date(item.completed_at).toLocaleString("zh-CN")} · 已合入</span>
-          {item.delivery?.mr_url && /^https?:\/\//.test(item.delivery.mr_url) && <a className="underline" href={item.delivery.mr_url} target="_blank" rel="noreferrer">查看 MR</a>}
-          <a className="underline" href={`/tasks/${encodeURIComponent(task.id)}/delivery-history/${encodeURIComponent(item.archive)}`}>下载历史记录</a>
-        </li>)}
+        {task.delivery_history.map((item, index) => {
+          const mrUrl = item.delivery?.final_mr?.url ?? item.delivery?.mr_url;
+          return <li key={item.id} className="flex flex-wrap items-center gap-3">
+            <span>第 {index + 1} 次 · {new Date(item.completed_at).toLocaleString("zh-CN")} · 已合入</span>
+            {mrUrl && /^https?:\/\//.test(mrUrl) && <a className="underline" href={mrUrl} target="_blank" rel="noreferrer">{item.delivery?.final_mr ? "查看最终 MR" : "查看 MR"}</a>}
+            <a className="underline" href={`/tasks/${encodeURIComponent(task.id)}/delivery-history/${encodeURIComponent(item.archive)}`}>下载历史记录</a>
+          </li>;
+        })}
       </ul>
     </details>}
   </section>;

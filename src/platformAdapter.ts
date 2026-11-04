@@ -85,7 +85,7 @@ import { PlatformQueryCache, codeHubRateLimited, type QueryResult } from "./plat
  */
 
 import { execFile } from "node:child_process";
-import { normalizeRepairMrUrl, parseRepairMr } from "./mrImport.ts";
+import { normalizeRepairMrUrl, parseDeliveryMr } from "./mrImport.ts";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createServer } from "node:http";
@@ -948,8 +948,11 @@ export class PlatformAdapter {
     if (method === "GET" && path === "/mr/detail") {
       if (!this.config.mr_detail) return { status: 404, payload: { error: "未配置 mr_detail" } };
       const url = normalizeRepairMrUrl(query.get("mr_url"));
-      const output = await this.run(this.config.mr_detail, this.values({ mr: url }, headers));
-      return { status: 200, payload: parseRepairMr(JSON.parse(output), url) };
+      const head = query.get("version_head");
+      if (head !== null && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(head))
+        return { status: 400, payload: { error: "MR 比较版本无效" } };
+      const output = await this.run(this.config.mr_detail, this.values({ mr: url, sha: head ?? "current" }, headers));
+      return { status: 200, payload: parseDeliveryMr(JSON.parse(output), url) };
     }
     if (method === "GET" && path === "/mr/discover") {
       if (!this.config.mr_discover) return { status: 404, payload: { error: "未配置 mr_discover" } };

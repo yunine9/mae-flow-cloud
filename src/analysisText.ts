@@ -14,3 +14,5 @@ export function serializeAnalysisValue(value: unknown): string {
   };
   return JSON.stringify(clean(value));
 }
+
+export const restrictedAnalysisPathSegment = /^(?:\.git|node_modules|vendor|dist|build|target|\.ssh|\.aws|\.codex|\.pi|pi-agent|requirement-review-agent|agent|sessions|delivery-improvement|models(?:\.beta)?\.json|settings\.json|auth(?:entication)?\.json|\.host-capabilities|\.env(?:\..*)?|.*\.(?:pem|key|p12))$/i;

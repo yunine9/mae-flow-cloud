@@ -1182,6 +1182,11 @@ export interface TaskSummary {
   };
   delivery?: {
     git_push?: { sha: string };
+    initial_mr?: { url: string; head?: string; base?: string };
+    final_mr?: {
+      url: string; id: string | number; repo: string; source_branch: string; target_branch: string;
+      state: "opened" | "closed" | "merged"; head?: string; base?: string; merged_at?: string;
+    };
     component_knowledge?: ComponentKnowledgeCheckReport;
     mr_participants?: MrParticipantsResult;
     /** 最近一次推送的起点，仅用于代码增量展示。 */
@@ -5461,6 +5466,21 @@ export async function createMemoryDraft(trigger: string, conclusion: string): Pr
 }
 export async function memoryHistory(id: string): Promise<MemoryRecord[]> {
   const response = await fetch(`/memory-insights/${encodeURIComponent(id)}/history`);
+  if (!response.ok) throw new Error(await errorText(response));
+  return parseJson(response);
+}
+
+export async function linkFinalMr(taskId: string, url: string): Promise<TaskSummary> {
+  const response = await fetch(`/tasks/${encodeURIComponent(taskId)}/final-mr`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ url }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return parseJson(response);
+}
+
+export async function getFinalMrComparison(taskId: string, generation: string, signal: AbortSignal): Promise<import("../../src/deliveryAnalyticsTypes").MrComparisonDetail> {
+  const query = new URLSearchParams({ generation });
+  const response = await fetch(`/tasks/${encodeURIComponent(taskId)}/final-mr-comparison?${query}`, { signal });
   if (!response.ok) throw new Error(await errorText(response));
   return parseJson(response);
 }

@@ -20,6 +20,7 @@ import { deliveryChangeSnapshot } from "./artifacts.ts";
 import { FeedbackStore } from "./feedbackStore.ts";
 import { listBusinessModules, readBusinessKnowledgeAsset } from "./businessModuleLibrary.ts";
 import { getPipelineStatus, triggerPipeline, type PipelineCredential, type PipelineRun } from "./pipelineClient.ts";
+import { captureOriginalMr } from "./taskFinalMr.ts";
 import { createMergeRequest } from "./mrClient.ts";
 import { mrParticipantsMessage, type MrParticipants, type MrParticipantsResult } from "./mrParticipants.ts";
 import { controlKernelFeedback, attestKernelHost, type KernelDeliveryHost } from "./kernelDelivery.ts";
@@ -148,7 +149,7 @@ export interface TaskHostRuntime {
   mrTitle?(operation: HostOperation): string | undefined;
   push(branch: string, sha: string): Promise<NonNullable<NonNullable<TaskSummary["delivery"]>["git_push"]>>;
   verify(): Promise<unknown>;
-  watch(): void;
+  watch(createdMr?: boolean): void;
   /** 已到交付等待点且尚无 MR 时，true 表示宿主接续创建 MR，不再唤醒 Agent。 */
   watchPush?(): boolean | void;
   /** false 表示仅记录提前验证，调用者继续原目标；true/旧接口 void 表示交付接管。 */
@@ -388,6 +389,7 @@ async function executeTaskHostOperation(host: TaskHostRuntime): Promise<boolean>
       }
     } else if (input.action === "create_mr") {
       if (!host.platformUrl) throw new Error("未配置 MR 平台");
+      const createdMr = !host.summary.delivery?.mr_url && !operation.mr_receipt;
       if (host.summary.delivery?.mr_url) {
         operation.result = `已存在 MR：${host.summary.delivery.mr_url}。${mrParticipantsMessage(host.summary.delivery.mr_participants)}`;
       } else {
@@ -403,12 +405,14 @@ async function executeTaskHostOperation(host: TaskHostRuntime): Promise<boolean>
           title: title!, dtsNo: host.summary.ticket, credential: host.credential, participants: host.mrParticipants?.() });
         operation.mr_receipt = { url: receipt.url, id: receipt.id, participants: receipt.participants };
         ledger.update(operation);
-        host.summary.delivery = { ...host.summary.delivery, mr_url: receipt.url, mr_id: receipt.id, mr_participants: receipt.participants,
+        const initial = captureOriginalMr(host.summary, receipt.url, operation.sha!);
+        host.assertActive();
+        host.summary.delivery = { ...host.summary.delivery, initial_mr: initial, mr_url: receipt.url, mr_id: receipt.id, mr_participants: receipt.participants,
           source_branch: operation.branch, target_branch: operation.target_branch };
         host.persist();
         operation.result = `已创建 MR：${receipt.url}；${mrParticipantsMessage(receipt.participants)}未宣告验证通过或任务完成。`;
       }
-      host.watch();
+      host.watch(createdMr);
     } else if (input.action === "sync_branch") {
       operation.result = await host.syncBranch!(operation.branch!, operation.target_branch!);
     } else if (input.action === "pull_repo") {
