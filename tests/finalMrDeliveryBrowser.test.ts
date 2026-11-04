@@ -19,10 +19,14 @@ test("桌面任务关联最终 MR 并在交付分析中查看初版之后的代�
     writeFileSync(page, '<!doctype html><html data-theme="light"><meta charset="utf-8"><style>' + layers + css + '</style><div id="app"></div><pre id="result" hidden></pre><script>' + built.outputFiles[0].text.replaceAll("</script", "<\\/script") + "</script></html>");
     const preview = process.env.MFC_FINAL_MR_PREVIEW;
     if (preview) mkdirSync(preview, { recursive: true });
-    for (const scenario of ["task", "tracking", "closed", "verifying", "completed", "different-target", "unknown-target", "analysis"]) {
+    for (const scenario of ["task", "tracking", "closed", "verifying", "completed", "different-target", "unknown-target", "analysis", "origin-team", "origin-detail", "origin-count-only"]) {
+      const query = new URLSearchParams({ scenario });
+      if (scenario === "analysis") query.set("deliveryTask", "task-orders");
+      if (scenario === "origin-detail") query.set("deliveryTask", "task-money");
+      if (scenario === "origin-count-only") query.set("deliveryTask", "task-timeout");
       const dom = await browserResultDump(chrome, ["--headless=new", "--disable-gpu", "--no-first-run", "--disable-extensions", `--user-data-dir=${join(dir, scenario)}`,
         "--window-size=1920,1080", "--virtual-time-budget=18000", ...(preview ? [`--screenshot=${resolve(preview, scenario + ".png")}`] : []),
-        "--dump-dom", `file://${page}${scenario === "analysis" ? "?deliveryTask=task-orders" : `?scenario=${scenario}`}`], join(dir, scenario + ".html"));
+        "--dump-dom", `file://${page}?${query}`], join(dir, scenario + ".html"));
       const raw = dom.match(/<pre[^>]*id="result"[^>]*>([^<]+)<\/pre>/)?.[1];
       assert.ok(raw, scenario + " 浏览器没有完成验证");
       const result = JSON.parse(raw); assert.equal(result.error, undefined, result.error); assert.equal(result.passed, true); assert.equal(result.width, 1920);

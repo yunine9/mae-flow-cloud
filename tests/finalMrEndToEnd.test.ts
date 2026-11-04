@@ -100,6 +100,8 @@ test("在任务 API 关联已合入的另一分支，历史初版补取基线，
   assert.ok(row); assert.ok(comparison, JSON.stringify({row,requests,logs})); assert.deepEqual(versionReads, [initial]);
   assert.equal(row.merged, true); assert.equal(row.mr_url, mr(2)); assert.equal(row.initial_mr_url, mr(1));
   assert.equal(row.metric, undefined, "重写历史后不沿用原 MR 的行归因");
+  assert.equal(row.final_code_lines, 1, "最终 MR 修改一行服务代码，目标分支的其他文件不计");
+  assert.equal(row.final_deleted_lines, 1);
   assert.deepEqual(comparison.files.map((f:{path:string}) => f.path), ["service.ts"]);
   assert.match(comparison.files[0]!.change_patch, /retries = 3/);
   assert.match(comparison.files[0]!.change_patch, /retries = 1/);

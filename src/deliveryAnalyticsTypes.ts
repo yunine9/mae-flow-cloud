@@ -16,7 +16,7 @@ export interface DeliveryCodeMetric {
   published_head?: string;
   base: string;
   first: string;
-  initial_implementation?: { end?: string; basis: "repair_record" | "commit_message" | "no_repair_found" };
+  initial_implementation?: { end?: string; basis: "repair_record" | "commit_message" | "no_repair_found" | "mr_publication" };
   collected_at: string;
   retained: OriginCounts;
   rework: OriginCounts;
@@ -56,7 +56,11 @@ export interface DeliveryAnalysisRow {
   at: string;
   mr_url?: string;
   initial_mr_url?: string;
+  external_collaboration?: true;
   mr_comparison?: MrComparison;
+  /** 最终 MR 自己的基线到源版本，仅统计交付文本。缺证据时不填。 */
+  final_code_lines?: number;
+  final_deleted_lines?: number;
   metric?: DeliveryCodeMetric;
   unavailable?: string;
   improvement?: import("./deliveryImprovementTypes.ts").ImprovementView;

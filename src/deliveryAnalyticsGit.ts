@@ -2,7 +2,7 @@ import { inferCommitOrigin } from "./deliveryOriginInference.ts";
 import { runSafeWorktreeGitAsync } from "./safeGit.ts";
 import { emptyOrigins, type CodeOrigin, type DeliveryCodeMetric } from "./deliveryAnalyticsTypes.ts";
 
-const SHA = /^[a-f0-9]{40,64}$/;
+const SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i;
 function numstat(raw: string): Array<{ added: number; removed: number; path: string; old?: string }> {
   const fields = raw.split("\0"), entries: ReturnType<typeof numstat> = [];
   for (let i = 0; i < fields.length; i++) {
@@ -29,12 +29,31 @@ export async function analyticsGit(cwd: string, args: string[]): Promise<string>
   return String(result.stdout ?? "");
 }
 
+function deliveryDiffPaths(run: (args: string[]) => Promise<string>, base: string, head: string) {
+  return run(["diff", "--numstat", "--no-ext-diff", "--no-textconv", "--find-renames", "-z", base, head, "--"]).then(numstat);
+}
+
+/** 行数取最终差异，既不需要首版历史，也不把同一行的反复修改重复累计。 */
+export async function finalMrSize(cwd: string, base: string, head: string) {
+  if (!SHA.test(base) || !SHA.test(head)) throw new Error("缺少最终 MR 的完整版本");
+  const run = (args: string[]) => analyticsGit(cwd, args);
+  await run(["merge-base", "--is-ancestor", base, head]);
+  const paths = await deliveryDiffPaths(run, base, head);
+  let lines = 0, deleted = 0;
+  for (const entry of paths) if (analyticsCodePath(entry.path)) {
+    lines += entry.added;
+    deleted += entry.removed;
+  }
+  return { lines, deleted };
+}
+
 /** Literal paths, NUL-separated names and immutable full object IDs throughout. */
 export async function calculateDeliveryCode(input: {
   cwd: string; base: string; head: string; first?: string; task_base?: string;
   origins?: Record<string, CodeOrigin>;
   infer_unattributed?: boolean;
   repair_commits?: string[];
+  initial_mr_head?: string;
 }): Promise<DeliveryCodeMetric> {
   const { cwd, base, head } = input;
   if (![base, head, ...(input.first ? [input.first] : []), ...(input.task_base ? [input.task_base] : [])].every(sha => SHA.test(sha))) throw new Error("缺少完整的统计版本");
@@ -52,6 +71,15 @@ export async function calculateDeliveryCode(input: {
   if (!first) throw new Error("没有可统计的非合并提交");
   // Rewritten first commit must not silently become the new 'first'.
   await run(["merge-base", "--is-ancestor", first, head]);
+  // The classification below follows first parents. A developer can merge the
+  // original branch as a side branch, where ancestry alone cannot classify it.
+  let afterPublication: Set<string> | undefined;
+  if (input.initial_mr_head) {
+    const chain = (await run(["rev-list", "--first-parent", "--max-count=501", head])).trim().split("\n");
+    const at = chain.indexOf(input.initial_mr_head);
+    if (at < 0) throw new Error("初版提交不在可追溯的主提交链上，无法区分三类代码来源");
+    afterPublication = new Set(chain.slice(0, at));
+  }
   const messages = new Map<string, string[]>();
   for (const sha of hashes) messages.set(sha, (await run(["show", "-s", "--format=%cI%n%B", sha])).trim().split("\n"));
   const repairCommits = new Set(input.repair_commits);
@@ -65,12 +93,16 @@ export async function calculateDeliveryCode(input: {
       catch { /* unrelated or unavailable historical record */ }
     }
   }
-  let basis: "repair_record" | "commit_message" | "no_repair_found" = "repair_record";
+  let basis: NonNullable<DeliveryCodeMetric["initial_implementation"]>["basis"] = "repair_record";
   if (boundary < 0) {
     basis = "commit_message";
     boundary = hashes.findIndex(sha => inferCommitOrigin(messages.get(sha)!.slice(1).join("\n"))?.explicitRepair);
   }
   if (boundary < 0) { boundary = hashes.length; basis = "no_repair_found"; }
+  if (afterPublication) {
+    const firstLater = hashes.findIndex(sha => afterPublication.has(sha));
+    if (firstLater >= 0 && firstLater < boundary) { boundary = firstLater; basis = "mr_publication"; }
+  }
   const initial = new Set(input.infer_unattributed ? hashes.slice(0, boundary) : [first]);
   const origins = { ...input.origins };
   const origin = (sha: string): CodeOrigin => initial.has(sha) ? "first"
@@ -90,10 +122,12 @@ export async function calculateDeliveryCode(input: {
       if (analyticsCodePath(entry.path)) { additions += entry.added; deletions += entry.removed; }
     }
     const category = origin(sha);
-    metric.commits.push({ sha, at, subject: message[0] ?? "", origin: category, additions, deletions, ...(inferred ? { origin_evidence: inferred.evidence } : {}) });
+    const originEvidence = afterPublication?.has(sha) && inferred?.origin === "review" && !inferred.explicitRepair
+      ? ["初版 MR 发布后的修改。缺少明确的流水线修复证据，归入检视及其他修改。"] : inferred?.evidence;
+    metric.commits.push({ sha, at, subject: message[0] ?? "", origin: category, additions, deletions, ...(originEvidence ? { origin_evidence: originEvidence } : {}) });
     if (category !== "first") metric.rework[category] += additions + deletions;
   }
-  const paths = numstat(await run(["diff", "--numstat", "--find-renames", "-z", base, head, "--"]));
+  const paths = await deliveryDiffPaths(run, base, head);
   if (paths.length > 1000) throw new Error("文件超过单任务统计预算，未计入统计");
   for (const entry of paths) {
     const { path, old } = entry;
@@ -112,7 +146,12 @@ export async function calculateDeliveryCode(input: {
     const blame = await run(["--literal-pathspecs", "blame", "--line-porcelain", head, "--", path]);
     let counted = 0;
     for (const match of blame.matchAll(/^([a-f0-9]{40,64}) \d+ (\d+)(?: \d+)?$/gm)) {
-      if (added.has(Number(match[2]))) { metric.retained[origin(match[1])]++; counted++; }
+      if (!added.has(Number(match[2]))) continue;
+      if (afterPublication && !messages.has(match[1])) {
+        throw new Error("部分最终代码来自主提交链之外或合并提交，无法核实三类来源");
+      }
+      metric.retained[origin(match[1])]++;
+      counted++;
     }
     if (counted !== added.size) throw new Error("代码行溯源不完整，未计入统计");
   }
