@@ -26,7 +26,7 @@
 ## stage.fix
 
 按 implement 技能的方法实施修复(读 `skills/implement/SKILL.md`),本地编译与测试按 `skills/issue-delivery/SKILL.md` 的「按需本地验证」自行判断;简单明确的修改可直接提交推送,复杂修改按需验证相关仓。
-修改涉及安全函数、资源管理、并发或整数运算时，先按语言查本次会话中的规范技能。C++ 查 `huawei-cleancode-cpp-kb`，Java 查 `geek-java-cleancode-kb`。读与本次改动有关的条目再动笔，清单里没有对应技能就跳过。
+编写或修改 C++、Java 代码前，先查对应语言的编码规范技能。C++ 查 `huawei-cleancode-cpp-kb`，Java 查 `geek-java-cleancode-kb`。按本次改动选读相关条目。会话中没有对应技能时，直接继续编码。
 完成后自检,再按 code-review 双轴(Standards=仓规,Spec=分析报告的修改方案)检查自己的 diff,如实说明验证范围后调 complete_stage 推进,继续完成 MR 和流水线流程。
 
 ## stage.mr_green
