@@ -29,7 +29,6 @@ for (const deletedSource of [false, true])
         workspace = join(root, "task-1"),
         cwd = join(workspace, "repo");
       mkdirSync(cwd, { recursive: true });
-      t.after(() => rmSync(root, { recursive: true, force: true }));
       const git = (...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
       git("init", "-q", "-b", "main");
       git("config", "user.name", "test");
@@ -56,11 +55,9 @@ for (const deletedSource of [false, true])
       const methods: string[] = [],
         mergedAt = "2026-09-09T07:15:01.000Z";
       let state = "opened",
-        signalOld!: () => void,
         finishOld!: () => void,
         finalReads = 0;
-      const oldStarted = new Promise<void>((r) => (signalOld = r)),
-        releaseOld = new Promise<void>((r) => (finishOld = r));
+      const releaseOld = new Promise<void>((resolve) => (finishOld = resolve));
       const server = createServer(async (req, res) => {
         const url = new URL(req.url!, origin);
         methods.push(req.method! + " " + url.pathname);
@@ -86,7 +83,6 @@ for (const deletedSource of [false, true])
             }),
           );
         } else if (url.pathname === "/mr/gates") {
-          signalOld();
           await releaseOld;
           res.end(JSON.stringify({ mr_state: "merged", source_sha: initial, gates: [] }));
         } else {
@@ -141,14 +137,10 @@ for (const deletedSource of [false, true])
         await service.shutdown();
         server.closeAllConnections();
         await new Promise<void>((r) => server.close(() => r()));
+        rmSync(root, { recursive: true, force: true });
       });
       service.recover();
-      await Promise.race([
-        oldStarted,
-        delay(3000).then(() => {
-          if (!methods.includes("GET /mr/gates")) assert.fail("未开始监听原 MR");
-        }),
-      ]);
+      await until(() => methods.includes("GET /mr/gates"), "未开始监听原 MR");
       await until(
         () => service.get("task-1")?.delivery?.initial_mr?.base === base,
         "应采用平台确认的首发基线，不能采用旧 origin/main",
