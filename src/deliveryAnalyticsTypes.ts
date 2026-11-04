@@ -16,13 +16,28 @@ export interface DeliveryCodeMetric {
   published_head?: string;
   base: string;
   first: string;
-  initial_implementation?: { end?: string; basis: "repair_record" | "commit_message" | "no_repair_found" };
+  initial_implementation?: { end?: string; basis: "repair_record" | "commit_message" | "no_repair_found" | "mr_publication" };
   collected_at: string;
   retained: OriginCounts;
   rework: OriginCounts;
   deleted: number;
   excluded_files: number;
   commits: DeliveryCommitMetric[];
+}
+export interface MrComparison {
+  method: "ancestry" | "patch" | "unavailable";
+  initial_head?: string;
+  final_head?: string;
+  retained?: number;
+  removed?: number;
+  added?: number;
+  files?: Array<{ path: string; changed: boolean; retained: number; removed: number; added: number }>;
+  reason?: string;
+}
+export interface MrComparisonDetail {
+  comparison_basis: "head" | "patch";
+  files: Array<{ path: string; change_patch: string; initial_patch: string; final_patch: string; truncated: boolean }>;
+  truncated: boolean;
 }
 export interface DeliveryAnalysisRow {
   id: string;
@@ -40,6 +55,12 @@ export interface DeliveryAnalysisRow {
   merged: boolean;
   at: string;
   mr_url?: string;
+  initial_mr_url?: string;
+  external_collaboration?: true;
+  mr_comparison?: MrComparison;
+  /** 最终 MR 自己的基线到源版本，仅统计交付文本。缺证据时不填。 */
+  final_code_lines?: number;
+  final_deleted_lines?: number;
   metric?: DeliveryCodeMetric;
   unavailable?: string;
   improvement?: import("./deliveryImprovementTypes.ts").ImprovementView;

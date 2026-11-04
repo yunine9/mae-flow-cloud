@@ -58,6 +58,7 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "cn";
 import { KnowledgeFootprint } from "./KnowledgeFootprint";
 import { TaskJourney } from "./TaskJourney";
+import { finalMrNextStep } from "./TaskMergeRequests";
 import { TaskContinueDelivery } from "./TaskContinueDelivery";
 import { TaskInspector, type TaskInspectorKind } from "./TaskInspector";
 import { taskHealthFacts } from "./taskHealth";
@@ -243,9 +244,13 @@ export function workspaceNextActionCopy(
     return { title: "任务已失败", detail: "看原因，决定重跑或接手" };
   }
   if (task.status === "verifying") {
+    if (task.delivery?.final_mr) return { title: "正在核对最终 MR", detail: task.detail || "可刷新 MR 状态查看最新结果" };
     return { title: "交付验证中", detail: "流水线与自动修复由系统跟进" };
   }
   if (task.status === "await_merge") {
+    if (task.delivery?.final_mr) return task.delivery.final_mr.state === "closed"
+      ? { title: "最终 MR 已关闭", detail: "可在任务详情中更换最终 MR" }
+      : { title: "等待最终 MR 合入", detail: "在 CodeHub 完成检视与合入" };
     return task.delivery?.mr_state === "已关闭"
       ? { title: "MR 已关闭，需要处理", detail: "查看合入状态并决定后续处理" }
       : { title: "等待检视与合入", detail: "前往 CodeHub 完成最后一步" };
@@ -308,12 +313,20 @@ function MergeWaitLine({ task, canOperate }: {
   canOperate: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const mrLink = task.delivery?.mr_url
-    ? <a href={task.delivery.mr_url} target="_blank" rel="noreferrer"
+  const finalMr = task.delivery?.final_mr;
+  const mrUrl = finalMr?.url ?? task.delivery?.mr_url;
+  const mrLink = mrUrl
+    ? <a href={mrUrl} target="_blank" rel="noreferrer"
         className="text-ink underline underline-offset-2 hover:text-ink-hover">
-        打开合入请求 ↗
+        {finalMr ? "打开最终 MR" : "打开合入请求"} ↗
       </a>
     : <em className="not-italic text-faint">平台尚未返回 MR 链接，请稍后刷新。</em>;
+  if (finalMr) return <div className="grid gap-1.5 text-sm">
+    <strong>{finalMr.state === "closed" ? "最终 MR 已关闭，任务尚未完成" : finalMr.state === "merged" ? "最终 MR 已合入" : "等待最终 MR 合入"}</strong>
+    <p className="m-0 text-xs leading-relaxed text-muted-foreground">{finalMrNextStep(finalMr.state)}</p>
+    {task.delivery?.stalled && <p className="m-0 text-sm text-danger" role="status">{task.delivery.stalled} · 可刷新 MR 状态。</p>}
+    {mrLink}
+  </div>;
   if (task.delivery?.mr_state === "已关闭") {
     return (
       <div role="alert"
@@ -1648,7 +1661,7 @@ export function TaskWorkspace({
   const decides = isOwnerOnlyWaiting(task)
     ? viewerUsername === (task.luban_account ?? "本地用户")
     : canOperate || canCollaborate || clarificationRespondent;
-  const controllable = canOperate && [
+  const controllable = canOperate && task.delivery?.final_mr?.state !== "merged" && [
     "queued", "running", "pausing", "paused", "waiting_for_human", "verifying",
     "await_merge",
   ].includes(task.status);
@@ -1749,10 +1762,10 @@ export function TaskWorkspace({
           {canOperate && <RetryButton taskId={task.id} onDone={onChanged} allowFromStart />}
         </div>
       )}
-      {!waiting && task.status === "await_merge" && (
+      {!waiting && (task.status === "await_merge" || task.status === "verifying" && task.delivery?.final_mr) && (
         <MergeWaitLine task={task} canOperate={canOperate} />
       )}
-      {!waiting && task.status === "verifying" && (
+      {!waiting && task.status === "verifying" && !task.delivery?.final_mr && (
         <div aria-label="交付验证" className="grid gap-2 rounded-xl border border-line bg-surface p-4">
           <strong className="text-[15px] text-text-strong">{pipelineHumanFeedback.length ? "流水线待人工处理" : "交付验证进行中"}</strong>
           <div aria-label="验证反馈来源统计" className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground"><span>代码检视 {codeReviewCount} 条</span><span>流水线与交付反馈 {machineFeedback.length} 条</span></div>
@@ -1950,7 +1963,7 @@ export function TaskWorkspace({
             <WaitBadge task={task} personal={canOperate} className="max-[900px]:hidden" />
             {canOperate && !task.requirement_graph && !["completed", "canceled"].includes(task.status)
               && <RefreshMrButton key={task.id} taskId={task.id} onChanged={onChanged} />}
-            <PrepushBadge task={task} canOperate={canOperate}
+            <PrepushBadge task={task} canOperate={canOperate && !task.delivery?.final_mr}
               onChanged={onChanged} />
           </div>
           {task.parent_task_id && <Button type="button" variant="outline" size="sm"
@@ -2001,12 +2014,12 @@ export function TaskWorkspace({
             {/* #227 换装:头部控制钮换 shadcn Button(恢复/暂停=outline、
                 取消=ghost、删除=destructive、邀请=outline sm),确认态
                 是一枚危险软底胶囊;原 .ws-head-controls 按钮皮不再依赖。 */}
-            {canRequestReview && task.status !== "canceled" && <Button type="button" variant="outline" size="sm"
+            {canRequestReview && !task.delivery?.final_mr && task.status !== "canceled" && <Button type="button" variant="outline" size="sm"
               aria-haspopup="dialog" aria-expanded={reviewInviteOpen}
               title="选择 Committer 参与代码检视"
               onClick={() => setReviewInviteOpen(true)}>邀请他人检视</Button>}
             {onOpenFeedbackWall && <QuickWishButton inline onOpenWall={onOpenFeedbackWall} />}
-            {controllable && (task.status === "await_merge" ? null : task.status === "paused" ? (
+            {controllable && !task.delivery?.final_mr && (task.status === "await_merge" ? null : task.status === "paused" ? (
               <Button type="button" disabled={!!controlBusy}
                 title="沿用当前工作区和流程进度继续执行"
                 onClick={() => void runControl("resume")}>
@@ -2058,7 +2071,8 @@ export function TaskWorkspace({
         )}
       </header>
       {demo && <TaskDemoGuide phase={demo.phase} decomposition={demoAnalysis} />}
-      <TaskContinueDelivery key={task.id} task={task} canOperate={canOperate} onChanged={onChanged} />
+      <TaskContinueDelivery key={task.id} task={task}
+        canOperate={canOperate && (!canOverride || !!demo) && viewerUsername === (task.luban_account ?? "本地用户")} onChanged={onChanged} />
 
       {taskInspector && <TaskInspector task={task} canOperate={canOperate} onChanged={onChanged} kind={taskInspector} onClose={() => setTaskInspector(undefined)}
         onInspect={setTaskInspector} onOpenProcess={() => { setTaskInspector(undefined); selectWorkspaceView("execution"); }} />}
@@ -2730,7 +2744,7 @@ export function TaskWorkspace({
             }}
             onOpenSteps={() => selectWorkspaceView("execution")}
           />
-          {chainReview && decides ? null : canCollaborate || decides ? (
+          {task.delivery?.final_mr || (chainReview && decides) ? null : canCollaborate || decides ? (
             <Composer task={task}
               recoveryRequest={recoveryRequest}
               isOwner={viewerUsername === (task.luban_account ?? "本地用户")}
@@ -2755,7 +2769,7 @@ export function TaskWorkspace({
           )}
         </section>
       </div>
-      {reviewInviteOpen && canRequestReview && task.status !== "canceled" && <Dialog open
+      {reviewInviteOpen && canRequestReview && !task.delivery?.final_mr && task.status !== "canceled" && <Dialog open
         onOpenChange={(next) => { if (!next) setReviewInviteOpen(false); }}>
         <DialogContent className="tw-root sm:max-w-[460px]">
           <DialogHeader>

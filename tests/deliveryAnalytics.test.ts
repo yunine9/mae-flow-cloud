@@ -7,7 +7,8 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { inferCommitOrigin } from "../src/deliveryOriginInference.ts";
 import { calculateDeliveryCode } from "../src/deliveryAnalyticsGit.ts";
-import { collectDeliveryCode, buildDeliveryAnalysis, observeDeliveryCode, awaitDeliveryAnalytics, repairOrigin, recordDeliveryPublication } from "../src/deliveryAnalytics.ts";
+import { collectDeliveryCode, buildDeliveryAnalysis, hasFinalMrSample, readFinalMrComparison, observeDeliveryCode, awaitDeliveryAnalytics, repairOrigin, recordDeliveryPublication } from "../src/deliveryAnalytics.ts";
+import { DeliveryImprovements } from "../src/deliveryImprovement.ts";
 import { aggregateDelivery, aggregateDeliveryModules } from "../src/deliveryAnalyticsSummary.ts";
 import { TaskService, type TaskSummary } from "../src/taskService.ts";
 import { createTaskServer } from "../src/server.ts";
@@ -48,6 +49,23 @@ test("真实 Git：首次保留、CI、检视、反复修改分别计数；最�
   const report = buildDeliveryAnalysis([f.summary]);
   assert.equal(report.rows[0].metric!.head, head, "workspace reclamation preserves numbers");
   assert.equal(aggregateDelivery(report.rows).firstPercent, 2 / 3 * 100);
+});
+
+test("平台外协作按本轮实际交接或吸收提交标记，同一 MR 也能体现", t => {
+  const { summary, base } = fixture(t);
+  const mr = "https://code.example/team/repo/-/merge_requests/1";
+  const delivery = { mr_url: mr, mr_state: "merged", merged_sha: base };
+  summary.delivery_history = [{
+    id: "initial", archive: "history", started_at: summary.created_at, completed_at: summary.created_at,
+    delivery: { ...delivery, foreign_commits: { count: 1, base_sha: base, absorbed_at: summary.created_at, subjects: ["调整实现"] } },
+  }];
+  summary.delivery = { ...delivery, mr_url: mr + "2" };
+  summary.delivery_generation = "next";
+  const flags = () => buildDeliveryAnalysis([summary]).rows.map(row => !!row.external_collaboration);
+  assert.deepEqual(flags(), [true, false], "上一轮的外部提交、这一轮新开的 MR 均不会给新一轮打标");
+  summary.delivery.final_mr = { id: 12, url: summary.delivery.mr_url!, repo: "team/repo", state: "merged",
+    source_branch: "feature", target_branch: "main", head: base };
+  assert.deepEqual(flags(), [true, true], "显式交给平台只读跟踪即已交接，无需对比链接或猜测作者");
 });
 
 test("#462 已完成交付保留待对账文案时仍计为已合入，未完成任务不提前计入", async t => {
@@ -447,4 +465,174 @@ test("#457 完成日期过滤不回退到创建或更新时间，结束日按浏
   assert.equal(completedInRange(buildDeliveryAnalysis([{ ...task, completed_at: undefined }]).rows[0].completed_at, range), false);
   assert.throws(() => validateCompletionRange({ from: "invalid" }), /无效/);
   assert.throws(() => validateCompletionRange({ from: range.before, before: range.from }), /开始日期/);
+});
+
+const initialUrl = "https://code.test/org/repo/merge_requests/12", finalUrl = "https://code.test/org/repo/merge_requests/13";
+function setFinalMr(f: ReturnType<typeof fixture>, initial: string, final: string, base: string) {
+  Object.assign(f.summary.delivery!, { initial_mr: { url: initialUrl, head: initial, base: f.base },
+    final_mr: { url: finalUrl, id: 13, repo: "org/repo", source_branch: "dev", target_branch: "main", state: "merged", head: final, base } });
+  f.summary.status = "completed";
+}
+test("另一个 MR 改写提交并更新目标基线：真实比较两份补丁，不把目标更新或旧行数纳入最终归因", async t => {
+  const f = fixture(t);
+  f.write("feature.cpp", "keep();\nold();\nrepeat();\nrepeat();\n");
+  f.write(".env", "MY_VAR=sensitiveFixtureValue"); f.write("docs.md", "ignore-me");
+  const first = f.commit("平台初版"); f.publish(first);
+  await collectDeliveryCode(f.summary, f.cwd, first);
+  f.git("checkout", "main");
+  f.write("unrelated.cpp", "upstream();\n");
+  const otherBase = f.commit("目标基线更新");
+  f.git("checkout", "-b", "dev");
+  f.write("feature.cpp", "keep();\nnewer();\nrepeat();\n");
+  const head = f.commit("另开 MR");
+  let analyzed = 0;
+  const improvement = new DeliveryImprovements(() => ({ dataDir: f.dir, model: { json: {} } }), async input => {
+    analyzed++;
+    if (!input.task.delivery?.final_mr) return "原 MR 分析";
+    assert.equal(input.row?.metric, undefined);
+    assert.match(input.instructions, /mr-comparison.json/);
+    const files = JSON.parse(readFileSync(join(input.root, "mr-comparison.json"), "utf8")).files;
+    assert.match(files[0].change_patch, /newer/);
+    return "最终 MR 分析";
+  });
+  t.after(() => improvement.shutdown());
+  improvement.start({ summary: f.summary, cwd: f.cwd });
+  await improvement.flush();
+  assert.equal(analyzed, 1);
+  setFinalMr(f, first, head, otherBase);
+  assert.equal(improvement.view(f.summary).state, undefined, "同一交付的原 MR 报告不能作为最终版报告");
+  assert.throws(() => improvement.start({ summary: f.summary, cwd: f.cwd }), /尚未采集/);
+  assert.equal(buildDeliveryAnalysis([f.summary]).rows[0].metric, undefined, "新对象未采集也不能退回原报告");
+  observeDeliveryCode(f.summary, f.cwd, head);
+  await awaitDeliveryAnalytics();
+  const row = buildDeliveryAnalysis([f.summary]).rows[0], c = row.mr_comparison!;
+  assert.equal(row.mr_url, finalUrl); assert.equal(row.merged, true); assert.equal(row.metric, undefined);
+  assert.equal(c.method, "patch", c.reason);
+  assert.equal(row.final_code_lines, 3); assert.equal(row.final_deleted_lines, 0);
+  assert.deepEqual(c.files, [{ path: "feature.cpp", changed: true, retained: 2, removed: 2, added: 1 }]);
+  const detail = readFinalMrComparison(f.summary)!;
+  improvement.start({ summary: f.summary, cwd: f.cwd }); await improvement.flush();
+  assert.equal(improvement.view(f.summary).state?.status, "completed"); assert.equal(analyzed, 2);
+  assert.equal(detail.comparison_basis, "patch");
+  assert.match(detail.files[0].change_patch, /-\+old\(\);/); assert.match(detail.files[0].change_patch, /\+\+newer\(\);/);
+  assert.doesNotMatch(JSON.stringify(detail), /sensitiveFixtureValue|ignore-me|upstream/);
+  assert.equal(readFinalMrComparison(f.summary, "bogus"), undefined);
+  rmSync(f.cwd, { recursive: true }); assert.deepEqual(readFinalMrComparison(f.summary), detail);
+  f.summary.delivery!.final_mr!.base = head;
+  assert.equal(buildDeliveryAnalysis([f.summary]).rows[0].mr_comparison!.method, "unavailable");
+  assert.equal(readFinalMrComparison(f.summary), undefined);
+  assert.equal(buildDeliveryAnalysis([f.summary]).rows[0].final_code_lines, undefined, "旧基线的行数不能挪用");
+});
+test("最终 MR 续用初版：保留真实提交归因，显示换序差异，绝不将后续本地提交记作原来的 CI 修复", async t => {
+  const f = fixture(t);
+  f.write("feature.cpp", "old();\nkeep();\n"); const first = f.commit("平台初版"); f.publish(first);
+  await collectDeliveryCode(f.summary, f.cwd, first);
+  f.summary.delivery!.loop = { kind: "ci", round: 1, state: "repairing", last_sha: first };
+  f.write("feature.cpp", "keep();\nold();\n"); const final = f.commit("稍作调整");
+  setFinalMr(f, first, final, f.base);
+  observeDeliveryCode(f.summary, f.cwd, final); await awaitDeliveryAnalytics();
+  const row = buildDeliveryAnalysis([f.summary]).rows[0], comparison = row.mr_comparison!;
+  assert.equal(comparison.method, "ancestry", comparison.reason);
+  assert.equal(row.metric?.head, final, row.unavailable);
+  assert.equal(row.metric?.commits.at(-1)?.origin, "review");
+  assert.equal(comparison.files?.[0].changed, true); assert.equal(comparison.added, 0);
+  const details = readFinalMrComparison(f.summary)!;
+  assert.equal(details.comparison_basis, "head"); assert.match(details.files[0].change_patch, /^-old\(\);$/m);
+  f.summary.delivery!.initial_mr!.head = undefined;
+  observeDeliveryCode(f.summary, f.cwd, final); await awaitDeliveryAnalytics();
+  const missing = buildDeliveryAnalysis([f.summary]).rows[0];
+  assert.equal(missing.merged, true); assert.equal(missing.mr_comparison?.method, "unavailable"); assert.equal(missing.metric, undefined); assert.equal(missing.final_code_lines, 2);
+});
+
+test("最终 MR 三类行以最终代码为分母，合主干、删除行和 CI 后追加的普通修改不会串类", async t => {
+  const f = fixture(t);
+  f.write("feature.cpp", "initial-A\nfor-ci\nfor-owner\ntemporary\n");
+  const initial = f.commit("需求实现"); f.publish(initial); await collectDeliveryCode(f.summary, f.cwd, initial);
+  f.git("checkout", "main"); f.write("upstream.cpp", "unrelated\n"); const upstream = f.commit("其他需求");
+  f.git("checkout", "task"); f.git("merge", "--no-ff", "main", "-m", "同步基线");
+  f.write("feature.cpp", "initial-A\npipeline-B\nfor-owner\ntemporary\n");
+  const ci = f.commit("处理 B");
+  f.summary.delivery!.loop = { kind: "ci", round: 1, state: "repairing", last_sha: initial };
+  f.publish(ci); recordDeliveryPublication(f.summary, f.cwd, ci); await awaitDeliveryAnalytics();
+  f.write("feature.cpp", "initial-A\npipeline-B\nlocal-C\n"); f.write("existing.cpp", "");
+  const final = f.commit("本地继续改完需求"); setFinalMr(f, initial, final, upstream);
+  observeDeliveryCode(f.summary, f.cwd, final); await awaitDeliveryAnalytics();
+  const row = buildDeliveryAnalysis([f.summary]).rows[0];
+  assert.deepEqual(row.metric?.retained, { first: 1, pipeline: 1, review: 1, other: 0 }, row.unavailable);
+  assert.equal(row.final_code_lines, Object.values(row.metric!.retained).reduce((a, b) => a + b, 0));
+  assert.equal(row.final_code_lines, 3); assert.equal(row.final_deleted_lines, 1);
+  assert.match(row.metric!.commits.find(c => c.sha === ci)!.origin_evidence!.join(" "), /流水线修复轮次/);
+  assert.match(row.metric!.commits.find(c => c.sha === final)!.origin_evidence!.join(" "), /初版 MR 发布后的修改/);
+  const dir = join(f.dir, ".delivery-analysis");
+  const file = join(dir, readdirSync(dir).find(name => name.endsWith(".json") && !name.endsWith(".patch.json"))!);
+  const legacy = JSON.parse(readFileSync(file, "utf8"));
+  const localCommit = legacy.metric.commits.find((c: {sha:string}) => c.sha === final);
+  localCommit.origin_evidence = ["初版 MR 发布后的修改。缺少明确的流水线修复证据，归入检视及其他修改。"];
+  writeFileSync(file, JSON.stringify(legacy));
+  const displayed = buildDeliveryAnalysis([f.summary]).rows[0].metric?.commits.find(c => c.sha === final);
+  assert.deepEqual(displayed?.origin_evidence, ["初版 MR 发布后的修改。缺少明确的流水线修复证据，归入检视修改。"]);
+  delete legacy.final_size;
+  legacy.metric.retained = { first: 1, pipeline: 2, review: 0, other: 0 };
+  localCommit.origin = "pipeline";
+  writeFileSync(file, JSON.stringify(legacy));
+  const beforeUpgrade = buildDeliveryAnalysis([f.summary]).rows[0];
+  assert.equal(beforeUpgrade.final_code_lines, 3); assert.equal(beforeUpgrade.metric, undefined);
+  observeDeliveryCode(f.summary, f.cwd, final, true); await awaitDeliveryAnalytics();
+  assert.deepEqual(buildDeliveryAnalysis([f.summary]).rows[0].metric?.retained, row.metric!.retained, "不能从旧最终快照继承错误的推断，但保留真实流水线轮次");
+  const previous = structuredClone(f.summary.delivery);
+  f.summary.delivery_history = [{ id: "initial", archive: "1", started_at: "", completed_at: "", delivery: previous! }];
+  f.summary.delivery_generation = "next"; f.summary.delivery = {};
+  assert.deepEqual(buildDeliveryAnalysis([f.summary]).rows.map(r => r.final_code_lines), [3, undefined]);
+});
+
+test("初版只在合并提交的第二父链，不把合入的代码猜成首轮或检视修改", async t => {
+  const f = fixture(t);
+  f.write("feature.cpp", "initial\n"); const initial = f.commit("初版"); f.publish(initial);
+  f.git("checkout", "-b", "owner-side", f.base); f.write("local.cpp", "independent\n"); f.commit("本地修改");
+  f.git("merge", "--no-ff", "task", "-m", "并入初版"); const final = f.git("rev-parse", "HEAD");
+  setFinalMr(f, initial, final, f.base);
+  observeDeliveryCode(f.summary, f.cwd, final); await awaitDeliveryAnalytics();
+  const row = buildDeliveryAnalysis([f.summary]).rows[0];
+  assert.equal(row.final_code_lines, 2); assert.equal(row.metric, undefined);
+  assert.equal(row.mr_comparison?.method, "ancestry"); assert.match(row.unavailable ?? "", /主提交链/);
+});
+
+test("缺初版的最终 MR 可以只有重命名或删除，真实零行与无法读取有区别；旧快照只补采一次", async t => {
+  const f = fixture(t);
+  f.git("mv", "existing.cpp", "renamed.cpp");
+  const head = f.commit("rename only"); f.publish(head);
+  setFinalMr(f, f.base, head, f.base); delete f.summary.delivery!.initial_mr!.head;
+  observeDeliveryCode(f.summary, f.cwd, head); await awaitDeliveryAnalytics();
+  const row = () => buildDeliveryAnalysis([f.summary]).rows[0];
+  assert.equal(row().final_code_lines, 0); assert.equal(row().final_deleted_lines, 0); assert.equal(row().metric, undefined);
+  const dir = join(f.dir, ".delivery-analysis");
+  const path = join(dir, readdirSync(dir).find(p => p.endsWith(".json") && !p.endsWith(".patch.json"))!);
+  const old = JSON.parse(readFileSync(path,"utf8")); delete old.final_size; writeFileSync(path, JSON.stringify(old));
+  assert.equal(hasFinalMrSample(f.summary), false); assert.equal(row().final_code_lines, undefined);
+  observeDeliveryCode(f.summary, f.cwd, head, true); await awaitDeliveryAnalytics();
+  assert.equal(row().final_code_lines, 0); assert.equal(hasFinalMrSample(f.summary), true);
+  f.git("rm", "renamed.cpp"); const deleted = f.commit("delete file"); f.summary.delivery!.final_mr!.head = deleted;
+  assert.equal(row().final_code_lines, undefined);
+  observeDeliveryCode(f.summary, f.cwd, deleted); await awaitDeliveryAnalytics();
+  assert.equal(row().final_code_lines, 0); assert.equal(row().final_deleted_lines, 1);
+  f.summary.delivery!.final_mr!.head = "f".repeat(40);
+  observeDeliveryCode(f.summary, f.cwd, head); await awaitDeliveryAnalytics();
+  assert.equal(row().final_code_lines, undefined); assert.equal(hasFinalMrSample(f.summary), true);
+});
+
+test("原 MR 外部改写后合入或 Git 对象缺失，不得继续展示平台旧版本行数和百分比", async t => {
+  const f = fixture(t);
+  f.write("version.cpp", "cloud version\n"); const pushed = f.commit("初版"); f.publish(pushed);
+  await collectDeliveryCode(f.summary, f.cwd, pushed);
+  f.git("checkout", "-b", "rewrite", f.base); f.write("unrelated.cpp", "external\n"); const rewritten = f.commit("rewrite");
+  f.summary.status = "completed";
+  for (const head of [rewritten, "f".repeat(40)]) {
+    Object.assign(f.summary.delivery!, { foreign_commits: { count: 1, base_sha: head }, merged_sha: head, mr_state: "merged" });
+    let row = buildDeliveryAnalysis([f.summary]).rows[0];
+    assert.equal(row.merged, true); assert.equal(row.metric, undefined); assert.equal(row.final_code_lines, undefined);
+    observeDeliveryCode(f.summary, f.cwd, head, true); await awaitDeliveryAnalytics();
+    row = buildDeliveryAnalysis([f.summary]).rows[0];
+    assert.equal(row.metric, undefined); assert.equal(row.final_code_lines, undefined);
+    assert.match(row.unavailable ?? "", /外部提交/);
+  }
 });

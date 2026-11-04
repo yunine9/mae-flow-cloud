@@ -4,7 +4,7 @@ import { join, resolve, relative, sep, extname } from "node:path";
 import { Type } from "typebox";
 import { summaryGit } from "./deliverySummaryAgent.ts";
 import type { DeliveryCodeMetric } from "./deliveryAnalyticsTypes.ts";
-import { redactAnalysisText, serializeAnalysisValue } from "./analysisText.ts";
+import { redactAnalysisText, restrictedAnalysisPathSegment as blocked, serializeAnalysisValue } from "./analysisText.ts";
 export { redactAnalysisText } from "./analysisText.ts";
 
 export interface AnalysisScope { root: string; description: string; sourceOnly?: boolean }
@@ -18,7 +18,6 @@ async function analysisResult(value: Record<string, unknown>, receiptRoot?: stri
   }
   return { content: [{ type: "text" as const, text }], details: {} };
 }
-const blocked = /^(?:\.git|node_modules|vendor|dist|build|target|\.ssh|\.aws|\.codex|\.pi|pi-agent|requirement-review-agent|agent|sessions|delivery-improvement|models(?:\.beta)?\.json|settings\.json|auth(?:entication)?\.json|\.host-capabilities|\.env(?:\..*)?|.*\.(?:pem|key|p12))$/i;
 const textExtensions = new Set(["", ".ts", ".tsx", ".js", ".mjs", ".json", ".jsonl", ".md", ".txt", ".log", ".py", ".sh", ".yaml", ".yml", ".xml", ".ini", ".toml", ".diff", ".patch", ".html", ".css", ".cpp", ".h", ".java", ".sql"]);
 async function checked(scope: AnalysisScope, path: string): Promise<string> {
   const parts = path.split(/[\\/]/).filter(Boolean);

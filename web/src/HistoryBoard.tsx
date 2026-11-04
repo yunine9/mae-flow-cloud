@@ -179,6 +179,7 @@ export function HistoryBoard({
                 const relationship = taskOverviewRelationship(entry, relatedTasks);
                 const parentTask = entry.parent_task_id ? currentTasks.get(entry.parent_task_id) : undefined;
                 const title = historyTaskTitle(entry);
+                const mrUrl = entry.delivery?.final_mr?.url ?? entry.delivery?.mr_url;
                 const terminal = ["completed", "failed", "canceled"]
                   .includes(entry.status);
                 const canRerun = viewer.role !== "admin" && terminal
@@ -211,14 +212,14 @@ export function HistoryBoard({
                       </TaskStatusBadge>
                     </div>
                     <div>
-                      {entry.delivery?.mr_url ? (
+                      {mrUrl ? (
                         <a
-                          href={entry.delivery.mr_url}
+                          href={mrUrl}
                           target="_blank"
                           rel="noreferrer"
                           className="inline-flex items-center gap-1 text-[13px] font-bold text-primary hover:underline"
                         >
-                          MR · {entry.delivery.mr_state ?? "查看"}
+                          {entry.delivery?.final_mr ? "最终 MR" : "MR"} · {entry.delivery?.mr_state ?? "查看"}
                           <svg viewBox="0 0 16 16" aria-hidden className="size-3.5 fill-none stroke-current stroke-[1.5]">
                             <path d="M6 3.5h6.5V10M12.25 3.75 5 11" />
                           </svg>

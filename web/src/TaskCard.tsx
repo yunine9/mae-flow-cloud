@@ -106,6 +106,7 @@ export function TaskCard({
     }
   }, [task.status, focused, showDecisionForm]);
 
+  const mrUrl = task.delivery?.final_mr?.url ?? task.delivery?.mr_url;
   const waitingQuestions = task.waiting?.question?.questions?.length ?? 0;
   const chainReview = showDecisionForm
     && task.status === "waiting_for_human"
@@ -350,10 +351,10 @@ export function TaskCard({
             </svg>
           </Button>
         )}
-        {task.delivery?.mr_url && (
-          <a href={task.delivery.mr_url} target="_blank" rel="noreferrer"
+        {mrUrl && (
+          <a href={mrUrl} target="_blank" rel="noreferrer"
             className="inline-flex items-center gap-1 text-muted-foreground underline-offset-2 hover:text-text-strong hover:underline">
-            <span>合入请求 · {task.delivery.mr_state}</span>
+            <span>{task.delivery?.final_mr ? "最终 MR" : "合入请求"} · {task.delivery?.mr_state}</span>
             <svg viewBox="0 0 16 16" aria-hidden className="size-3.5">
               <path d="M6 3.5h6.5V10M12.25 3.75 5 11" />
             </svg>

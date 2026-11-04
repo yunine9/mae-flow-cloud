@@ -45,7 +45,7 @@ test("低频资料集中在任务详情，暂停成功不重复占据通栏", ()
   assert.match(workspace, /preparation=\{!demo && <WarmupBadge task=\{task\}/,
     "正常工作台保留准备信息，演示模式收起次要控件");
   assert.doesNotMatch(inspector, /WarmupPanel|环境与执行配置/);
-  for (const fact of ["luban_account", "mr_url", "pipeline", "milestone", "workspace_reclaimed_at"]) assert.ok(inspector.includes(fact));
+  for (const fact of ["luban_account", "<TaskMergeRequests", "pipeline", "milestone", "workspace_reclaimed_at"]) assert.ok(inspector.includes(fact));
   assert.match(workspace, /selectWorkspaceView\("knowledge"\)/);
   assert.match(workspace, /className="ws-primary-scroll ws-knowledge-view"/);
   assert.doesNotMatch(workspace, /ws-task-resources|已安全暂停/);
@@ -305,7 +305,9 @@ test("任务详情及子页使用居中弹窗，跳转入口保留按钮外观",
   assert.doesNotMatch(inspector, /SheetContent|variant="link"/);
   assert.match(inspector, /max-h-\[calc\(100dvh-2rem\)\]/);
   assert.match(inspector, /overflow-y-auto/);
-  assert.match(inspector, /render=\{<a href=\{task.delivery.mr_url\}/);
+  const mergeRequests = readFileSync(resolve("web/src/TaskMergeRequests.tsx"), "utf8");
+  assert.match(mergeRequests, /render=\{<a href=\{initial\}/);
+  assert.match(mergeRequests, /render=\{<a href=\{final.url\}/);
 });
 
 test("带文字返回按钮占独立网格，窄窗口材料工具允许换行", () => {

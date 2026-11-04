@@ -16,15 +16,16 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import ts from "typescript";
 
-function interfaceFields(file: string, name: string): Set<string> {
-  const source = ts.createSourceFile(file, readFileSync(new URL(`../${file}`, import.meta.url), "utf-8"), ts.ScriptTarget.Latest, true);
-  // 同文件里的具名 interface / 对象字面量别名:属性引用到它们时也要下钻
-  // (镜像把 prepush_runtime 抽成了 PrepushRuntime 接口,不下钻就是假阳性)。
+function interfaceFields(file: string, name: string, ...relatedFiles: string[]): Set<string> {
+  // 只展开列出的类型来源，包括镜像中的 PrepushRuntime 和服务端单独定义的 TaskDeliverySummary。
   const named = new Map<string, ts.NodeArray<ts.TypeElement>>();
-  source.forEachChild((node) => {
-    if (ts.isInterfaceDeclaration(node)) named.set(node.name.text, node.members);
-    if (ts.isTypeAliasDeclaration(node) && ts.isTypeLiteralNode(node.type)) named.set(node.name.text, node.type.members);
-  });
+  for (const path of [file, ...relatedFiles]) {
+    const source = ts.createSourceFile(path, readFileSync(new URL(`../${path}`, import.meta.url), "utf-8"), ts.ScriptTarget.Latest, true);
+    source.forEachChild((node) => {
+      if (ts.isInterfaceDeclaration(node)) named.set(node.name.text, node.members);
+      if (ts.isTypeAliasDeclaration(node) && ts.isTypeLiteralNode(node.type)) named.set(node.name.text, node.type.members);
+    });
+  }
   const fields = new Set<string>();
   const membersOf = (type: ts.TypeNode | undefined, seen: Set<string>): ts.NodeArray<ts.TypeElement> | undefined => {
     if (!type) return undefined;
@@ -36,7 +37,7 @@ function interfaceFields(file: string, name: string): Set<string> {
       return undefined;
     }
     if (ts.isTypeReferenceNode(type)) {
-      const ref = type.typeName.getText(source);
+      const ref = type.typeName.getText();
       if ((ref === "Array" || ref === "ReadonlyArray") && type.typeArguments?.[0]) return membersOf(type.typeArguments[0], seen);
       if (named.has(ref) && !seen.has(ref)) { seen.add(ref); return named.get(ref); }
     }
@@ -45,7 +46,7 @@ function interfaceFields(file: string, name: string): Set<string> {
   const collect = (members: ts.NodeArray<ts.TypeElement>, prefix: string, seen: Set<string>) => {
     for (const member of members) {
       if (!ts.isPropertySignature(member) || !member.name) continue;
-      const key = prefix + (ts.isIdentifier(member.name) || ts.isStringLiteral(member.name) ? member.name.text : member.name.getText(source));
+      const key = prefix + (ts.isIdentifier(member.name) || ts.isStringLiteral(member.name) ? member.name.text : member.name.getText());
       fields.add(key);
       const nested = membersOf(member.type, new Set(seen));
       if (nested) collect(nested, `${key}.`, new Set([...seen, key]));
@@ -90,7 +91,7 @@ const NOT_MIRRORED = new Set<string>([
 ]);
 
 test("任务摘要:服务端 TaskSummary 的每个字段都在 api.ts 镜像里", () => {
-  const server = interfaceFields("src/taskService.ts", "TaskSummary");
+  const server = interfaceFields("src/taskService.ts", "TaskSummary", "src/taskDeliverySummary.ts");
   const mirror = interfaceFields("web/src/api.ts", "TaskSummary");
   const missing = [...server].filter((field) => !mirror.has(field) && !NOT_MIRRORED.has(field)
     // 父字段已豁免的,子字段一并豁免

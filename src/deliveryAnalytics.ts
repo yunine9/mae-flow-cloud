@@ -4,12 +4,14 @@ import { dirname, join } from "node:path";
 import type { TaskSummary } from "./taskService.ts";
 import { feedbackStamp, historicalRepairIntervals, intervalOrigins, validInterval, type RepairInterval } from "./deliveryAttribution.ts";
 import { frozenTaskBaseline } from "./artifacts.ts";
-import { analyticsGit, calculateDeliveryCode } from "./deliveryAnalyticsGit.ts";
+import { analyticsGit, calculateDeliveryCode, finalMrSize } from "./deliveryAnalyticsGit.ts";
+import { compareFinalMr } from "./finalMrComparison.ts";
 import { repositoryIdentity } from "./knowledgeAssetModel.ts";
 import type { RepositoryProfile } from "./repositoryProfiles.ts";
-import { emptyOrigins, type CodeOrigin, type DeliveryAnalysisReport, type DeliveryCodeMetric } from "./deliveryAnalyticsTypes.ts";
+import { emptyOrigins, type CodeOrigin, type DeliveryAnalysisReport, type DeliveryCodeMetric, type MrComparison, type MrComparisonDetail } from "./deliveryAnalyticsTypes.ts";
 
-interface StoredAnalysis { version: 1; head: string; metric?: DeliveryCodeMetric; error?: string; attribution?: string; intervals?: RepairInterval[] }
+interface FinalSizeSample { url: string; head: string; base?: string; counts?: { lines: number; deleted: number } }
+interface StoredAnalysis { final_size?: FinalSizeSample; version: 1; head: string; metric?: DeliveryCodeMetric; error?: string; attribution?: string; intervals?: RepairInterval[]; comparison?: MrComparison; comparison_key?: string }
 type Task = Pick<TaskSummary, "id" | "workspace" | "delivery_generation">;
 type CollectionTask = Pick<TaskSummary, "id" | "workspace" | "delivery" | "origin" | "delivery_generation">;
 function location(task: Task): string {
@@ -25,12 +27,60 @@ function read(task: Task): StoredAnalysis | undefined {
   } catch { return; }
 }
 function save(task: Task, record: StoredAnalysis): void {
-  const path = location(task);
+  writeAnalysisFile(location(task), record);
+}
+function writeAnalysisFile(path: string, record: unknown): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   if (lstatSync(dirname(path)).isSymbolicLink()) throw new Error("统计目录不能是符号链接");
   const temp = `${path}.${randomUUID()}.tmp`;
   writeFileSync(temp, JSON.stringify(record), { mode: 0o600, flag: "wx" });
   renameSync(temp, path);
+}
+
+type Delivery = NonNullable<TaskSummary["delivery"]>;
+function confirmedDirectHead(delivery?: Delivery): string | undefined {
+  const foreign = delivery?.foreign_commits?.base_sha;
+  return foreign && foreign === delivery?.merged_sha && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(foreign) ? foreign : undefined;
+}
+export function deliveryAnalysisHead(delivery?: Delivery): string | undefined {
+  return delivery?.final_mr ? delivery.final_mr.head : confirmedDirectHead(delivery) ?? delivery?.git_push?.sha;
+}
+export function comparisonKey(delivery?: Delivery) {
+  const a = delivery?.initial_mr, b = delivery?.final_mr;
+  return b ? createHash("sha256").update(JSON.stringify([a?.url, a?.head, a?.base, b.url, b.head, b.base])).digest("hex") : undefined;
+}
+export function hasFinalMrSample(task: TaskSummary, requireUsable = false): boolean {
+  const key = comparisonKey(task.delivery), saved = read(task);
+  if (!key || saved?.comparison_key !== key || !matchesFinalSize(saved.final_size, task.delivery?.final_mr)) return false;
+  if (!requireUsable) return true;
+  if (!saved.final_size?.counts || !saved.comparison || saved.comparison.method === "unavailable") return false;
+  try {
+    const file = lstatSync(detailLocation(task, key));
+    return file.isFile() && file.size > 0 && file.size <= 2_000_000
+      && (saved.comparison.method === "patch" || saved.metric?.head === task.delivery?.final_mr?.head);
+  } catch { return false; }
+}
+function matchesFinalSize(size?: FinalSizeSample, final?: Delivery["final_mr"]): boolean {
+  return !!size && !!final?.head && size.url === final.url && size.base === final.base && size.head === final.head;
+}
+function metricSize(metric: DeliveryCodeMetric) {
+  return { lines: Object.values(metric.retained).reduce((sum, n) => sum + n, 0), deleted: metric.deleted };
+}
+function detailLocation(task: Task, key: string) { return `${location(task)}.${key}.patch.json`; }
+export function readFinalMrComparison(task: TaskSummary, generation?: string): MrComparisonDetail | undefined {
+  let scope = task;
+  if (generation !== undefined && generation !== (task.delivery_generation ?? "initial")) {
+    const prior = task.delivery_history?.find(h => h.id === generation);
+    if (!prior) return;
+    scope = { ...task, delivery_generation: prior.id === "initial" ? undefined : prior.id, delivery: prior.delivery };
+  }
+  const key = comparisonKey(scope.delivery), saved = read(scope);
+  if (!key || saved?.comparison_key !== key || !saved.comparison || saved.comparison.method === "unavailable") return;
+  try {
+    const path = detailLocation(scope, key), stat = lstatSync(path);
+    if (!lstatSync(dirname(path)).isDirectory() || !stat.isFile() || stat.size > 2_000_000) return;
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch { return; }
 }
 
 /** Only a bounded, explicitly identified repair interval receives a reason.
@@ -45,7 +95,7 @@ export function repairOrigin(loop: NonNullable<TaskSummary["delivery"]>["loop"])
 // once and late repair evidence can update an already sampled push.
 function attributionKey(summary: CollectionTask, cwd: string): string {
   const loop = summary.delivery?.loop;
-  return JSON.stringify([9, loop?.last_sha, repairOrigin(loop), summary.delivery?.foreign_commits?.base_sha, summary.delivery?.merged_sha, feedbackStamp(cwd)]);
+  return JSON.stringify([summary.delivery?.final_mr ? 10 : 9, comparisonKey(summary.delivery), loop?.last_sha, repairOrigin(loop), summary.delivery?.foreign_commits?.base_sha, summary.delivery?.merged_sha, feedbackStamp(cwd)]);
 }
 
 function currentInterval(summary: CollectionTask, head: string): RepairInterval {
@@ -74,6 +124,8 @@ let lane: Promise<void> = Promise.resolve();
 /** Best-effort observer, single Git worker across tasks. Never awaited by the
  * delivery state machine; failed analytics never retries or blocks a task. */
 export function observeDeliveryCode(summary: TaskSummary, cwd: string | undefined, head: string, retry = false): void {
+  if (summary.delivery?.final_mr) head = summary.delivery.final_mr.head ?? "";
+  else if (confirmedDirectHead(summary.delivery)) head = summary.delivery?.git_push?.sha ?? "";
   if (!cwd || !/^[a-f0-9]{40,64}$/.test(head) || summary.origin === "issue"
       || (summary.continuation && summary.continuation.state !== "active")) return;
   const snapshot: CollectionTask = { id: summary.id, workspace: summary.workspace,
@@ -83,7 +135,10 @@ export function observeDeliveryCode(summary: TaskSummary, cwd: string | undefine
   const saved = read(summary);
   if (pending.has(key) || saved?.head === head && saved.attribution === attribution && !retry) return;
   const job = lane.then(async () => {
-    try { await collectDeliveryCode(snapshot, cwd, head); }
+    try {
+      if (snapshot.delivery?.final_mr) await collectFinalMr(snapshot, cwd, head, attribution);
+      else await collectDeliveryCode(snapshot, cwd, head);
+    }
     catch (error) {
       try { save(snapshot, { ...read(snapshot), version: 1, head, attribution, error: error instanceof Error ? error.message : "统计暂不可用" }); } catch { /* read-side only */ }
     }
@@ -98,30 +153,83 @@ export async function awaitTaskDeliveryAnalytics(task: Task): Promise<void> {
   await Promise.all([...pending].filter(([key]) => key.startsWith(prefix)).map(([, work]) => work));
 }
 
+async function collectFinalMr(summary: CollectionTask, cwd: string, head: string, attribution: string) {
+  const delivery = summary.delivery!, initial = delivery.initial_mr, final = delivery.final_mr!;
+  const key = comparisonKey(delivery)!;
+  const saved = read(summary);
+  const sameComparison = saved?.comparison_key === key;
+  const savedMetric = sameComparison && saved.metric?.base === final.base && saved.metric?.head === head ? saved.metric : undefined;
+  let comparison: MrComparison;
+  try {
+    const result = await compareFinalMr(cwd, { initial: initial ?? {}, final });
+    comparison = result.summary;
+    writeAnalysisFile(detailLocation(summary, key), result.detail);
+  } catch (e) {
+    // Immutable evidence survives workspace reclamation. In particular, an
+    // older comparison snapshot may still need its first independent line count.
+    comparison = sameComparison && saved.comparison && saved.comparison.method !== "unavailable" ? saved.comparison
+      : { method: "unavailable", initial_head: initial?.head, final_head: head, reason: e instanceof Error ? e.message : "缺少比较证据" };
+  }
+  let metric: DeliveryCodeMetric | undefined;
+  let error: string | undefined;
+  if (comparison.method === "ancestry") {
+    try { metric = await collectDeliveryCode(summary, cwd, head); }
+    catch (e) {
+      if (matchesFinalSize(saved?.final_size, final)) metric = savedMetric;
+      error = e instanceof Error ? e.message : "无法回溯最终代码的来源";
+    }
+  } else error = comparison.reason ?? "提交历史不同，已按两份 MR 的代码内容比较，无法按提交归因";
+
+  let counts = metric ? metricSize(metric) : matchesFinalSize(saved?.final_size, final) ? saved?.final_size?.counts : undefined;
+  // A matching old blame snapshot measured final changed lines even if it did
+  // not distinguish a merge through a side branch. Reuse its total only.
+  if (!counts && savedMetric) counts = metricSize(savedMetric);
+  if (!counts && final.base) {
+    try { counts = await finalMrSize(cwd, final.base, head); } catch { /* 缺少 Git 对象不猜行数。 */ }
+  }
+  save(summary, { version: 1, head, metric, attribution, error, comparison, comparison_key: key, intervals: saved?.intervals,
+    final_size: { url: final.url, head, base: final.base, counts } });
+}
+
 export async function collectDeliveryCode(summary: CollectionTask, cwd: string, head: string): Promise<DeliveryCodeMetric> {
   const attribution = attributionKey(summary, cwd);
-  const previous = read(summary)?.metric;
+  const priorSample = read(summary);
+  const final = summary.delivery?.final_mr;
+  // Older final-MR snapshots classified side-branch and some local changes
+  // without proving their source. Their counts and real repair intervals survive.
+  let previous = final && priorSample?.comparison_key && !priorSample.final_size ? undefined : priorSample?.metric;
+  if (previous && final) {
+    try { await analyticsGit(cwd, ["merge-base", "--is-ancestor", previous.head, head]); }
+    catch { previous = undefined; }
+  }
   const publishedHead = head;
-  const foreign = summary.delivery?.foreign_commits?.base_sha;
+  const foreign = confirmedDirectHead(summary.delivery);
   // A direct owner push can be the actual merged source. Do not mistake a
   // squash/target merge commit for it; require the recorded branch tip.
-  if (foreign && foreign === summary.delivery?.merged_sha && /^[a-f0-9]{40,64}$/.test(foreign)) {
-    try { await analyticsGit(cwd, ["merge-base", "--is-ancestor", head, foreign]); head = foreign; }
-    catch { /* keep the available published source */ }
+  if (!final && foreign && foreign !== head) {
+    try { await analyticsGit(cwd, ["merge-base", "--is-ancestor", head, foreign]); }
+    catch { throw new Error("最终合入的外部提交缺失或没有延续平台推送，无法核实代码行与来源"); }
+    head = foreign;
   }
-  const taskBase = await frozenTaskBaseline(cwd);
+  const taskBase = final ? summary.delivery?.initial_mr?.base : await frozenTaskBaseline(cwd);
   if (!taskBase) throw new Error("缺少任务创建时的 Git 基线，无法识别首次提交");
-  const target = summary.delivery?.target_branch;
+  const target = final?.target_branch ?? summary.delivery?.target_branch;
   if (!target) throw new Error("缺少 MR 目标分支，无法确定交付范围");
   await analyticsGit(cwd, ["check-ref-format", `refs/remotes/origin/${target}`]);
   // A same-source refresh must retain the pre-merge comparison base, including
   // after fast-forward/squash merge or a target branch update.
-  let base = previous?.head === head ? previous.base
-    : (await analyticsGit(cwd, ["merge-base", "--all", head, `refs/remotes/origin/${target}`])).trim();
-  if (base === head) base = taskBase;
+  let base = final?.base ?? (previous?.head === head ? previous.base
+    : (await analyticsGit(cwd, ["merge-base", "--all", head, `refs/remotes/origin/${target}`])).trim());
+  if (!final && base === head) {
+    // A target already at the merged commit has lost the pre-merge base.
+    // Without an MR base, a merge on the path may include unrelated target work.
+    if (foreign && foreign !== publishedHead && (await analyticsGit(cwd, ["rev-list", "--merges", "-1", `${taskBase}..${head}`])).trim())
+      throw new Error("目标已合入且提交链含合并，缺少最终 MR 的合入前基线，无法核实最终行数");
+    base = taskBase;
+  }
   const origins: Record<string, CodeOrigin> = Object.fromEntries((previous?.commits ?? []).map(c => [c.sha, c.origin]));
   const evidence: Record<string, string[]> = Object.fromEntries((previous?.commits ?? []).filter(c => c.origin_evidence).map(c => [c.sha, c.origin_evidence!]));
-  const fallback = await intervalOrigins(cwd, head, [currentInterval(summary, head),
+  const fallback = await intervalOrigins(cwd, head, [...(final ? [] : [currentInterval(summary, head)]),
     ...(head !== publishedHead ? [{ base: publishedHead, head, origin: "review" as const,
       evidence: "平台推送之后的分支直接修改" }] : []),
   ]);
@@ -139,7 +247,7 @@ export async function collectDeliveryCode(summary: CollectionTask, cwd: string, 
     for (const [sha, origin] of Object.entries(source.origins)) if (origin === "pipeline") { origins[sha] = "pipeline"; evidence[sha] = source.evidence[sha]; }
   }
   const metric = await calculateDeliveryCode({ cwd, base, head, task_base: taskBase, first: previous?.first, origins,
-    infer_unattributed: true, repair_commits: [...new Set([
+    infer_unattributed: true, initial_mr_head: final ? summary.delivery?.initial_mr?.head : foreign && foreign !== publishedHead ? summary.delivery?.initial_mr?.head ?? publishedHead : undefined, repair_commits: [...new Set([
       ...Object.keys(fallback.origins), ...Object.keys(published.origins), ...Object.keys(historical.origins),
       ...(previous?.initial_implementation?.basis === "repair_record" ? previous.commits.filter(c => c.origin !== "first").map(c => c.sha) : []),
     ])] });
@@ -157,12 +265,13 @@ export async function collectDeliveryCode(summary: CollectionTask, cwd: string, 
   }
   for (const commit of metric.commits) {
     commit.origin_evidence = commit.origin === "first" ? [metric.initial_implementation?.basis === "repair_record"
-      ? "首轮实现：首次实际修复区间之前的提交" : metric.initial_implementation?.basis === "commit_message"
+      ? "首轮实现：首次实际修复区间之前的提交" : metric.initial_implementation?.basis === "mr_publication"
+        ? "首轮实现：初版 MR 发布前的实现提交" : metric.initial_implementation?.basis === "commit_message"
         ? "推断：首次明确修复提交之前的首轮实现" : "推断：未发现修复记录或明确修复提交，暂计首轮实现"]
       : evidence[commit.sha] ?? commit.origin_evidence ?? [commit.origin === "other"
         ? "缺少覆盖该提交的修复区间证据" : "此前推送快照保留的分类"];
   }
-  save(summary, { version: 1, head: publishedHead, metric, intervals: read(summary)?.intervals,
+  if (!final) save(summary, { version: 1, head: publishedHead, metric, intervals: read(summary)?.intervals,
     attribution });
   return metric;
 }
@@ -195,28 +304,45 @@ export function buildDeliveryAnalysis(tasks: TaskSummary[], modules: Array<{ id:
       const profile = repository ? [...(task.repository_profiles ?? []), ...repositoryProfiles]
         .find(p => repositoryIdentity(p.repository) === repository && p.technologies.length) : undefined;
       const languages = [...new Set(profile?.technologies ?? [])].filter(language => language !== "agnostic");
-      const stored = read(task), head = task.delivery?.git_push?.sha;
+      const stored = read(task), head = deliveryAnalysisHead(task.delivery);
+      const final = task.delivery?.final_mr, key = comparisonKey(task.delivery);
+      const comparison = final ? (stored?.comparison_key === key ? stored?.comparison : undefined)
+        ?? { method: "unavailable" as const, initial_head: task.delivery?.initial_mr?.head, final_head: final.head,
+          reason: final.state === "merged" && !final.head ? "代码平台尚未返回最终 MR 的源版本，待版本可读后可刷新数据" : "尚无这两份 MR 当前版本的比较证据" } : undefined;
       // 已完成记录可能保留待对账文案；统计合入事实不依赖该文案是否清理。
-      const merged = task.status === "completed" && ["merged", "已合入", "已合入（内核终态待对账）"].includes(task.delivery?.mr_state ?? "");
+      const merged = task.status === "completed" && (final ? final.state === "merged" : ["merged", "已合入", "已合入（内核终态待对账）"].includes(task.delivery?.mr_state ?? ""));
       // merged_sha identifies the target commit (different after squash/rebase).
       // Statistics describe the confirmed pushed source, which must still match.
-      const metric = head && stored?.metric && (stored.metric.published_head ?? stored.metric.head) === head && stored.metric.initial_implementation ? structuredClone(stored.metric) : undefined;
+      const exactFinalMetric = final && stored?.comparison_key === key && stored?.metric?.head === head && stored?.metric?.base === final.base ? stored?.metric : undefined;
+      const finalSizeMatches = matchesFinalSize(stored?.final_size, final);
+      const publishedHead = final ? final.head : task.delivery?.git_push?.sha;
+      const metric = (!final || finalSizeMatches && exactFinalMetric && comparison?.method === "ancestry")
+        && head && stored?.metric?.head === head && (stored.metric.published_head ?? stored.metric.head) === publishedHead
+        && stored.metric.initial_implementation ? structuredClone(stored.metric) : undefined;
       if (metric) {
         for (const counts of [metric.retained, metric.rework]) {
           counts.review += counts.other; counts.other = 0;
         }
-        for (const commit of metric.commits) if (commit.origin === "other") {
-          commit.origin = "review";
-          commit.origin_evidence = ["按统计口径：未明确识别为流水线修复，归检视修改"];
+        for (const commit of metric.commits) {
+          if (commit.origin === "other") {
+            commit.origin = "review";
+            commit.origin_evidence = ["后续调整按检视修改统计。记录中没有明确的流水线修复依据。"];
+          } else if (commit.origin === "review" && commit.origin_evidence) {
+            commit.origin_evidence = commit.origin_evidence.map(note => note.replace("归入检视及其他修改", "归入检视修改"));
+          }
         }
       }
-      return { id: task.id, delivery_id: task.delivery_generation ?? "initial", started_at: task.delivery_started_at ?? task.created_at, title: task.title || task.requirement.split("\n")[0], parent_id: task.parent_task_id,
+      const evidenceMetric = metric ?? exactFinalMetric;
+      const size = (finalSizeMatches ? stored?.final_size?.counts : undefined) ?? (evidenceMetric ? metricSize(evidenceMetric) : undefined);
+      return { ...(size ? { final_code_lines: size.lines, final_deleted_lines: size.deleted } : {}),
+        ...(task.delivery?.final_mr || (task.delivery?.foreign_commits?.count ?? 0) > 0 ? { external_collaboration: true as const } : {}),
+        id: task.id, delivery_id: task.delivery_generation ?? "initial", started_at: task.delivery_started_at ?? task.created_at, title: task.title || task.requirement.split("\n")[0], parent_id: task.parent_task_id,
         parent_title: task.parent_task_id ? names.get(task.parent_task_id) : undefined,
         repo: cleanRepository(task.repo_url ?? ""), languages, modules: businessModule ? [businessModule.name] : [], business_module: businessModule,
         merged, completed_at: task.status === "completed" ? task.completed_at : undefined,
-        at: task.completed_at ?? task.updated_at ?? task.created_at, mr_url: safeMrUrl(task.delivery?.mr_url), metric,
-        unavailable: metric ? undefined : stored?.metric && stored.metric.head === head && !stored.metric.initial_implementation ? "统计口径已更新，需重新采集首轮实现范围" : stored?.head === head && stored?.error ? stored.error
-          : head ? "尚无本次推送的统计快照；历史任务不会猜测归因" : "尚未推送代码" };
+        at: task.completed_at ?? task.updated_at ?? task.created_at, mr_url: safeMrUrl(final?.url ?? task.delivery?.mr_url), initial_mr_url: safeMrUrl(task.delivery?.initial_mr?.url), mr_comparison: comparison, metric,
+        unavailable: metric ? undefined : final ? comparison?.reason ?? (stored?.comparison_key === key ? stored?.error : undefined) ?? "缺少最终 MR 的代码来源统计" : stored?.metric && stored.metric.head === head && !stored.metric.initial_implementation ? "统计口径已更新，需重新采集首轮实现范围" : stored?.head === publishedHead && stored?.error ? stored.error
+          : confirmedDirectHead(task.delivery) && head !== publishedHead ? "尚无最终合入的外部提交所对应的代码统计" : head ? "尚无本次推送的统计快照；历史任务不会猜测归因" : "尚未推送代码" };
     }) };
 }
 function cleanRepository(value: string): string {

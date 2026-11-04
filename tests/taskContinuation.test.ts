@@ -205,3 +205,54 @@ test("子任务继续修改使主任务恢复协调，内核未完成时不能�
   await f.service.continueDelivery(f.created.id, "修复空行", "child-delivery-request", "alice");
   assert.equal(f.service.get(created.id)?.status, "coordinating");
 });
+
+test("最终 MR 的目标分支不同或无法确认时，继续修改和重试都不触碰原任务或工作区", async t => {
+  const f = await fixture(t);
+  const original = f.task.summary.delivery;
+  const final = { url: "https://code.example/team/repo/-/merge_requests/2", id: 2, repo: f.source,
+    source_branch: "local-edit", target_branch: "release/v2", state: "merged" };
+  const head = git(f.cwd, "rev-parse", "HEAD");
+  const dirtyFile = readFileSync(join(f.cwd, "main.cpp"), "utf8");
+  const taskFile = join(f.created.workspace, "task.json");
+  const requestId = "final-mr-retry";
+  const saved = { id: requestId, text: "继续调整", actor: "alice", at: new Date().toISOString(),
+    state: "failed", error: "原准备记录", branch: f.branch, baseline: "master" };
+  let waits = 0;
+  f.task.finalMrAnalysis = { get work() { waits++; return Promise.resolve(); } };
+  for (const [oldTarget, nextTarget, finalTarget, orderBaseline, expected] of [
+    ["master", undefined, "release/v2", "master", /master.*release\/v2.*创建新任务/],
+    ["master", "release/v2", "release/v2", "master", /master.*release\/v2.*创建新任务/],
+    ["master", "staging", "master", "master", /master.*staging.*创建新任务/],
+    [undefined, undefined, "release/v2", undefined, /原交付目标分支为未知.*release\/v2.*创建新任务/],
+    ["master", undefined, undefined, "master", /master.*目标分支为未知.*确认目标分支/],
+  ] as const) {
+    f.task.summary.baseline = orderBaseline;
+    f.task.summary.delivery = { ...original, target_branch: oldTarget, final_mr: { ...final, target_branch: finalTarget } };
+    f.task.summary.continuation = nextTarget ? { ...saved, baseline: nextTarget } : undefined;
+    const before = structuredClone(f.task.summary);
+    const persisted = readFileSync(taskFile, "utf8");
+    await assert.rejects(f.service.continueDelivery(f.created.id, saved.text, requestId, "alice"), expected);
+    assert.deepEqual(f.task.summary, before);
+    assert.equal(readFileSync(taskFile, "utf8"), persisted);
+    assert.equal(existsSync(join(f.created.workspace, "delivery-history", requestId)), false);
+    assert.equal(git(f.cwd, "rev-parse", "HEAD"), head);
+    assert.equal(readFileSync(join(f.cwd, "main.cpp"), "utf8"), dirtyFile);
+  }
+  for (const state of ["opened", "closed", undefined]) {
+    f.task.summary.delivery = { ...original, final_mr: { ...final, target_branch: "master", state } };
+    await assert.rejects(f.service.continueDelivery(f.created.id, saved.text, requestId, "alice"), /尚未确认最终 MR 已合入/);
+  }
+  assert.equal(waits, 0);
+});
+
+test("最终 MR 仅换源分支，旧任务能从已记录的原基线继续并保留最终 MR 历史", async t => {
+  const f = await fixture(t);
+  f.task.summary.delivery.target_branch = undefined;
+  f.task.summary.delivery.final_mr = { url: "https://code.example/team/repo/-/merge_requests/2", id: 2,
+    repo: f.source, source_branch: "local-edit", target_branch: "master", state: "merged" };
+  const next = await f.service.continueDelivery(f.created.id, "继续调整", "same-target-new-source", "alice");
+  assert.equal(next.status, "queued");
+  assert.equal(next.continuation?.baseline, "master");
+  assert.equal(git(f.cwd, "rev-parse", "HEAD"), f.latest);
+  assert.equal(next.delivery_history?.[0].delivery?.final_mr?.source_branch, "local-edit");
+});
