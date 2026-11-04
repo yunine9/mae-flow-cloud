@@ -1,3 +1,4 @@
+import { finalMrContinuationBlock } from "../../src/finalMrContinuationPolicy";
 import { isMainTaskDelivery } from "../../src/requirementDecisionContract";
 import { useState } from "react";
 import { continueTaskDelivery, type TaskSummary } from "./api";
@@ -12,6 +13,8 @@ export function TaskContinueDelivery({ task, canOperate, onChanged }: {
   const eligible = task.status === "completed" && !task.requirement_analysis_requested
     && (!task.requirement_graph || !!task.parent_task_id || isMainTaskDelivery(task))
     && (pending || ["merged", "已合入"].includes(task.delivery?.mr_state ?? ""));
+  const blocked = eligible ? finalMrContinuationBlock(task) : undefined;
+  const finalTarget = eligible && !blocked ? task.delivery?.final_mr?.target_branch : undefined;
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
   const [requestId, setRequestId] = useState(() => crypto.randomUUID());
@@ -31,13 +34,17 @@ export function TaskContinueDelivery({ task, canOperate, onChanged }: {
   }
   if (!eligible && !task.delivery_history?.length) return null;
   return <section className="flex-none border-b border-border px-(--ws-gutter) py-3" aria-label="继续修改与交付历史">
-    {eligible && canOperate && <div className="grid gap-3">
+    {blocked && <p className="m-0 text-sm leading-relaxed text-text">{blocked}</p>}
+    {finalTarget && <p className="m-0 mb-2 text-sm text-text">下一轮将从 <code className="break-all">{finalTarget}</code> 分支的最新版本开始。{!canOperate && "由任务责任人发起。"}</p>}
+    {eligible && !blocked && canOperate && <div className="grid gap-2">
       {!open && !pending ? <Button className="w-fit" onClick={() => setOpen(true)}>继续修改</Button> : <>
         <label htmlFor={`continue-${task.id}`} className="text-sm font-medium">这次需要修改什么？</label>
         <Textarea id={`continue-${task.id}`} value={pending ? task.continuation!.text : text}
           onChange={event => setText(event.target.value)} maxLength={12000} rows={3}
           disabled={busy || pending} placeholder="描述验证发现的问题，或需要继续修改的代码、测试和文档。" />
-        <p className="m-0 text-xs text-muted-foreground">提交后从最新基准重建同名分支，放弃上一轮残留修改；保留原目录和不冲突的构建缓存。之前的交付记录会留存。</p>
+        <p className="m-0 text-xs text-muted-foreground">{finalTarget
+          ? <>平台会重建云端的原工作分支，放弃云端工作区未提交的代码修改，保留交付记录。如果远端仍有同名工作分支，平台会停止准备。你可以从 <code className="break-all">{finalTarget}</code> 新建任务继续开发。</>
+          : "提交后从最新基准重建同名分支，放弃上一轮残留修改；保留原目录和不冲突的构建缓存。之前的交付记录会留存。"}</p>
         <div className="flex items-center gap-2">
           <Button disabled={busy || task.continuation?.state === "preparing" || (!pending && !text.trim())}
             onClick={() => void submit()}>{busy || task.continuation?.state === "preparing" ? "正在准备…" : pending ? "重试继续修改" : "发送并开始修改"}</Button>

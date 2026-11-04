@@ -8,7 +8,7 @@ import { LocalAuth } from "../src/auth.ts";
 import { createTaskServer } from "../src/server.ts";
 import { TaskService, type TaskSummary } from "../src/taskService.ts";
 
-test("最终 MR 路由沿用任务可读权限，只有责任人和管理员可关联，只接受合法 MR 地址", async t => {
+test("最终 MR 路由校验关联权限与地址，跨目标继续修改优先向责任人说明分支限制", async t => {
   const dir = mkdtempSync(join(tmpdir(), "final-mr-http-"));
   const auth = new LocalAuth(join(dir, "auth.json"));
   const password = "test-final-mr-pass";
@@ -37,9 +37,24 @@ test("最终 MR 路由沿用任务可读权限，只有责任人和管理员可�
   const owner = await login("owner");
   assert.equal((await link(owner, "https://code.example/team/repo")).status, 400);
   assert.equal((await link(owner, mr + "?tab=changes#L12")).status, 200);
-  assert.equal((await link(await login("admin"), mr)).status, 200);
+  const admin = await login("admin");
+  assert.equal((await link(admin, mr)).status, 200);
   assert.deepEqual(calls, [mr, mr]);
   const detail = base + "/tasks/task-1/final-mr-comparison";
   assert.equal((await fetch(detail)).status, 401);
   assert.equal((await fetch(detail + "?generation=missing", {headers:{cookie:owner}})).status, 404);
+  task.status = "completed";
+  task.delivery = { target_branch: "main", mr_state: "已合入", final_mr: {
+    id: 4, url: mr, repo: "team/repo", state: "merged", source_branch: "local", target_branch: "release",
+  } };
+  const next = (cookie: string) => fetch(base + "/tasks/task-1/continue-delivery", {
+    method: "POST", headers: { cookie }, body: JSON.stringify({ text: "继续开发", request_id: "continue-mr-4" }),
+  });
+  const denied = await next(admin);
+  assert.equal(denied.status, 403);
+  assert.doesNotMatch(await denied.text(), /release/);
+  const conflict = await next(owner);
+  assert.equal(conflict.status, 409);
+  const body = await conflict.json() as { error: string };
+  assert.match(body.error, /main.*release.*新任务/);
 });

@@ -9,6 +9,7 @@ import { componentKnowledgeRoute } from "./componentKnowledgeRoutes.ts";
 import { readFinalMrComparison } from "./deliveryAnalytics.ts";
 import { normalizeRepairMrUrl } from "./mrImportTypes.ts";
 import { continuationHistoryZip } from "./taskContinuation.ts";
+import { finalMrContinuationBlock } from "./finalMrContinuationPolicy.ts";
 import { domainKnowledgeRoute } from "./domainKnowledgeRoutes.ts";
 import { extractionConfigurationRoute } from "./knowledgeExtractionRoutes.ts";
 import { componentResearchRoute } from "./componentResearchRoutes.ts";
@@ -3248,6 +3249,8 @@ export function createTaskServer(
           if (options.auth && (!viewer || viewer.role === "admin" || viewer.username !== target.luban_account)) {
             return json(response, 403, { error: "只有该任务责任人可以继续修改" });
           }
+          const branchError = target.status === "completed" && finalMrContinuationBlock(target);
+          if (branchError) return json(response, 409, { error: branchError });
           const blockers = [...service.launchOptions().blockers, ...personalBlockers(viewer)];
           if (blockers.length) return json(response, 409, { error: "配置未完成，请先补齐：" + blockers.map(item => item.label).join("；"), blockers });
           const body = await readBody(request);

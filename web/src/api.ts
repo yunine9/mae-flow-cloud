@@ -1182,6 +1182,7 @@ export interface TaskSummary {
   };
   delivery?: {
     git_push?: { sha: string };
+    target_branch?: string;
     initial_mr?: { url: string; head?: string; base?: string };
     final_mr?: {
       url: string; id: string | number; repo: string; source_branch: string; target_branch: string;

@@ -545,6 +545,7 @@ import {
   validTaskCommitSubject,
   type CommitSubjectRecord,
 } from "./commitPolicy.ts";
+import { continuationTarget, finalMrContinuationBlock } from "./finalMrContinuationPolicy.ts";
 import { captureOriginalMr, originalMr, finalMrRecord, type InitialDeliveryMr, type FinalDeliveryMr } from "./taskFinalMr.ts";
 import { prepareFinalMrObjects, retainInitialMrCommit } from "./finalMrGitObjects.ts";
 import { readFinalDeliveryMr, normalizeRepairMrUrl, readMrVersionBase } from "./mrImport.ts";
@@ -652,6 +653,7 @@ export const DEFAULT_WORKSPACE_RETENTION_DAYS = 14;
 /** 构建缓存比任务现场更值得复用，但也必须有自动止涨边界。 */
 export const DEFAULT_BUILD_CACHE_RETENTION_DAYS = 30;
 export const DEFAULT_BUILD_CACHE_MAX_GB = 100;
+const FINAL_MR_ASSISTANT_READ_ONLY = "已关联最终 MR，请在本地修改代码。任务完成后可按任务详情中的提示开始下一轮修改。";
 const DELIVERY_CHAIN_SOURCE = "chain-plan.md";
 const DELIVERY_UNIT_SOURCE = "unit-brief.md";
 const AGENT_DELIVERY_CHAIN = ".mae-flow-chain.md";
@@ -9523,22 +9525,24 @@ export class TaskService {
 
   /** 已合入任务的继续修改：保留任务、目录和缓存，显式开始新的内核流程。 */
   async continueDelivery(id: string, text: string, requestId: string, actor: string): Promise<TaskSummary> {
-    const release = this.beginHistoryMutation(id);
     let task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    if (!/^[a-zA-Z0-9-]{8,80}$/.test(requestId)) throw new TaskControlError("继续修改请求编号无效");
+    const message = text.trim();
+    if (!message || message.length > 12_000) throw new TaskControlError("请填写本次修改要求（不超过 12000 字）");
+    if (task.summary.luban_account && task.summary.luban_account !== actor) throw new TaskControlError("只有任务责任人可以继续修改");
+    if (task.summary.continuation?.id === requestId && task.summary.continuation.state === "active") return this.project(task);
+    if (task.summary.delivery_history?.some(item => item.archive === requestId)) {
+      throw new TaskControlError("这次继续修改请求已结束，请重新填写本次修改要求");
+    }
+    const pending = continuationPending(task.summary);
+    if (task.summary.status !== "completed" || this.isRequirementAnalysis(task) || task.summary.origin === "issue") {
+      throw new TaskControlError("请在 MR 已合入的具体代码任务中继续修改；主任务请打开对应子任务");
+    }
+    const blocked = finalMrContinuationBlock(task.summary);
+    if (blocked) throw new TaskControlError(blocked);
+    const release = this.beginHistoryMutation(id);
     try {
-      if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
-      if (!/^[a-zA-Z0-9-]{8,80}$/.test(requestId)) throw new TaskControlError("继续修改请求编号无效");
-      const message = text.trim();
-      if (!message || message.length > 12_000) throw new TaskControlError("请填写本次修改要求（不超过 12000 字）");
-      if (task.summary.luban_account && task.summary.luban_account !== actor) throw new TaskControlError("只有任务责任人可以继续修改");
-      if (task.summary.continuation?.id === requestId && task.summary.continuation.state === "active") return this.project(task);
-      if (task.summary.delivery_history?.some(item => item.archive === requestId)) {
-        throw new TaskControlError("这次继续修改请求已结束，请重新填写本次修改要求");
-      }
-      const pending = continuationPending(task.summary);
-      if (task.summary.status !== "completed" || this.isRequirementAnalysis(task) || task.summary.origin === "issue") {
-        throw new TaskControlError("请在 MR 已合入的具体代码任务中继续修改；主任务请打开对应子任务");
-      }
       if (!this.options.host) throw new TaskControlError("当前部署没有启用需求内核");
       if (task.finalMrAnalysis) await task.finalMrAnalysis.work;
       if (!pending && !["merged", "已合入"].includes(task.summary.delivery?.mr_state ?? "")) {
@@ -9552,7 +9556,7 @@ export class TaskService {
       }
       const previous = task.summary;
       const branch = previous.continuation && pending ? previous.continuation.branch : previous.delivery?.source_branch;
-      const baseline = previous.continuation && pending ? previous.continuation.baseline : previous.delivery?.target_branch ?? previous.baseline;
+      const baseline = continuationTarget(previous);
       if (!branch || !baseline) throw new TaskControlError("历史交付缺少工作分支或基准分支，无法继续修改");
       if (task.cwd && existsSync(task.cwd)) {
         const state = new KernelHost({ kernelRoot: this.options.host.kernelRoot,
@@ -11937,6 +11941,9 @@ export class TaskService {
   private developerAssistantAvailability(
     task: TaskState,
   ): DeveloperAssistantAvailability {
+    if (task.summary.delivery?.final_mr) {
+      return { available: false, code: "not_editable", mode: "unavailable", reason: FINAL_MR_ASSISTANT_READ_ONLY };
+    }
     if (!this.options.isolation) {
       return {
         available: false,
@@ -12020,7 +12027,9 @@ export class TaskService {
       if (!task.driver || !task.assistantActive) {
         throw new TaskControlError("开发会话正在恢复，请稍后重试本条指令");
       }
+      const epoch = task.assistantEpoch;
       void task.driver.steer(message).catch((error) => {
+        if (task.assistantEpoch !== epoch || task.summary.delivery?.final_mr) return;
         const current = readDeveloperAssistant(workspace);
         const state = task.assistantActive
           && ["working", "running"].includes(current.state)
@@ -12047,9 +12056,11 @@ export class TaskService {
       recordTaskHostInstruction(task.summary, message, actor);
       this.refreshOwnerInputs(task);
       this.options.log?.(`任务 ${id} 开发现场由 ${actor} 请求接管`);
+      const epoch = task.assistantEpoch;
       void this.pause(id, actor).then(() => {
         this.activatePendingDeveloperAssistant(task);
       }).catch((error) => {
+        if (task.assistantEpoch !== epoch || task.summary.delivery?.final_mr) return;
         appendDeveloperAssistantMessage(
           workspace, "assistant", `未能接管主现场：${String(error)}`,
           "failed", String(error));
@@ -12348,6 +12359,10 @@ export class TaskService {
           await container.stop();
         } catch (error) {
           const detail = `开发助手容器未能确认释放：${String(error)}`;
+          if (!this.developerAssistantCurrent(task, epoch)) {
+            this.options.log?.(detail);
+            return;
+          }
           appendDeveloperAssistantMessage(
             workspace, "assistant", detail, "failed", detail);
         }
@@ -12387,6 +12402,12 @@ export class TaskService {
     }
   }
 
+  private assertDeveloperAssistantControl(task: TaskState, epoch = task.assistantEpoch ?? 0): void {
+    if (task.summary.delivery?.final_mr) throw new TaskControlError(FINAL_MR_ASSISTANT_READ_ONLY);
+    if ((task.assistantEpoch ?? 0) !== epoch || this.tasks.get(task.summary.id) !== task)
+      throw new TaskControlError("开发助手状态已变化，请刷新任务详情");
+  }
+
   /** 停止当前开发动作但不交还主现场。下一条消息会在同一接管上下文里
    * 懒重建会话，避免 Pi abort 后复用一个不确定的 session。 */
   async stopDeveloperAssistant(
@@ -12395,6 +12416,7 @@ export class TaskService {
   ): Promise<DeveloperAssistantView> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    this.assertDeveloperAssistantControl(task);
     const snapshot = readDeveloperAssistant(task.summary.workspace);
     if (snapshot.state === "acquiring") {
       appendDeveloperAssistantMessage(
@@ -12406,7 +12428,8 @@ export class TaskService {
     if (!["working", "running"].includes(snapshot.state)) {
       return this.developerAssistant(id);
     }
-    task.assistantEpoch = (task.assistantEpoch ?? 0) + 1;
+    const epoch = (task.assistantEpoch ?? 0) + 1;
+    task.assistantEpoch = epoch;
     const driver = task.driver;
     const container = task.container;
     const cleanup = await Promise.allSettled([
@@ -12420,6 +12443,7 @@ export class TaskService {
     if (cleanup[1].status === "fulfilled" && task.container === container) {
       task.container = undefined;
     }
+    this.assertDeveloperAssistantControl(task, epoch);
     const failures = cleanup.flatMap((result, index) =>
       result.status === "rejected"
         ? [`${index === 0 ? "会话中止" : "容器回收"}: ${String(result.reason)}`]
@@ -12445,6 +12469,7 @@ export class TaskService {
   ): Promise<TaskSummary> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    this.assertDeveloperAssistantControl(task);
     if (task.summary.status !== "paused") {
       throw new TaskControlError("只有已接管并暂停的主现场可以交还");
     }
@@ -12452,12 +12477,17 @@ export class TaskService {
     if (["acquiring", "working", "running"].includes(snapshot.state)) {
       throw new TaskControlError("开发助手仍在工作；请先停止当前动作再交还");
     }
-    if (task.assistantActive) await task.assistantActive;
+    if (task.assistantActive) {
+      const previous = task.assistantEpoch ?? 0;
+      await task.assistantActive;
+      this.assertDeveloperAssistantControl(task, previous);
+    }
     writeDeveloperAssistant(task.summary.workspace, {
       ...readDeveloperAssistant(task.summary.workspace),
       state: "returning",
     });
-    task.assistantEpoch = (task.assistantEpoch ?? 0) + 1;
+    const epoch = (task.assistantEpoch ?? 0) + 1;
+    task.assistantEpoch = epoch;
     const driver = task.driver;
     const container = task.container;
     const cleanup = await Promise.allSettled([
@@ -12471,6 +12501,7 @@ export class TaskService {
     if (cleanup[1].status === "fulfilled" && task.container === container) {
       task.container = undefined;
     }
+    this.assertDeveloperAssistantControl(task, epoch);
     const failures = cleanup.flatMap((result, index) =>
       result.status === "rejected"
         ? [`${index === 0 ? "会话中止" : "容器回收"}: ${String(result.reason)}`]
@@ -18160,8 +18191,19 @@ export class TaskService {
       if (!d?.mr_url || task.summary.origin === "issue" || this.isRequirementAnalysis(task)
           || ["completed", "canceled"].includes(task.summary.status) || continuationPending(task.summary))
         throw new TaskControlError("请在已有初版 MR 且尚未结束的需求交付任务中关联最终 MR");
+      const previous = d.final_mr;
+      if (previous?.state === "merged") {
+        if (previous.url !== url) throw new TaskControlError("最终 MR 已合入，不能再更换链接");
+        await this.refreshFinalMr(task, previous);
+        this.ensureMergeWatch(task);
+        return this.project(task);
+      }
       const epoch = task.controlEpoch;
       const mr = await this.readFinalMr(task, url);
+      if (d.final_mr?.state === "merged") {
+        if (d.final_mr.url !== url) throw new TaskControlError("最终 MR 已合入，不能再更换链接");
+        return this.project(task);
+      }
       if (this.shuttingDown || this.tasks.get(id) !== task || task.controlEpoch !== epoch
           || task.summary.delivery !== d || ["completed", "canceled"].includes(task.summary.status))
         throw new TaskControlError("任务状态已变化，请刷新后重试");
@@ -18247,6 +18289,17 @@ export class TaskService {
     const d = task.summary.delivery;
     const final = finalMrRecord(mr);
     if (String(final.id) !== String(linked.id)) throw new TaskControlError("最终 MR 标识已变化，请重新核对链接");
+    if (linked.state === "merged") {
+      // 已经观察到的合入事实不能被平台的旧响应撤销。这里只补同一次合入缺失的版本。
+      if (final.state !== "merged") {
+        this.options.log?.(`任务 ${task.summary.id} 已记录最终 MR 合入，本次查询返回 ${final.state}，将继续查询缺失的版本`);
+        return;
+      }
+      final.source_branch = linked.source_branch || final.source_branch;
+      final.target_branch = linked.target_branch || final.target_branch;
+      final.merged_at = linked.merged_at ?? final.merged_at;
+      final.base = linked.base ?? final.base;
+    }
     const wasStalled = !!d.stalled;
     if (wasStalled && final.state !== "merged") {
       const failures = await this.stopMrExecution(task);

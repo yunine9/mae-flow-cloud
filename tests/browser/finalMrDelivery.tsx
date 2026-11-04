@@ -7,11 +7,12 @@ import type { DeliveryAnalysisRow, MrComparisonDetail } from "../../src/delivery
 const root = createRoot(document.getElementById("app")!);
 const initialUrl = "https://codehub.example.test/orders/merge_requests/114";
 const finalUrl = "https://codehub.example.test/orders/merge_requests/126";
+const scenario = new URLSearchParams(location.search).get("scenario") ?? "task";
 const when = "2026-11-04T02:36:00Z";
 const sourceFile = "src/order/retry.ts";
 let task: TaskSummary = { id: "task-orders", title: "订单查询超时重试", requirement: "订单查询超时后再尝试一次", status: "await_merge",
   status_label: "等待合入", ticket: "REQ-1846", luban_account: "chen", created_at: when,
-  delivery: { mr_url: initialUrl, mr_state: "打开", initial_mr: { url: initialUrl, head: "a".repeat(40) } } };
+  delivery: { target_branch: "main", mr_url: initialUrl, mr_state: "打开", initial_mr: { url: initialUrl, head: "a".repeat(40) } } };
 const row: DeliveryAnalysisRow = { id: task.id, title: task.title!, delivery_id: "r2", at: when, completed_at: when, repo: "orders",
   modules: [], merged: true, mr_url: finalUrl, initial_mr_url: initialUrl, mr_comparison: { method: "patch", initial_head: "a".repeat(40), final_head: "b".repeat(40),
     retained: 8, removed: 1, added: 4, files: [
@@ -57,9 +58,9 @@ function button(label: string) {
   assert(target, "未找到按钮 " + label);
   return target;
 }
-function renderWorkspace(owner = true) {
-  root.render(<TaskWorkspace task={task} viewerUsername={owner ? "chen" : "guest"} canOverride={false} canCollaborate={owner}
-    canRequestReview={false} canOperate={owner} onChanged={() => renderWorkspace(owner)} onClose={() => {}} />);
+function renderWorkspace(owner = true, admin = false) {
+  root.render(<TaskWorkspace task={task} viewerUsername={owner ? "chen" : admin ? "admin" : "guest"} canOverride={admin} canCollaborate={owner}
+    canRequestReview={false} canOperate={owner || admin} onChanged={() => renderWorkspace(owner)} onClose={() => {}} />);
 }
 async function run() {
   if (new URLSearchParams(location.search).has("deliveryTask")) {
@@ -73,12 +74,15 @@ async function run() {
     await until(() => document.querySelector('pre[aria-label="从初版到最终版代码"]')?.textContent?.includes("toBe(2)"), "切换文件应更新代码");
     assert(calls.filter(call => call.url.includes("final-mr-comparison")).length === 1, "同一轮交付的证据按需读取一次");
     button(sourceFile).click(); await pause();
-  } else {
+  } else if (scenario === "task") {
     renderWorkspace();
     await until(() => [...document.querySelectorAll("button")].some(el => el.textContent?.startsWith("任务详情")), "应能从工作台打开任务详情");
     button("任务详情 ↗").click(); await until(() => document.querySelector('[data-slot="dialog-content"]'), "打开详情");
     button("关联最终 MR").click(); await pause();
     const field = document.querySelector<HTMLInputElement>('input[type="url"]')!;
+    const form = field.closest("form")!;
+    assert(form.textContent?.includes("停止本轮改码和推送") && form.textContent.includes("本轮无法切回平台改码")
+      && form.textContent.includes("原目标分支 main") && form.textContent.includes("新建任务"), "保存前应说明本轮不可切回、合入后如何继续");
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field, finalUrl);
     field.dispatchEvent(new Event("input", { bubbles: true })); await pause();
     button("保存关联").click();
@@ -91,13 +95,55 @@ async function run() {
     renderWorkspace(false); await pause();
     assert(![...document.querySelectorAll("button")].some(el => el.textContent === "更换最终 MR"), "只读访客不可更换最终 MR");
     renderWorkspace(); await pause(); button("更换最终 MR").click(); await pause();
-    if (new URLSearchParams(location.search).has("completed")) {
-      task = { ...task, status: "completed", status_label: "已完成", completed_at: when, delivery: { ...task.delivery,
-        mr_state: "已合入", final_mr: { ...task.delivery!.final_mr!, state: "merged" } } };
-      renderWorkspace(); await pause();
-      assert(document.querySelector('a[href="/?deliveryAnalysis=1&deliveryTask=task-orders"]'), "任务完成应能直达本次交付的代码差异");
+  } else {
+    const verifying = scenario === "verifying";
+    const state = scenario === "tracking" ? "opened" : scenario === "closed" ? "closed" : "merged";
+    const target = scenario === "different-target" ? "release/2.0" : scenario === "unknown-target" ? "" : "main";
+    task = { ...task, status: verifying ? "verifying" : state === "merged" ? "completed" : "await_merge",
+      status_label: verifying ? "正在核对" : state === "merged" ? "已完成" : "等待合入", completed_at: state === "merged" ? when : undefined,
+      delivery: { ...task.delivery, stalled: verifying ? "任务完成记录暂时无法保存" : undefined, mr_state: state === "merged" ? "已合入" : state === "closed" ? "已关闭" : "等待合入",
+        final_mr: { id: 126, repo: "orders", url: finalUrl, source_branch: "dev/retry-order", target_branch: target, state } } };
+    renderWorkspace();
+    if (verifying) {
+      await until(() => document.body.textContent?.includes("任务完成记录暂时无法保存"), "显示已合入但登记失败的事实");
+      assert(!document.querySelector('[aria-label="交付验证"]') && !document.body.textContent?.includes("按原流程重试"), "关联后验证异常不可恢复原自动修复流程");
+      assert(document.querySelector('a[href="' + finalUrl + '"]'), "故障时可查看已合入的最终 MR");
+      assert(!document.querySelector('button[title^="取消后"]'), "已合入不能再取消任务");
+      button("任务详情 ↗").click(); await pause();
+      assert(![...document.querySelectorAll("button")].some(el => el.textContent === "更换最终 MR"), "已合入待登记不能随意改绑");
+      button("关闭任务详情").click(); await pause();
+    } else if (state !== "merged") {
+      await until(() => document.body.textContent?.includes("本轮平台只读"), "最终 MR 关联后工作台应主动显示只读说明");
+      const nextStep = state === "closed" ? "更换最终 MR" : "本地修改并推送";
+      assert(document.body.textContent?.includes(nextStep), "工作台应说明可以去哪里继续");
+      button("任务详情 ↗").click(); await pause();
+      assert(document.querySelector('[data-slot="dialog-content"]')?.textContent?.includes(nextStep), "任务详情也应说明下一步");
+      assert(document.querySelector('a[href="' + finalUrl + '"]'), "允许前往最终 MR");
+      if (state === "closed") assert(button("更换最终 MR"), "允许在原任务更换最终 MR");
+    } else {
+      await until(() => document.querySelector('[aria-label="继续修改与交付历史"]'), "在任务完成页展示下一轮提示");
+      const panel = document.querySelector('[aria-label="继续修改与交付历史"]')!;
+      if (scenario === "completed") {
+        assert(panel.textContent?.includes("从 main 分支的最新版本开始"), "提示下一轮实际目标分支");
+        renderWorkspace(false, true); await pause();
+        assert(![...panel.querySelectorAll("button")].some(item => item.textContent === "继续修改"), "管理员不能代责任人继续修改");
+        renderWorkspace(); await pause();
+        button("继续修改").click(); await pause();
+        assert(panel.textContent?.includes("云端工作区未提交的代码修改") && panel.textContent.includes("远端仍有同名工作分支")
+          && panel.textContent.includes("新建任务"), "开始下一轮前应说明云端会重建工作分支，以及远端分支保留时如何继续");
+        button("取消").click(); await pause();
+      } else {
+        assert(!panel.querySelector("button") && !panel.querySelector("textarea"), "缺少或不同目标分支时不应显示继续修改");
+        const message = panel.textContent ?? "";
+        assert(message.includes("main") && message.includes(target || "未知") && message.includes("创建新任务"), "必须解释分支差异和可执行的下一步");
+      }
+      button("任务详情 ↗").click(); await pause();
+      assert(document.querySelector('a[href="/?deliveryAnalysis=1&deliveryTask=task-orders"]'), "所有已合入最终 MR 均能查看差异");
       assert(!document.querySelector('input[type="url"]'), "已完成任务不可再次更换关联");
+      button("关闭任务详情").click(); await pause();
+      if (scenario === "completed") { button("继续修改").click(); await pause(); }
     }
+    assert(!calls.some(call => call.method === "POST"), "浏览提示不应启动交付或修改任务");
   }
   return { passed: true, width: innerWidth };
 }
