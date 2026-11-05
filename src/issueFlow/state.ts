@@ -854,9 +854,9 @@ export function loadState(root: string): IssueSessionState | undefined {
 }
 
 /** 状态落盘:临时文件 + rename 保原子(与 waiting.json 同款纪律)。 */
-export function saveState(root: string, state: IssueSessionState): void {
+export function saveState(root: string, state: IssueSessionState, options?: { preserveUpdatedAt?: boolean }): void {
   mkdirSync(root, { recursive: true });
-  state.updated_at = new Date().toISOString();
+  if (!options?.preserveUpdatedAt) state.updated_at = new Date().toISOString();
   const path = join(root, "issue.json");
   durableWriteFileSync(path, JSON.stringify(state, null, 1));
 }

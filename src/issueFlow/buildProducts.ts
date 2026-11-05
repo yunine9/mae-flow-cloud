@@ -1,8 +1,10 @@
 import { lstatSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
-// 只回收这些编译目录；仓根 build 是构建脚本，target 下的库和报告也保留。
+// 仓根 build 是构建脚本，不能按名字清理；链接库采用更长的冷却期。
 const PRODUCT_DIRS = ["target/build", "target/obj", "target/classes", "target/test-classes"];
+const LIBRARY_DIRS = ["target/dev_lib", "target/lib"];
+export const BUILD_LIBRARIES_COOLDOWN_MS = 7 * 24 * 3_600_000;
 
 function isDirectory(root: string, relative: string): boolean {
   try {
@@ -34,13 +36,17 @@ function coldSize(path: string, cutoff: number): number | undefined {
 }
 
 /** 调用方先确认会话闲置；全程同步，删除不会与同一进程的新回合交错。 */
-export function reclaimBuildProducts(repoRoot: string, cutoff: number): { bytes: number; directories: number } {
+export function reclaimBuildProducts(repoRoot: string, cutoff: number, libraryCutoff?: number): { bytes: number; directories: number } {
   const result = { bytes: 0, directories: 0 };
   if (!isDirectory(repoRoot, "")) return result;
   for (const entry of readdirSync(repoRoot, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const repo = join(repoRoot, entry.name);
-    const candidates = PRODUCT_DIRS.flatMap(path => {
+    const paths = PRODUCT_DIRS.map(path => ({ path, cutoff }));
+    if (libraryCutoff !== undefined) {
+      paths.push(...LIBRARY_DIRS.map(path => ({ path, cutoff: libraryCutoff })));
+    }
+    const candidates = paths.flatMap(({ path, cutoff }) => {
       if (!isDirectory(repo, path)) return [];
       const bytes = coldSize(join(repo, path), cutoff);
       return bytes === undefined ? [] : [{ path, bytes }];

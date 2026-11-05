@@ -69,6 +69,98 @@ function makeService(runtime?: Record<string, number>) {
   return { service, dataDir, issuesRoot: join(dataDir, "issues") };
 }
 
+function addLibraries(root: string, ageHours = 8 * 24): void {
+  const old = new Date(Date.now() - ageHours * 3_600_000);
+  for (const name of ["dev_lib", "lib"]) {
+    const directory = join(root, "repo/demo/target", name);
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, "demo.so"), "library");
+    utimesSync(join(directory, "demo.so"), old, old);
+    utimesSync(directory, old, old);
+  }
+}
+
+test("#586 长期等待回收冷链接库，保留报告并通知续跑", async () => {
+  const { service, issuesRoot } = makeService();
+  const root = fabricateIssue(issuesRoot, "issue-586", "waiting_user", { oldProducts: true });
+  const repo = join(root, "repo/demo");
+  addLibraries(root);
+  mkdirSync(join(repo, ".mae-flow-work"));
+  writeFileSync(join(repo, ".mae-flow-work/mae-first-build.json"), "{}");
+  writeFileSync(join(repo, "target/report.xml"), "report");
+  const result = await service.sweepTerminalRepos();
+  for (const name of ["dev_lib", "lib"]) assert.equal(existsSync(join(repo, "target", name)), false, name);
+  assert.ok(result.productBytes >= 14);
+  assert.ok(existsSync(join(repo, "target/report.xml")));
+  assert.equal(existsSync(join(repo, ".mae-flow-work/mae-first-build.json")), false);
+  const state = JSON.parse(readFileSync(join(root, "issue.json"), "utf8"));
+  assert.ok(state.build_products_reclaimed_at);
+  assert.equal(state.parked_notices.length, 1);
+  const events = readFileSync(join(root, "events.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+  assert.equal(events[0].kind, "workspace_reclaimed");
+  assert.equal(events[0].payload.directories, 3);
+  assert.equal(events[0].payload.bytes, 20);
+  assert.equal((await service.sweepTerminalRepos()).productBytes, 0);
+});
+
+test("#586 一级清理不刷新闲置时间，七天后可接续回收链接库", async (t) => {
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
+  const { service, issuesRoot } = makeService();
+  const root = fabricateIssue(issuesRoot, "issue-586", "waiting_user", { oldProducts: true });
+  addLibraries(root);
+  const file = join(root, "issue.json");
+  const state = JSON.parse(readFileSync(file, "utf8"));
+  state.updated_at = new Date(now - 6 * 24 * 3_600_000).toISOString();
+  writeFileSync(file, JSON.stringify(state));
+  await service.sweepTerminalRepos();
+  assert.equal(existsSync(join(root, "repo/demo/target/build")), false);
+  assert.ok(existsSync(join(root, "repo/demo/target/lib")));
+  assert.equal(JSON.parse(readFileSync(file, "utf8")).updated_at, state.updated_at);
+  now += 2 * 24 * 3_600_000;
+  assert.equal((await service.sweepTerminalRepos()).productBytes, 14);
+  assert.equal(existsSync(join(root, "repo/demo/target/dev_lib")), false);
+  const after = JSON.parse(readFileSync(file, "utf8"));
+  assert.equal(after.updated_at, state.updated_at);
+  assert.equal(after.parked_notices.length, 1, "续跑通知不重复");
+});
+
+test("#586 链接库保护近期写入、近期预热和不可自动回收的会话", async () => {
+  for (const scenario of ["fresh_file", "warmup", "running", "failed", "queued", "disabled", "long_cooldown"]) {
+    const runtime = { issue_build_products_cooldown_hours: scenario === "disabled" ? 0 : scenario === "long_cooldown" ? 9 * 24 : 24 };
+    const { service, issuesRoot } = makeService(runtime);
+    const status = ["running", "failed", "queued"].includes(scenario) ? scenario : "idle";
+    const root = fabricateIssue(issuesRoot, "issue-586", status, { oldProducts: true });
+    addLibraries(root);
+    if (scenario === "fresh_file") {
+      const recent = new Date();
+      for (const name of ["dev_lib", "lib"]) utimesSync(join(root, "repo/demo/target", name, "demo.so"), recent, recent);
+    }
+    if (scenario === "warmup") {
+      const file = join(root, "issue.json");
+      const state = JSON.parse(readFileSync(file, "utf8"));
+      state.warmup = { finished_at: new Date(Date.now() - 2 * 24 * 3_600_000).toISOString() };
+      writeFileSync(file, JSON.stringify(state));
+    }
+    await service.sweepTerminalRepos();
+    for (const name of ["dev_lib", "lib"]) assert.ok(existsSync(join(root, "repo/demo/target", name)), scenario);
+  }
+});
+
+test("#586 链接库与父目录的软链接不越界回收", async () => {
+  const { service, issuesRoot } = makeService();
+  const external = mfcTemp("mfc-libraries-outside-");
+  mkdirSync(join(external, "dev_lib"));
+  writeFileSync(join(external, "dev_lib/keep.so"), "external");
+  const root = fabricateIssue(issuesRoot, "issue-586", "waiting_user", { oldProducts: true });
+  symlinkSync(external, join(root, "repo/demo/target/lib"));
+  mkdirSync(join(root, "repo/other"));
+  symlinkSync(external, join(root, "repo/other/target"));
+  await service.sweepTerminalRepos();
+  assert.ok(existsSync(join(root, "repo/demo/target/lib")));
+  assert.equal(readFileSync(join(external, "dev_lib/keep.so"), "utf8"), "external");
+});
+
 test("终态回收:canceled/archived 的 repo 整树消失,标记与事件账落盘,报告保留", async () => {
   const { service, issuesRoot } = makeService();
   const canceled = fabricateIssue(issuesRoot, "issue-1", "canceled");
@@ -228,6 +320,7 @@ test("主回合、预热、辅助会话、容器命令、人工接管期间均�
   for (const busy of ["turn", "warmup", "auxiliary", "exec", "takeover"]) {
     const { service, issuesRoot } = makeService();
     const root = fabricateIssue(issuesRoot, "issue-1", "waiting_user", { oldProducts: true });
+    addLibraries(root);
     const state = JSON.parse(readFileSync(join(root, "issue.json"), "utf8"));
     const live: any = { root, id: state.id, state };
     (service as any).live.set(state.id, live);
@@ -238,6 +331,8 @@ test("主回合、预热、辅助会话、容器命令、人工接管期间均�
     if (busy === "auxiliary") trackAuxiliarySession(live, {} as any, auxiliarySessionEpoch(live));
     await service.sweepTerminalRepos();
     assert.ok(existsSync(join(root, "repo/demo/target/build")), busy);
+    assert.ok(existsSync(join(root, "repo/demo/target/dev_lib")), busy);
+    assert.ok(existsSync(join(root, "repo/demo/target/lib")), busy);
   }
 });
 
