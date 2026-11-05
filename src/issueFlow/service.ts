@@ -3139,8 +3139,9 @@ export class IssueFlowService {
     }
     if (state.mr_repair_closing && outcome.status === "turn_finished") {
       // 修绿总结轮落定(ADR-0073):修复会话的终点就是修绿,总结即归档
-      // ——打通终态卫生尾巴,现场不再永驻。阶段若已被重开(返工),
-      // 旗子作废,等下次收口再举。
+      // ——打通终态卫生尾巴,现场不再永驻。总结轮若转等人(AI 提问),
+      // 旗子保留:用户的回答仍是收口对话的一部分,下一个落定的回合照常
+      // 收口。阶段若已被重开(返工),旗子作废,等下次收口再举。
       if (state.scenario === "mr_repair" && this.mrGreenClosed(state)) {
         this.archiveMrRepair(live);
         return;
@@ -5686,21 +5687,7 @@ export class IssueFlowService {
         // 上面(或开关关闭时原样保留),本模块跳过它。
         if (this.workspaceRetentionOn()) {
           try {
-            const result = reclaimIssueWorkspace(live.root,
-              { dataDir: this.options.dataDir });
-            if (result.refused) {
-              this.log(`[issue-flow] ${live.id} 名单外当场清被边界拦下: `
-                + result.refused);
-            } else if (result.removed.length) {
-              this.appendSessionEvent(live, "workspace_reclaimed", {
-                bytes: result.freed,
-                scope: "loose",
-                entries: result.removed.map((entry) => entry.name),
-              });
-              this.log(`[issue-flow] ${live.id} 终态当场清名单外 `
-                + `${result.removed.length} 项(释放 ${humanBytes(result.freed)}): `
-                + result.removed.map((entry) => entry.name).join("、"));
-            }
+            this.reclaimLooseEntries(live.root, live.id);
           } catch (error) {
             this.log(`[issue-flow] ${live.id} 名单外当场清失败(下次清扫重试): `
               + String(error instanceof Error ? error.message : error));
@@ -5712,6 +5699,28 @@ export class IssueFlowService {
       fetchCredential: this.options.gitCredential?.(live.state.account),
     }, { onSettled: reclaim, log: (message) => this.log(message) });
     if (!queued) reclaim();
+  }
+
+  /** 保留名单外清理的共享出口(ADR-0073):当场路与兜底清扫同走这一段
+   *  ——删除、逐条目事件账(条目名+字节数,漏项对账靠它定位到条)、
+   *  日志。repo/ 不归这里(专属路径管)。返回释放字节数。 */
+  private reclaimLooseEntries(root: string, id: string): number {
+    const result = reclaimIssueWorkspace(root,
+      { dataDir: this.options.dataDir });
+    if (result.refused) {
+      this.log(`[issue-flow] ${id} 名单外清理被边界拦下: ${result.refused}`);
+      return 0;
+    }
+    if (!result.removed.length) return 0;
+    this.appendSessionEvent({ root, id }, "workspace_reclaimed", {
+      bytes: result.freed,
+      scope: "loose",
+      entries: result.removed,
+    });
+    this.log(`[issue-flow] ${id} 清名单外 ${result.removed.length} 项`
+      + `(释放 ${humanBytes(result.freed)}): `
+      + result.removed.map((entry) => entry.name).join("、"));
+    return result.freed;
   }
 
   // ---- 磁盘治理:终态现场回收与构建产物冷却清理(票 01/03) ----
@@ -5778,7 +5787,7 @@ export class IssueFlowService {
           // 保留期。判据与当场制同一把尺子(旋钮/终态/容器),单点住在
           // judgeIssueReclaim——容器探活统一走注册表,不再只看内存句柄。
           const verdict = judgeIssueReclaim(
-            { id: state.id, status: state.status },
+            { status: state.status },
             { retentionEnabled: retentionOn,
               containerRunning: this.hasRunningContainer(name) });
           if (!verdict.reclaim) continue;
@@ -5804,21 +5813,7 @@ export class IssueFlowService {
           }
           // 保留名单外(ADR-0073):repo 已被上面处理(开关关闭时原样
           // 保留),这里清其余全部——见一个清一个。
-          const loose = reclaimIssueWorkspace(root,
-            { dataDir: this.options.dataDir });
-          if (loose.refused) {
-            this.log(`[issue-flow] ${name} 清扫被边界拦下: ${loose.refused}`);
-            continue;
-          }
-          if (loose.removed.length) {
-            looseBytes += loose.freed;
-            this.appendSessionEvent({ root, id: name }, "workspace_reclaimed",
-              { bytes: loose.freed, scope: "loose",
-                entries: loose.removed.map((entry) => entry.name) });
-            this.log(`[issue-flow] ${name} 清扫清名单外 `
-              + `${loose.removed.length} 项(释放 ${humanBytes(loose.freed)}): `
-              + loose.removed.map((entry) => entry.name).join("、"));
-          }
+          looseBytes += this.reclaimLooseEntries(root, name);
         } else if (productsCooldownMs > 0 && withinDataDir(root, this.options.dataDir)) {
           const cutoff = Date.now() - productsCooldownMs;
           if (!["idle", "waiting_user"].includes(state.status)

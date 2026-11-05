@@ -40,7 +40,10 @@ export const ISSUE_WORKSPACE_KEEP_FILES: readonly string[] = [
   "transcript.jsonl",     // 会话记录
   "knowledge-events.jsonl", // 知识事件账
   "waiting.json",         // 等人卡
-  "issue-analysis.md",    // 分析报告
+  "issue-analysis.md",    // 分析报告(正本)
+  "reviews.jsonl",        // 检视意见账(reviews.ts REVIEWS_FILE)
+  "code-origin.json",     // 首次生成归属的伴生统计(ADR-0044)
+  "manual-edits.jsonl",   // 人工编辑账(ADR-0028 遗留口径:历史会话在盘,永不回收)
 ];
 
 export const ISSUE_WORKSPACE_KEEP_DIRS: readonly string[] = [
@@ -50,6 +53,7 @@ export const ISSUE_WORKSPACE_KEEP_DIRS: readonly string[] = [
   "local-logs",     // 现场日志
   "pipeline",       // 流水线取证(红灯修复的依据)
   "feedback",       // 意见账
+  "reviews",        // 检视意见快照 + 分析报告版本快照(reviews.ts REVIEWS_DIR)
   "codecheck",      // 宿主的代码检查辅助会话记录
   "warmup",         // 预热会话记录
 ];
@@ -73,7 +77,6 @@ export interface IssueReclaimVerdict {
 
 /** 判据的输入面:只取 issue.json 里裁决要用的字段(纯函数,好测)。 */
 export interface IssueReclaimCandidate {
-  id: string;
   status: string;
 }
 
@@ -120,10 +123,6 @@ function sizeOf(path: string): number {
   } catch {
     return 0;       // 量不出来不影响删,日志少个数字而已
   }
-}
-
-function lstatSyncSafe(path: string): number {
-  try { return lstatSync(path).size; } catch { return 0; }
 }
 
 export interface ReclaimedEntry {
@@ -174,15 +173,15 @@ export function reclaimIssueWorkspace(
   for (const entry of entries) {
     if (keep.has(entry.name)) continue;
     const target = join(root, entry.name);
-    const size = entry.isDirectory()
-      ? sizeOf(target)
-      : lstatSyncSafe(target);
     try {
+      const size = entry.isDirectory()
+        ? sizeOf(target)
+        : lstatSync(target).size;
       rmSync(target, { recursive: true, force: true });
       removed.push({ name: entry.name, bytes: size });
       freed += size;
     } catch {
-      // 单个条目删不动(权限/占用)不中断,下一个接着来。
+      // 单个条目量不动/删不动(竞态消失/权限/占用)不中断,下一个接着来。
     }
   }
   return { removed, freed };
@@ -232,4 +231,3 @@ export function sweepIssueAttachmentStaging(
   return result;
 }
 
-export { humanBytes };

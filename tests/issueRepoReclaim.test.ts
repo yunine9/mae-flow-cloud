@@ -178,8 +178,9 @@ test("存量欠账清扫:终态会话的名单外堆积见一个清一个,不等
     && event.payload.scope === "loose");
   assert.ok(loose, "名单外清理落事件账");
   assert.ok(Array.isArray(loose.payload.entries)
-    && loose.payload.entries.includes(".codecheck-home"),
-  "逐条目留痕(条目名)");
+    && loose.payload.entries.some((entry: { name: string; bytes: number }) =>
+      entry.name === ".codecheck-home" && entry.bytes > 0),
+  "逐条目留痕(条目名+字节数,ADR-0073 漏项对账靠它)");
 });
 
 test("保留期旋钮 0 = 整体禁运:终态会话的名单外堆积也不碰", async () => {

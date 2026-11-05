@@ -66,6 +66,11 @@ function sessionRoot(dataDir: string, id: string): string {
   writeFileSync(join(root, "codecheck", "transcript.jsonl"), '{"role":"assistant"}\n');
   mkdirSync(join(root, "warmup"), { recursive: true });
   writeFileSync(join(root, "warmup", "transcript.jsonl"), '{"role":"assistant"}\n');
+  writeFileSync(join(root, "reviews.jsonl"), '{"text":"这里要写清阈值"}\n');
+  mkdirSync(join(root, "reviews"), { recursive: true });
+  writeFileSync(join(root, "reviews", "issue-analysis.v2.md"), "报告修订版");
+  writeFileSync(join(root, "code-origin.json"), '{"ratio":0.83}');
+  writeFileSync(join(root, "manual-edits.jsonl"), '{"path":"repo/svc/Main.java"}\n');
 
   // —— 名单外(当场清;命名学 Agent 的 9 种变体)——
   mkdirSync(join(root, "repo", "order-service", ".git"), { recursive: true });
@@ -218,7 +223,7 @@ test("issues/ 下的软链接不许绕过边界:realpath 在外面就一个字�
 
 test("判据:旋钮 0 禁运、非终态不碰、容器在跑跳过、终态即到点", () => {
   const off = judgeIssueReclaim(
-    { id: "issue-1", status: "archived" }, { retentionEnabled: false });
+    { status: "archived" }, { retentionEnabled: false });
   assert.equal(off.reclaim, false);
   assert.match(off.reason, /永不回收/);
   assert.equal(off.skip, "retention_off");
@@ -226,13 +231,13 @@ test("判据:旋钮 0 禁运、非终态不碰、容器在跑跳过、终态即�
   for (const status of ["running", "waiting_user", "idle", "queued",
                         "failed"]) {
     const skip = judgeIssueReclaim(
-      { id: "issue-1", status }, { retentionEnabled: true });
+      { status }, { retentionEnabled: true });
     assert.equal(skip.reclaim, false, `${status} 不可自动回收`);
     assert.equal(skip.skip, "not_terminal", `${status} 的跳过码`);
   }
 
   const busy = judgeIssueReclaim(
-    { id: "issue-1", status: "canceled" },
+    { status: "canceled" },
     { retentionEnabled: true, containerRunning: true });
   assert.equal(busy.reclaim, false);
   assert.equal(busy.skip, "container_running");
@@ -240,7 +245,7 @@ test("判据:旋钮 0 禁运、非终态不碰、容器在跑跳过、终态即�
   // 当场制没有年龄:刚收口的终态与一年前的终态同一条路。
   for (const status of ["archived", "canceled"]) {
     const go = judgeIssueReclaim(
-      { id: "issue-1", status }, { retentionEnabled: true });
+      { status }, { retentionEnabled: true });
     assert.equal(go.reclaim, true, `${status} 终态即到点`);
   }
 });

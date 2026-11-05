@@ -8,7 +8,7 @@
 
 **决策(拍板)**:
 
-- **保留名单**(终态后永不回收,人和软件都还要用):文件 `issue.json`、`events.jsonl`、`transcript.jsonl`、`knowledge-events.jsonl`、`waiting.json`、`issue-analysis.md`;目录 `attachments/`、`ticket-images/`、`issue-images/`、`local-logs/`、`pipeline/`、`feedback/`、`codecheck/`、`warmup/`。与「过程记录永不回收」原则对齐;名单的准入门是"软件在用",不是"拿不准就留"。
+- **保留名单**(终态后永不回收,人和软件都还要用):文件 `issue.json`、`events.jsonl`、`transcript.jsonl`、`knowledge-events.jsonl`、`waiting.json`、`issue-analysis.md`、`reviews.jsonl`、`code-origin.json`、`manual-edits.jsonl`;目录 `attachments/`、`ticket-images/`、`issue-images/`、`local-logs/`、`pipeline/`、`feedback/`、`reviews/`、`codecheck/`、`warmup/`。与「过程记录永不回收」原则对齐;名单的准入门是"软件在用",不是"拿不准就留"。(reviews 系列与 code-origin.json 由实现期代码评审补入——首版枚举的 grep 只认字面量拼装,漏掉了经常量间接引用的宿主写入,评审后改为对常量与字面量双路枚举。)
 - **名单外一律回收,不分大小**:目录和文件同规则——机制只区分"在不在名单",不设体量阈值,两套判据必然打架。`skills/`(物化副本,终态无消费者)、`.mae-flow-work/`(AI 倾倒)、`pi-agent/`(运行时残件,躺着网关密钥)、Agent 自建的一切(codecheck-* 变体等)全落名单外。旧必删名单(`ISSUE_RECLAIM_HEAVY`)作废,其成员自然落入名单外。
 - **时机=终态当场**:归档/取消当场清名单外全部,与 `repo/` 同一异步收尾(首次生成归属算完后执行,ADR-0044 顺序不变)。问题流不再有 14 天等待:`workspace_retention_days` 对问题流只剩 0=整体禁运(逃生门);非 0 天数只用于需求侧现场与附件中转 GC。清扫器(每小时)保留,职责改为兜底:崩溃缺口(终态已落盘但收尾没跑完)与本次改造前的存量欠账(72G codecheck 等)见一个清一个,**不再等保留期**——现网 /data 已 0 可用,存量等不起。保险丝不变:容器在跑/回合进行中跳过、单条目失败不中断、删除逐条目落事件账(条目名+字节数)。
 - **mr-repair 会话落终态**:流水线修绿收口后(总结轮跑完)落 `archived`,打通全部现有回收链路;`purpose=pipeline_repair` 的终态卫生早退删除,清扫兜底覆盖 `<dataDir>/pipeline-repairs/` 根。
@@ -19,4 +19,8 @@
 
 **曾考虑**:(a) 扩必删名单收编 codecheck 变体——否,追不上命名创造力,治标;(b) 未知条目超阈值(如 100M)才删——否,拍板不分大小,体量判据与名单判据并存只会混乱;(c) 名单外满保留期再删——否,拍板当场;名单漏项的兜底靠枚举纪律与事件账,不靠时间窗口;(d) 图片中转按年龄删+回显路由加工作区副本回退——否,回显按哈希寻址无会话上下文,回退要扫全部会话目录,为 MB 级图片加机制不值;(e) mr-repair 用独立判据(绿收口时间+保留期)不落终态——否,为一条流养第二套判定逻辑正是本次病根;(f) 保留 `.mae-flow-work/`(内含宿主记账子目录)——否,记账只服务在跑会话,终态后无读者,18G 大户不能为它豁免。
 
-**验收(实现期)**:定向测试——保留名单判定(名单内不动/名单外删/0 禁运/容器在跑跳过/越界拒删/软链不跟随)、终态收尾当场清、清扫兜底清存量与 pipeline-repairs 根、mr-repair 修绿落终态、附件中转 GC 年龄闸与图片中转豁免、事件账留痕字段;根 typecheck。不跑全量(AGENTS.md 测试纪律)。
+**验收(实现期)**:定向测试——保留名单判定(名单内不动/名单外删/0 禁运/容器在跑跳过/越界拒删/软链不跟随)、终态收尾当场清、清扫兜底清存量与 pipeline-repairs 根、mr-repair 修绿落终态、附件中转 GC 年龄闸与图片中转豁免、事件账逐条目留痕(条目名+字节数);根 typecheck。不跑全量(AGENTS.md 测试纪律)。
+
+**增补回写**(CODING_STANDARDS 纪律,被本 ADR 取代的旧表述):
+- ADR-0028「历史 manual-edits.jsonl 文件保留在盘(磁盘治理台账永不回收的口径不变)」——口径维持,且该文件显式进保留名单;不因名单外当场清而失效。
+- ADR-0026「终态只回收 repo/,local-logs 保留期内仍在」「问题流按保留期回收」——被当场制取代:终态清名单外全部(local-logs 在保留名单不受影响),问题流不再有保留期等待;`workspace_retention_days` 对问题流只剩 0=整体禁运。
