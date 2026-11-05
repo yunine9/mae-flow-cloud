@@ -88,8 +88,8 @@ test("邀请他人检视在任务头独立可见，不依赖打开批注面板",
     workspace.indexOf('{task.feedback_error &&'));
   // #227 换装:邀请入口换 shadcn Button,锚点从裸 <button> 与皮肤类改钉
   // 组件与文案;可见性条件仍钉在头部权限上。
-  assert.match(controls, /canRequestReview && task\.status !== "canceled" && <Button/,
-    "邀请入口只对有权限者可见,且已取消任务不再提供");
+  assert.match(controls, /canRequestReview && !task\.delivery\?\.final_mr && !isReviewTaskEnded\(task\.status\) && <Button/,
+    "邀请入口只对有权限者可见，已结束或进入最终 MR 交付的任务不再提供");
   assert.match(controls, /邀请他人检视/);
   assert.match(controls, /aria-haspopup="dialog" aria-expanded=\{reviewInviteOpen\}/);
   assert.match(controls, /setReviewInviteOpen\(true\)/);
@@ -100,7 +100,7 @@ test("邀请他人检视在任务头独立可见，不依赖打开批注面板",
   // #207 邀请弹层迁 shadcn Dialog(portal 到 body,role=dialog/Esc/焦点
   // 归原语):锚点从手搓 workspace-invite-dialog 改钉现 Dialog DOM,
   // 入口条件仍钉在头部权限上。
-  assert.match(workspace, /task\.status !== "canceled" && <Dialog open/);
+  assert.match(workspace, /!isReviewTaskEnded\(task\.status\) && <Dialog open/);
   assert.match(workspace, /<DialogContent className="tw-root sm:max-w-\[460px\]">/);
   assert.match(workspace, /<DialogTitle>邀请 Committer 检视<\/DialogTitle>/);
   assert.match(workspace, /<UserPicker multiple ariaLabel="选择 Committer"/);

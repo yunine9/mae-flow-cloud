@@ -1,3 +1,8 @@
+/** 失败和暂停仍可继续处理；完成或取消后不再保留待检视邀请。 */
+export function isReviewTaskEnded(status: string | undefined): boolean {
+  return status === "completed" || status === "canceled";
+}
+
 /** 邀请参与检视不随分析阶段开关；决定卡仍使用各自的审批权限。 */
 export function isInvitedReviewParticipant(task: {
   collaborators?: string[];

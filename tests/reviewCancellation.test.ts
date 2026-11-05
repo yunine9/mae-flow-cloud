@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
@@ -113,7 +113,7 @@ test("责任人通过 HTTP 取消后，多人检视收件箱清空；旧完成�
   }
 });
 
-test("邀请通知尚未返回时取消任务，迟到的发送回执仍返回已关闭", async (t) => {
+for (const status of ["completed", "canceled"] as const) test(`邀请通知尚未返回时任务变为 ${status}，迟到的发送回执仍返回已关闭`, async (t) => {
   const notifier = new Notifier({ endpoint: "http://127.0.0.1:1" });
   let release!: () => void;
   const held = new Promise<void>((resolve) => { release = resolve; });
@@ -127,8 +127,42 @@ test("邀请通知尚未返回时取消任务，迟到的发送回执仍返回�
   const task = service.create("通知在途", { account: "owner" });
   const pending = service.requestReview(task.id, "owner", "bob");
   try {
-    await service.cancel(task.id, "owner");
+    if (status === "canceled") await service.cancel(task.id, "owner");
+    else {
+      const internal = (service as any).tasks.get(task.id);
+      internal.summary.status = status;
+      (service as any).persist(internal);
+    }
   } finally { release(); }
   assert.equal((await pending).status, "canceled");
   assert.equal(service.listReviewsFor("bob")[0].status, "canceled");
+});
+
+test("重启读取已完成任务的遗留邀请会持久关闭，失败和暂停任务仍可检视", async t => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-review-completed-recover-"));
+  const service = new TaskService({ dataDir, provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0 });
+  const path = join(dataDir, "reviews.jsonl");
+  const reviews = new ReviewStore(path);
+  const ids: Record<string, string> = {};
+  for (const status of ["completed", "failed", "paused"]) {
+    const task = service.create(status);
+    ids[status] = task.id;
+    const taskPath = join(task.workspace, "task.json");
+    const stored = JSON.parse(readFileSync(taskPath, "utf8"));
+    stored.summary.status = status;
+    writeFileSync(taskPath, JSON.stringify(stored));
+    reviews.create({ taskId: task.id, taskTitle: status, requester: "owner", committer: "bob" });
+  }
+  const restored = new TaskService(service.options);
+  t.after(async () => { await restored.shutdown(); await service.shutdown(); rmSync(dataDir, { recursive: true, force: true }); });
+  restored.recover();
+  const records = restored.listReviewsFor("bob");
+  assert.equal(records.find(row => row.task_id === ids.completed)?.status, "canceled");
+  assert.equal(records.find(row => row.task_id === ids.completed)?.completed_at, undefined);
+  assert.equal(records.find(row => row.task_id === ids.failed)?.status, "pending");
+  assert.equal(records.find(row => row.task_id === ids.paused)?.status, "pending");
+  const saved = readFileSync(path, "utf8");
+  restored.listReviewsFor("bob");
+  assert.equal(readFileSync(path, "utf8"), saved, "旧记录只关闭一次");
+  assert.equal(new ReviewStore(path).forTask(ids.completed)[0].status, "canceled");
 });

@@ -1,4 +1,5 @@
 import { runCodecheckPrepush, type CodecheckRunner } from "./codecheckPrepush.ts";
+import { isReviewTaskEnded } from "./reviewParticipation.ts";
 import { runCodecheckSkillSession } from "./codecheckSkillSession.ts";
 import { createContainerBashOperations } from "./issueFlow/containerBash.ts";
 import { assertNoCodecheckCommits, CodecheckArtifactCommitError } from "./codecheckArtifacts.ts";
@@ -1921,7 +1922,7 @@ export class TaskService {
     try { initializeImprovementPolicy(options.dataDir); } catch (error) { options.log?.(`自动交付分析设置未保存：${String(error)}`); }
     this.knowledgeTaskCapacity.register(() => this.extractionRunning.size, () => this.pumpSkillExtraction());
     this.reviews = new ReviewStore(join(options.dataDir, "reviews.jsonl"),
-      (id) => this.tasks.get(id)?.summary.status === "canceled");
+      (id) => isReviewTaskEnded(this.tasks.get(id)?.summary.status));
     if (options.memory) {
       // 旁路:起不来只记日志,任务照跑;首次真用时再等 ready。
       this.memorySidecar = new MemorySidecar({
@@ -3322,7 +3323,8 @@ export class TaskService {
   ): Promise<ReviewRequest> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
-    if (task.summary.status === "canceled") throw new TaskControlError("任务已取消，不能再邀请检视");
+    if (isReviewTaskEnded(task.summary.status)) throw new TaskControlError(
+      `任务已${task.summary.status === "canceled" ? "取消" : "结束"}，不能再邀请检视`);
     const notifier = this.options.notifier;
     if (!notifier) throw new Error("本部署未接通知器");
     const review = this.reviews.create({
@@ -8333,7 +8335,7 @@ export class TaskService {
       this.deliverySummaries.start(task);
     }
     this.considerDeliveryImprovement(task);
-    if (task.summary.status === "canceled") this.reviews.cancelTask(task.summary.id);
+    if (isReviewTaskEnded(task.summary.status)) this.reviews.cancelTask(task.summary.id);
     // 文件先落袋(它才是真相),投影旁路跟进;失败由投影自己 fail-open。
     this.bypass(task, "投影 upsert",
       this.options.projection?.upsertTask(this.project(task)));

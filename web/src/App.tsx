@@ -1,4 +1,5 @@
 import { issueSessionPath } from "./issues/issueLink";
+import { isReviewTaskEnded } from "../../src/reviewParticipation";
 import { KnowledgeAnswerPage, openKnowledgeAnswer } from "./KnowledgeAnswerPage";
 import { KnowledgeLibrary } from "./KnowledgeLibrary";
 import { PeopleProvider, PersonName, usePersonName } from "./People";
@@ -738,7 +739,7 @@ export function buildPersonalActionItems({
   }
   for (const review of reviews) {
     const task = tasks.find((candidate) => candidate.id === review.task_id);
-    if (review.status !== "pending" || task?.status === "canceled") continue;
+    if (review.status !== "pending" || isReviewTaskEnded(task?.status)) continue;
     items.push({
       key: `review:${review.id}`,
       task,
@@ -1293,7 +1294,7 @@ export function App() {
   const myTasks = [...assignedToMe, ...discussingWithMe];
   const myWaiting = myTasks.filter((task) => task.status === "waiting_for_human");
   const pendingReviews = myReviews.filter((review) => review.status === "pending"
-    && tasks.find((task) => task.id === review.task_id)?.status !== "canceled");
+    && !isReviewTaskEnded(tasks.find((task) => task.id === review.task_id)?.status));
   const myBlocked = myTasks.filter((task) =>
     task.status !== "waiting_for_human" && isBlocked(task));
   const myPaused = myTasks.filter((task) => task.status === "paused");
@@ -1843,7 +1844,7 @@ export function App() {
       canOperate={canOperate(artifactTask)}
       canCollaborate={canCollaborate(artifactTask)}
       canRequestReview={responsibleOf(artifactTask) === session.username
-        && artifactTask.status !== "canceled"}
+        && !isReviewTaskEnded(artifactTask.status)}
       reviewAssignment={pendingReviews.find((review) => review.task_id === artifactTask.id)}
       onChanged={refresh}
       onClose={closeArtifacts}

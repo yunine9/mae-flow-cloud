@@ -10,6 +10,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { createTaskServer } from "../src/server.ts";
 import type { MrComparisonDetail, DeliveryAnalysisReport } from "../src/deliveryAnalyticsTypes.ts";
 import { TaskService, type TaskSummary } from "../src/taskService.ts";
+import { ReviewStore } from "../src/reviews.ts";
 
 async function listen(server: Server) {
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
@@ -90,6 +91,11 @@ async function verifyFinalMrDelivery(t: TestContext, start: "initial-mr" | "push
     status:initialPublished ? "await_merge" : "paused", workspace, baseline:"main", repo_url:origin + "/team/repo.git",
     delivery,
   }}));
+  const reviewsPath = join(dataDir, "reviews.jsonl");
+  const reviews = new ReviewStore(reviewsPath);
+  const invitation = reviews.create({ taskId: "task-1", taskTitle: "重试次数", requester: "owner", committer: "bob" });
+  const completedReview = reviews.create({ taskId: "task-1", taskTitle: "重试次数", requester: "owner", committer: "carol" });
+  reviews.complete(completedReview.id, "carol");
   const service = new TaskService({dataDir,log:message => logs.push(message),provider:"test",model:"test",modelsJson:{},maxConcurrent:0,delivery:{platformUrl:origin,pollIntervalMs:100}});
   const api = createTaskServer(service);
   const baseUrl = await listen(api);
@@ -104,6 +110,14 @@ async function verifyFinalMrDelivery(t: TestContext, start: "initial-mr" | "push
   const link = await fetch(taskApi + "/final-mr", {method:"POST",body:JSON.stringify({url:mr(2)})});
   const result = await link.json() as TaskSummary;
   assert.equal(link.status, 200, JSON.stringify(result)); assert.equal(result.status, "completed");
+  const storedReviews = new ReviewStore(reviewsPath).list();
+  assert.equal(storedReviews.find(row => row.id === invitation.id)?.status, "canceled",
+    "MR 合入结束任务时立即关闭待检视邀请，不等工作台刷新");
+  assert.equal(storedReviews.find(row => row.id === completedReview.id)?.status, "completed");
+  assert.equal(service.listReviewsFor("bob")[0].status, "canceled");
+  assert.equal(service.completeReview(invitation.id, "bob").status, "canceled",
+    "过期的完成按钮不能将邀请关闭冒充检视完成");
+  await assert.rejects(service.requestReview("task-1", "owner", "bob"), /任务已结束/);
   assert.equal(result.completed_at, "2026-10-30T09:00:00.000Z"); assert.equal(result.delivery?.initial_mr?.head, initialPublished ? initial : undefined);
   assert.equal(result.delivery?.mr_url, initialPublished ? mr(1) : undefined);
   let comparison: MrComparisonDetail | undefined;

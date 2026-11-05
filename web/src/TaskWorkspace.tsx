@@ -27,7 +27,7 @@ import { OverallStoryTools, OVERALL_STORY_ARTIFACT } from "./OverallStoryTools";
  */
 
 import { useEffect, useRef, useState, type ComponentProps, type CSSProperties } from "react";
-import { isInvitedReviewParticipant } from "../../src/reviewParticipation";
+import { isInvitedReviewParticipant, isReviewTaskEnded } from "../../src/reviewParticipation";
 import { Markdown } from "./markdown";
 import { isPushConfirmation, queuedDecisionAnnotationIds } from "./decisionSelection";
 import { GitDiff } from "./GitDiff";
@@ -1874,7 +1874,7 @@ export function TaskWorkspace({
           ))}
         </TabsList>
       </Tabs>}
-      {reviewAssignment?.status === "pending" && task.status !== "canceled" && (
+      {reviewAssignment?.status === "pending" && !isReviewTaskEnded(task.status) && (
         <section aria-labelledby="review-assignment-title"
           className="grid gap-2.5 rounded-xl border border-ink/30 bg-surface p-3.5 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center">
           <div aria-hidden className="grid size-9 place-items-center rounded-full bg-surface-3 text-sm font-bold text-ink">审</div>
@@ -2012,7 +2012,7 @@ export function TaskWorkspace({
             {/* #227 换装:头部控制钮换 shadcn Button(恢复/暂停=outline、
                 取消=ghost、删除=destructive、邀请=outline sm),确认态
                 是一枚危险软底胶囊;原 .ws-head-controls 按钮皮不再依赖。 */}
-            {canRequestReview && !task.delivery?.final_mr && task.status !== "canceled" && <Button type="button" variant="outline" size="sm"
+            {canRequestReview && !task.delivery?.final_mr && !isReviewTaskEnded(task.status) && <Button type="button" variant="outline" size="sm"
               aria-haspopup="dialog" aria-expanded={reviewInviteOpen}
               title="选择 Committer 参与代码检视"
               onClick={() => setReviewInviteOpen(true)}>邀请他人检视</Button>}
@@ -2767,7 +2767,7 @@ export function TaskWorkspace({
           )}
         </section>
       </div>
-      {reviewInviteOpen && canRequestReview && !task.delivery?.final_mr && task.status !== "canceled" && <Dialog open
+      {reviewInviteOpen && canRequestReview && !task.delivery?.final_mr && !isReviewTaskEnded(task.status) && <Dialog open
         onOpenChange={(next) => { if (!next) setReviewInviteOpen(false); }}>
         <DialogContent className="tw-root sm:max-w-[460px]">
           <DialogHeader>
@@ -2803,7 +2803,7 @@ export function TaskWorkspace({
                     <strong>{committers.find((user) =>
                       user.username === review.committer)?.display_name
                       ?? review.committer}</strong>
-                    <small>{review.status === "canceled" ? "任务已取消，邀请已关闭"
+                    <small>{review.status === "canceled" ? "任务已结束，邀请已关闭"
                       : review.status === "completed" ? "已完成检视"
                       : review.delivered ? "等待检视" : "通知未送达"}</small>
                   </span>

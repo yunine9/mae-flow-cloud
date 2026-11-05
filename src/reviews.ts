@@ -1,8 +1,8 @@
 /**
  * Committer 检视台账：追加式 JSONL，服务重启后仍能恢复。
  *
- * 责任人主动邀请，Committer 看完后收口；任务取消则关闭未完成邀请，
- * 保留审计记录，不把取消冒充检视完成。
+ * 责任人主动邀请，Committer 看完后收口；任务结束则关闭未完成邀请，
+ * 保留审计记录，不把邀请关闭冒充检视完成。
  */
 
 import {
@@ -37,14 +37,14 @@ export interface ReviewRequest {
 export class ReviewStore {
   private records = new Map<string, ReviewRequest>();
 
-  constructor(readonly path: string, private readonly taskCanceled?: (id: string) => boolean) {
+  constructor(readonly path: string, private readonly taskEnded?: (id: string) => boolean) {
     this.load();
   }
 
   list(): ReviewRequest[] {
     // 同时补齐旧版本遗留及任务落盘后进程中断的邀请，读到的待办必须有效。
     for (const record of this.records.values()) {
-      if (record.status === "pending" && this.taskCanceled?.(record.task_id)) {
+      if (record.status === "pending" && this.taskEnded?.(record.task_id)) {
         this.cancelTask(record.task_id);
       }
     }
