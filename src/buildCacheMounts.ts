@@ -12,9 +12,12 @@
 
 import { mkdirSync } from "node:fs";
 import { dirname, join, posix, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { touchBuildCache, touchSharedBuildCache } from "./buildCache.ts";
 
 export const SHARED_MAVEN_DESTINATION = "/cache/maven/repository/.mfc-remote";
+const MAVEN_EXTENSION_DESTINATION = "/opt/mae-flow-cache";
+const MAVEN_EXTENSION_ASSETS = fileURLToPath(new URL("../assets/maven-shared-cache", import.meta.url));
 
 export interface PerRepoBuildCacheMountsInput {
   /** 分仓构建缓存宿主根;缺席 = 该容器不挂平台缓存,只回种子环境
@@ -73,9 +76,8 @@ export function perRepoBuildCacheMounts(
     const destination = volume.split(":")[1];
     const normalized = destination && posix.resolve(destination);
     if (normalized && (destinations.has(normalized)
-        || normalized === SHARED_MAVEN_DESTINATION
-        || normalized.startsWith(`${SHARED_MAVEN_DESTINATION}/`)
-        || SHARED_MAVEN_DESTINATION.startsWith(`${normalized}/`)
+        || [SHARED_MAVEN_DESTINATION, MAVEN_EXTENSION_DESTINATION].some(path =>
+          normalized === path || normalized.startsWith(`${path}/`) || path.startsWith(`${normalized}/`))
         || normalized === "/")) {
       throw new Error(`自定义挂载不能覆盖平台的分仓缓存目录: ${normalized}`);
     }
@@ -98,12 +100,15 @@ export function perRepoBuildCacheMounts(
   // 非 root 的 Maven 无法在 repository 下 install 或写旧式元数据。
   mkdirSync(join(cacheBase, "maven", "repository", ".mfc-remote"), { recursive: true });
   const mavenOptions = String(environment.MAVEN_OPTS ?? "").trim();
+  const existingExtensions = [...mavenOptions.matchAll(/(?:^|\s)-Dmaven\.ext\.class\.path=([^\s]+)/g)].at(-1)?.[1];
+  const extensionPath = [existingExtensions, `${MAVEN_EXTENSION_DESTINATION}/extension.jar`].filter(Boolean).join(":");
   return {
     volumes: [
       ...input.volumes,
       ...caches.map(([name, destination]) =>
         `${join(cacheBase, name)}:${destination}`),
       `${sharedRemote}:${SHARED_MAVEN_DESTINATION}`,
+      `${MAVEN_EXTENSION_ASSETS}:${MAVEN_EXTENSION_DESTINATION}:ro`,
     ],
     environment: {
       ...environment,
@@ -111,6 +116,7 @@ export function perRepoBuildCacheMounts(
       // SDK 插件会修改解压内容和 mtime，cpp-sdk 不能改成共享可写目录。
       MAVEN_OPTS: [mavenOptions,
         "-Dmaven.repo.local=/cache/maven/repository",
+        `-Dmaven.ext.class.path=${extensionPath}`,
         "-Daether.enhancedLocalRepository.split=true",
         "-Daether.enhancedLocalRepository.localPrefix=",
         "-Daether.enhancedLocalRepository.remotePrefix=.mfc-remote",

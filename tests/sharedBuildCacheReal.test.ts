@@ -13,7 +13,7 @@ const exec = promisify(execFile);
 const image = process.env.MFC_REAL_BUILD_IMAGE;
 
 // 真 Maven/Resolver、javac 和 C++ 编译器；私有 SDK 插件不在外网镜像内。
-test("#586 双容器共享下载：干净编译、install 隔离、SDK 编译、快照更新与回收重建", {
+test("#586 双容器共享下载：增量编译、install 隔离、SDK 编译、快照更新与回收重建", {
   skip: !image && "设置 MFC_REAL_BUILD_IMAGE 为含 Maven 3.9.9、JDK、C++、Python 的镜像",
   timeout: 180_000,
 }, async t => {
@@ -149,10 +149,8 @@ http.server.ThreadingHTTPServer(('0.0.0.0',8000),Handler).serve_forever()
   const sharedArtifact = (id: string, version: string, extension: string, fileVersion = version) =>
     `/cache/maven/repository/.mfc-remote/fixture/${prefix}/${id}/${version}/${id}-${fileVersion}.${extension}`;
   const snapshotVersion = (value: number) => `1.0-20260101.00000${value === 11 ? 1 : 2}-${value === 11 ? 1 : 2}`;
-  // 验证实际重新编译的结果；共享快照下无 clean 的增量编译风险另见 #586。
-  // 不把 compiler 返回 BUILD SUCCESS、实际仍运行旧 class 当成编译通过。
-  const build = (expected: number, offline = false, id = "library", version = "1.0", local = false) =>
-    `rm -rf target/classes target/maven-status; ${compile} ${offline ? "-o" : ""}; java -cp target/classes:${local ? `/cache/maven/repository/${prefix}/${id}/${version}/${id}-${version}.jar` : sharedArtifact(id, version, "jar", version.endsWith("SNAPSHOT") ? snapshotVersion(expected) : version)} Main ${expected}; `
+  const build = (expected: number, offline = false, id = "library", version = "1.0", local = false, options = "") =>
+    `${compile} ${offline ? "-o" : ""} ${options}; java -cp target/classes:${local ? `/cache/maven/repository/${prefix}/${id}/${version}/${id}-${version}.jar` : sharedArtifact(id, version, "jar", version.endsWith("SNAPSHOT") ? snapshotVersion(expected) : version)} Main ${expected}; `
     + `python3 -c 'import zipfile; zipfile.ZipFile("/cache/maven/repository/.mfc-remote/fixture/${prefix}/sdk/1.0/sdk-1.0-X86_EULER.zip").extractall("/work/cpp_sdk_repository/sdk")'; `
     + "c++ main.cpp -I/work/cpp_sdk_repository/sdk/include -L/work/cpp_sdk_repository/sdk/lib -Wl,-rpath,/work/cpp_sdk_repository/sdk/lib -lsdk -o target/native; target/native";
 
@@ -163,6 +161,8 @@ http.server.ThreadingHTTPServer(('0.0.0.0',8000),Handler).serve_forever()
     const before = await docker("logs", server);
     assert.match(await run("b", build(7, true)), /BUILD SUCCESS/);
     assert.equal(await docker("logs", server), before, "第二仓离线构建不能重复下载");
+    assert.match(await run("b", build(7, true)), /Nothing to compile/,
+      "依赖未变时必须保留增量，不能每次强制全量编译");
     assert.equal(readFileSync(join(cacheRoot, "shared-maven/remote/fixture", prefix, "sdk/1.0/sdk-1.0-X86_EULER.zip")).compare(readFileSync(join(fixture, "sdk.zip"))), 0);
     warmed = true;
   });
@@ -192,10 +192,25 @@ http.server.ThreadingHTTPServer(('0.0.0.0',8000),Handler).serve_forever()
   await t.test("SNAPSHOT 遵循 always 更新，两仓都能编译新版本", async () => {
     makeProject("s1", "snapshot", "1.0-SNAPSHOT"); makeProject("s2", "snapshot", "1.0-SNAPSHOT");
     await run("s1", build(11, false, "snapshot", "1.0-SNAPSHOT"));
+    write(join(root, "s1/src/test/java/TestProbe.java"), 'public class TestProbe { public static void main(String[] args) { if (probe.Library.COMPILED_VALUE != Integer.parseInt(args[0])) throw new AssertionError(probe.Library.COMPILED_VALUE); } }');
+    const testCompile = (expected: number) => `${mvn} org.apache.maven.plugins:maven-compiler-plugin:3.13.0:testCompile; java -cp target/test-classes:${sharedArtifact("snapshot", "1.0-SNAPSHOT", "jar", snapshotVersion(expected))} TestProbe ${expected}`;
+    await run("s1", testCompile(11));
     snapshot(2, 22);
     await run("s2", build(22, false, "snapshot", "1.0-SNAPSHOT"));
     await run("s1", `java -cp target/classes:${sharedArtifact("snapshot", "1.0-SNAPSHOT", "jar", snapshotVersion(11))} Main 11`);
-    await run("s1", build(22, false, "snapshot", "1.0-SNAPSHOT"));
+    const record = join(root, "s1/target/maven-status/maven-compiler-plugin/compile/default-cli/mfc-dependencies-v1.sha256");
+    const previous = readFileSync(record, "utf8");
+    await run("s1", `${compile} -Dmaven.main.skip=true`);
+    assert.equal(readFileSync(record, "utf8"), previous, "跳过编译不能登记依赖已验证");
+    const mainSource = join(root, "s1/src/main/java/Main.java");
+    const source = readFileSync(mainSource, "utf8");
+    writeFileSync(mainSource, "broken syntax");
+    await assert.rejects(run("s1", `${compile}`), /COMPILATION ERROR/);
+    assert.equal(readFileSync(record, "utf8"), previous, "编译失败不能登记依赖已验证");
+    writeFileSync(mainSource, source);
+    await run("s1", build(22, false, "snapshot", "1.0-SNAPSHOT", false, "-Dmaven.compiler.useIncrementalCompilation=false"));
+    await run("s1", testCompile(22));
+    assert.match(await run("s1", build(22, true, "snapshot", "1.0-SNAPSHOT")), /Nothing to compile/);
   });
   await t.test("既有本地仓工件升级后仍可离线使用", async () => {
     makeProject("legacy");

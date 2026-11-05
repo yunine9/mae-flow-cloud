@@ -89,6 +89,7 @@ Maven 远端下载（包括 C++ SDK zip）跨仓共享；本地 `install`、旧 
 <task-workspace>:<same-absolute-path>:rw
 <cache-root>/<repository-id>/maven:/cache/maven:rw
 <cache-root>/shared-maven/remote:/cache/maven/repository/.mfc-remote:rw
+<cloud>/assets/maven-shared-cache:/opt/mae-flow-cache:ro
 <cache-root>/<repository-id>/npm:/cache/npm:rw
 <cache-root>/<repository-id>/ccache:/cache/ccache:rw
 <cache-root>/<repository-id>/xdg:/cache/xdg:rw
@@ -117,18 +118,20 @@ tmpfs:/tmp:rw,exec,nosuid,nodev,mode=1777
   在线构建可能读取更新的快照，离线构建依赖已缓存版本；上线须验证业务仓
   对最新快照的兼容性。旧分仓缓存不自动搬迁或删除，不能承诺部署立即释放
   全部重复数据。
-- **上线前还须确认实际构建入口执行 clean。** 已复现 Maven Compiler
-  3.13.0 在其他仓库先更新共享快照后，单独 `compile` 可能保留旧 class，
-  因为它按本轮构建开始时间判断依赖是否变动。下面的真实构建测试先清理
-  测试项目的编译产物，只证明干净编译；不能据此宣称无 clean 的增量构建
-  已兼容。内网入口若允许这种调用，共享快照方案仍需修正，见 Issue #586。
+- Maven 通过只读扩展在 Java Compiler 的 compile/testCompile 入口比较
+  实际 classpath 与上次成功编译的记录。依赖变化时只使当前模块的 Compiler
+  状态失效，由 Compiler 重新编译；不删除源码、资源、SDK 或 native 产物。
+  依赖不变继续增量，失败/跳过不登记成功，不要求每次 clean。解决了其他仓
+  先更新共享快照、Compiler 只看本轮开始时间而漏编的问题。
+  源码和可复现构建见 `assets/maven-shared-cache/README.md`；已验证
+  Maven 3.9.9 / Compiler 3.13.0，内网私有插件仍按实际业务构建验收。
 - 管理页将共享 Maven/SDK 下载作为一条缓存统计，只计一次。实际挂载的
   容器从创建到停止共同保护共享区；最后一个容器停止后，沿用构建缓存的
   保留期、容量上限及手动闲置清理策略。仅保留工作区的任务不永久阻止共享
   下载回收，下次运行按需重新下载。问题单构建产物的 24 小时冷却配置不变。
 - 本地真实构建验证：
   `MFC_REAL_BUILD_IMAGE=<含 Maven 3.9.9/JDK/C++/Python 的镜像> npx tsx --test --test-timeout=180000 --test-force-exit tests/sharedBuildCacheReal.test.ts`。
-  测试使用临时容器和 Maven 源，覆盖双仓下载、离线编译、install 隔离、
+  测试使用临时容器和 Maven 源，不预先清理编译产物，覆盖双仓下载、离线编译、install 隔离、
   SDK 原生链接、快照更新、回收重建；不替代内网私有 C++ 插件的业务构建验收。
 
 - `settings.xml` 可从 `maven-settings.example.xml` 复制后填写内部 mirror，

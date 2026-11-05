@@ -395,7 +395,7 @@ export function renderPrePushBuildGuidance(profile: PrePushBuildProfile): string
     `增量优先：非首次构建用不带 clean 的 \`${mvn} compile\`（内网实测 C++ 仓 3 分钟→18 秒）；刚克隆的仓上 clean 没有意义，别浪费一次全量。`,
     "长构建不要用管道直连截尾（如 `mvn compile | tail -80`）——tail 要等命令退出才输出，进行中一个字都看不到，超时被杀连诊断都留不下。先落文件再看尾巴：`mvn compile > build.log 2>&1; tail -80 build.log`。",
     "并行度以容器配额为准，不要信 nproc：容器 CPU 是 CFS 配额不是绑核，nproc 虚报宿主全部核数，-j 超过配额会因限流不升反降（内网实锤：-j16 挤 8 核配额比干净 8 路还慢）。真实配额看 `cat /sys/fs/cgroup/cpu.max`（如 800000 100000 = 8 核），构建自带并行参数时按它设 -j。",
-    "平台持久缓存事实（同一个仓的所有轮次共享，换容器不丢）：/cache/maven（已由 MAVEN_OPTS 注入 -Dmaven.repo.local=/cache/maven/repository）、/cache/npm（npm_config_cache）、/cache/ccache（CCACHE_DIR）、仓库同级 cpp_sdk_repository；工作区内的构建产物（target/、build/ 等）同样跨轮持久。$HOME 与 /tmp 是易失的，写进去的东西下一轮就没。",
+    "平台持久缓存事实：Maven 远端依赖（含 SDK zip）跨仓共享，install 和 cpp_sdk_repository 解压内容仍按仓隔离；/cache/maven 由 MAVEN_OPTS 注入，npm 用 /cache/npm，ccache 用 /cache/ccache。Java 模块依赖变化时平台会触发该模块重编，依赖不变保留增量，不必因此每轮 clean。工作区 target/、build/ 等产物跨轮持久；$HOME 与 /tmp 是易失的。",
     "构建慢先核对缓存真被吃到（内网实锤：每轮重拉依赖+全量编译）：Maven 若在重新下载依赖，多半是仓库包装脚本 export MAVEN_OPTS 把平台注入覆盖了——把 `-Dmaven.repo.local=/cache/maven/repository` 显式追加到 mvn 命令行（命令行 -D 优先级最高），并把“谁覆盖了缓存配置”写进收口摘要，这是平台要修的线索。",
     "同一容器里修完代码重编还在“Downloading”？先看下载的是什么：集中在 maven-metadata.xml 与 -SNAPSHOT 工件的，是 Maven 的 SNAPSHOT 更新策略在每次构建重查远端，不是缓存失效；修复循环内的重编可加 `-nsu`（--no-snapshot-updates）省掉重复检查，但收口前的最后一次编译不要加，保持与流水线同口径。下载的是 release 版工件才说明本地仓真没命中，按上一条排查。",
     "Build-Fix 的 UT 只跑受本次改动影响的模块和用例，禁止把全仓 UT 当作收口动作；一次全量可能耗时一小时，不能在每轮修复中重复浪费。全量回归由远端权威流水线负责。先从变更文件、失败日志、模块依赖和仓库测试配置确定最小可靠范围；找不到可靠的定向入口就明确报告“未找到定向 UT”，不得悄悄退回全量。",
