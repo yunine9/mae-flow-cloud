@@ -33,7 +33,7 @@ import {
   TaskService,
 } from "./taskService.ts";
 import { humanBytes } from "./workspaceReclaim.ts";
-import { reclaimIssueWorkspaces } from "./issueFlowWorkspaceReclaim.ts";
+import { sweepIssueAttachmentStaging } from "./issueFlowWorkspaceReclaim.ts";
 import { EnvironmentRegistry } from "./environmentRegistry.ts";
 import { startEnvironmentProbePolling } from "./environmentProbe.ts";
 import { createTaskServer } from "./server.ts";
@@ -1148,25 +1148,20 @@ async function main(): Promise<void> {
     } catch (error) {
       console.log(`[serve] 现场回收失败(不影响服务): ${String(error)}`);
     }
-    // 问题单这里只清已归档或取消会话的临时目录；代码回收由 issueDiskSweep
-    // 与归档入口负责，避免绕过 issue_repo_reclaim 开关及代码统计等待。
+    // 问题会话的现场回收(ADR-0073)走两段:终态当场清与兜底清扫都挂在
+    // IssueFlowService(当场在归档入口,兜底在 issueDiskSweep 定时器,
+    // 判据单点住在 judgeIssueReclaim)——这里只剩附件中转的孤儿 GC;
+    // 图片中转是回显依赖,永不入清扫。
     try {
-      const sweptIssues = reclaimIssueWorkspaces({
-        dataDir,
-        retentionDays,
-        containerRunning: (id) => issueFlow.hasRunningContainer(id),
-        log: issueLog,
-      });
-      if (sweptIssues.reclaimed) {
-        console.log(`[serve] 问题现场回收 ${sweptIssues.reclaimed} 个会话,`
-          + `释放 ${humanBytes(sweptIssues.freed)}(保留期 `
-          + `${retentionDays} 天;文档、日志与过程记录保留)`
-          + (sweptIssues.skipped_container
-            ? `,容器在跑跳过 ${sweptIssues.skipped_container} 个`
-            : ""));
+      const sweptStaging = sweepIssueAttachmentStaging(dataDir,
+        { retentionDays });
+      if (sweptStaging.removed) {
+        console.log(`[serve] 附件中转清理 ${sweptStaging.removed} 个孤儿文件,`
+          + `释放 ${humanBytes(sweptStaging.freed)}(保留期 `
+          + `${retentionDays} 天;已提交的在会话工作区,不受影响)`);
       }
     } catch (error) {
-      console.log(`[serve] 问题现场回收失败(不影响服务): ${String(error)}`);
+      console.log(`[serve] 附件中转清理失败(不影响服务): ${String(error)}`);
     }
     try {
       if (service.buildCacheRetentionDays() > 0 || service.buildCacheMaxGb() > 0) {
@@ -1198,21 +1193,28 @@ async function main(): Promise<void> {
     log: (message) => console.log(`  [env-probe] ${message}`),
   });
 
-  // 问题流磁盘清扫(磁盘治理票 01/03):启动 1 分钟后首跑(让恢复先
-  // 落定)回收存量,此后每小时一轮。终态(canceled/archived)回收
-  // repo/,idle/waiting_user 按冷却期回收构建产物;旋钮关则空转。定时器只接在
-  // 正式入口 serve.ts——测试/旁路直连形态不起定时器,要清扫直接调
-  // issueFlow.sweepTerminalRepos()。
+  // 问题流磁盘清扫(磁盘治理票 01/03;ADR-0073 扩为终态当场制的兜底):
+  // 启动 1 分钟后首跑(让恢复先落定)清存量欠账,此后每小时一轮。
+  // 终态(canceled/archived)按保留名单清 repo/ 与名单外全部,崩溃缺口
+  // 与存量见一个清一个;idle/waiting_user 按冷却期回收构建产物;旋钮关
+  // 则空转。两条流各自扫自己的根(issues/ 与 pipeline-repairs/)。定时器
+  // 只接在正式入口 serve.ts——测试/旁路直连形态不起定时器,要清扫直接调
+  // sweepTerminalRepos()。
   const issueDiskSweep = () => {
-    void issueFlow.sweepTerminalRepos().then((result) => {
-      if (result.reclaimed > 0 || result.productBytes > 0) {
-        console.log(`  [issue-disk] 清扫回收终态现场 ${result.reclaimed} 个`
-          + `(${(result.bytes / 1024 ** 3).toFixed(2)} GB),构建产物 `
-          + `${(result.productBytes / 1024 ** 2).toFixed(0)} MB`);
-      }
-    }).catch((error) => {
-      console.error(`  [issue-disk] 清扫失败: ${String(error)}`);
-    });
+    for (const [label, flow] of [["issue", issueFlow],
+                                 ["mr-repair", pipelineRepairs]] as const) {
+      void flow.sweepTerminalRepos().then((result) => {
+        if (result.reclaimed > 0 || result.productBytes > 0
+            || result.looseBytes > 0) {
+          console.log(`  [issue-disk] ${label} 清扫回收终态现场 `
+            + `${result.reclaimed} 个(${(result.bytes / 1024 ** 3).toFixed(2)} GB)`
+            + `,名单外 ${(result.looseBytes / 1024 ** 2).toFixed(0)} MB,构建产物 `
+            + `${(result.productBytes / 1024 ** 2).toFixed(0)} MB`);
+        }
+      }).catch((error) => {
+        console.error(`  [issue-disk] ${label} 清扫失败: ${String(error)}`);
+      });
+    }
   };
   const issueDiskSweepTimer = setTimeout(issueDiskSweep, 60_000);
   const issueDiskSweepInterval = setInterval(issueDiskSweep, 3_600_000);

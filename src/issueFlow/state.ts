@@ -605,6 +605,10 @@ export interface IssueSessionState {
   /** 终止补充说明(#541):仅 cancel_reason="other" 有意义,选填人话,
    * 留存备分析;不复用 revive 专用的 note(ADR-0055 语义不动)。 */
   cancel_reason_text?: string;
+  /** mr_repair 修绿收口的总结轮在飞(ADR-0073):closeMrGreen 举起,
+   * 总结轮 settle 后落 archived 并清除。持久化是为了崩溃恢复后总结轮
+   * 重放仍能收口——没有它,中断的会话会永远停在 idle 占着现场。 */
+  mr_repair_closing?: true;
 }
 
 export interface IssueSummary extends IssueSessionState {
