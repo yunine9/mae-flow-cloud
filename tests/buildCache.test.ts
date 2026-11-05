@@ -11,6 +11,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import {
   BUILD_CACHE_METADATA,
   buildCacheKey,
@@ -18,11 +20,25 @@ import {
   inspectBuildCaches,
   reclaimBuildCaches,
   touchBuildCache,
+  touchSharedBuildCache,
 } from "../src/buildCache.ts";
 import { TaskService } from "../src/taskService.ts";
+import { perRepoBuildCacheMounts } from "../src/buildCacheMounts.ts";
 
 const DAY = 24 * 60 * 60_000;
 const NOW = Date.parse("2026-08-28T12:00:00Z");
+
+test("多个进程同时首次登记共享区，目录和元数据保持完整", async () => {
+  const cacheRoot = root();
+  const code = `import { touchSharedBuildCache } from ${JSON.stringify(new URL("../src/buildCache.ts", import.meta.url).href)};
+    for (let i = 0; i < 20; i++) touchSharedBuildCache(process.argv[1], "shared-maven");`;
+  await Promise.all(Array.from({ length: 4 }, () => promisify(execFile)(process.execPath,
+    ["--import", "tsx", "--input-type=module", "-e", code, cacheRoot])));
+  const metadata = JSON.parse(readFileSync(join(cacheRoot, "shared-maven", BUILD_CACHE_METADATA), "utf8"));
+  assert.equal(metadata.key, "shared-maven");
+  assert.equal(metadata.schema, 1);
+  assert.ok(Number.isFinite(Date.parse(metadata.last_used_at)));
+});
 
 function root(): string {
   return mkdtempSync(join(tmpdir(), "mfc-build-cache-life-"));
@@ -35,6 +51,36 @@ function populate(cacheRoot: string, repository: string, usedAt: number,
   writeFileSync(join(touched.base, "ccache", "object.bin"), "x".repeat(bytes));
   return touched;
 }
+
+test("#586 下载缓存只统计一次，真实挂载保护共享区，闲置仓不永久阻止回收", async () => {
+  const cacheRoot = root();
+  const a = populate(cacheRoot, "repo-a", NOW - 40 * DAY);
+  populate(cacheRoot, "repo-b", NOW - 40 * DAY);
+  for (const key of ["shared-maven"] as const) {
+    const { base } = touchSharedBuildCache(cacheRoot, key, NOW - 40 * DAY);
+    writeFileSync(join(base, "artifact.bin"), Buffer.alloc(1024));
+    writeFileSync(join(base, BUILD_CACHE_METADATA), JSON.stringify({
+      schema: 1, key, created_at: new Date(NOW - 40 * DAY).toISOString(),
+      last_used_at: new Date(NOW - 40 * DAY).toISOString(),
+    }));
+  }
+  const options = { cacheRoot, activeKeys: () => new Set([a.key, "shared-maven"]), retentionDays: 30, maxBytes: 0, now: NOW };
+  const inspected = await inspectBuildCaches({ ...options, activeKeys: options.activeKeys() });
+  assert.equal(inspected.entries.filter(entry => entry.key.startsWith("shared-")).length, 1);
+  assert.equal(inspected.entries.find(entry => entry.key === "shared-maven")?.size_bytes,
+    1024 + Buffer.byteLength(readFileSync(join(cacheRoot, "shared-maven", BUILD_CACHE_METADATA))));
+  assert.equal(inspected.total_bytes, inspected.entries.reduce((bytes, entry) => bytes + entry.size_bytes, 0));
+  const result = await reclaimBuildCaches(options);
+  assert.equal(result.reclaimed, 1, "只回收未使用的分仓缓存");
+  for (const key of ["shared-maven"]) {
+    assert.ok(existsSync(join(cacheRoot, key, "artifact.bin")));
+    assert.ok(result.status.entries.find(entry => entry.key === key)?.active);
+  }
+  const cleared = await reclaimBuildCaches({ ...options, activeKeys: () => new Set([a.key]) });
+  assert.equal(cleared.reclaimed, 1, "共享区过期且已无挂载，闲置仓库可以重新下载");
+  assert.equal(cleared.status.caches, 1);
+  assert.equal(cleared.status.entries[0].key, a.key);
+});
 
 test("挂载即登记最后使用时间，同仓沿用既有分区且元数据不含凭据", () => {
   const cacheRoot = root();
@@ -51,6 +97,35 @@ test("挂载即登记最后使用时间，同仓沿用既有分区且元数据�
   assert.match(metadata, /2026-08-28T12:00:00\.000Z/);
   assert.equal(cacheKeyFromPath(cacheRoot, join(second.base, "ccache")), first.key);
   assert.equal(cacheKeyFromPath(cacheRoot, join(cacheRoot, "outside")), undefined);
+});
+
+test("共享缓存保留到最后一个真实容器停止，扫描中途启动也不能删除", async () => {
+  const cacheRoot = root();
+  const service = new TaskService({ dataDir: root(), provider: "fixture", model: "fixture",
+    modelsJson: {}, isolation: { image: "fixture", cacheRoot, containerFactory: () => ({
+      start: async () => {}, stop: async () => {}, exec: async () => ({ exitCode: 0 }),
+    }) } });
+  const create = (repo: string) => {
+    const mounts = perRepoBuildCacheMounts({ cacheRoot, cacheKeySource: repo, volumes: [] });
+    return (service as any).createTaskContainer({ image: "fixture", workspace: root(),
+      name: repo, volumes: mounts.volumes, limits: {}, options: { environment: mounts.environment } });
+  };
+  const a = create("a");
+  const b = create("b");
+  assert.equal((await service.reclaimIdleBuildCaches({ allUnused: true })).reclaimed, 0);
+  await a.stop();
+  const one = await service.reclaimIdleBuildCaches({ allUnused: true });
+  assert.equal(one.reclaimed, 1);
+  assert.equal(one.status.entries.find(entry => entry.key === "shared-maven")?.active, true);
+  await b.stop();
+  assert.equal((await service.reclaimIdleBuildCaches({ allUnused: true })).reclaimed, 2);
+
+  touchSharedBuildCache(cacheRoot, "shared-maven", NOW - 40 * DAY);
+  let checks = 0;
+  const protectedResult = await reclaimBuildCaches({ cacheRoot, retentionDays: 30, maxBytes: 0,
+    now: NOW, activeKeys: () => ++checks === 1 ? new Set() : new Set(["shared-maven"]) });
+  assert.equal(protectedResult.reclaimed, 0);
+  assert.equal(protectedResult.skipped_active, 1);
 });
 
 test("自动回收只清超期未占用缓存，活任务缓存即使很老也不碰", async () => {
@@ -215,7 +290,7 @@ test("TaskService 用非终态任务作缓存租约，任务取消后才允许�
     allUnused: true,
     now: NOW + 90 * DAY,
   });
-  assert.equal(protectedResult.reclaimed, 0);
+  assert.equal(protectedResult.reclaimed, 1, "尚无容器挂载的共享下载区可安全重建");
   assert.equal(protectedResult.status.active, 1);
   assert.ok(existsSync(base));
 

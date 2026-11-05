@@ -10,7 +10,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { mkdtempSync, rmSync, lstatSync, readdirSync, chmodSync } from "node:fs";
+import { mkdtempSync, rmSync, lstatSync, readdirSync, chmodSync, existsSync } from "node:fs";
+import { reclaimBuildCaches } from "../src/buildCache.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskContainer } from "../src/containerRuntime.ts";
 import { IssueFlowService, type IssueContainerBuild } from "../src/issueFlow/service.ts";
@@ -212,5 +213,39 @@ test("容器 npm 源(#75):isolation.environment 进问题流创建环境,缺省�
     await bare.service.shutdown().catch(() => undefined);
     await bare.model.stop();
     removeFixture(bare.dataDir);
+  }
+});
+
+test("#586 辅助仓准备期间回收缓存，容器创建时仍取得完整挂载源", async () => {
+  const dataDir = mfcTemp("mfc-issue-cache-start-");
+  const cacheRoot = join(dataDir, "cache");
+  const model = new ScriptedModelServer([{ text: "已收到问题。" }]);
+  await model.start();
+  let checked = false;
+  const service = new IssueFlowService({ dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(), isolation: { image: "fake", volumes: [], cacheRoot,
+      memory: "1g", cpus: "1", pidsLimit: 100, network: "none",
+      containerFactory: build => {
+        const shared = build.volumes.find(volume => volume.includes("shared-maven/remote:"))!;
+        assert.ok(shared, "应接入共享下载区");
+        assert.ok(existsSync(shared.split(":")[0]), "不能把准备辅助仓前已被清理的路径交给 Docker");
+        checked = true;
+        return new FakeTaskContainer();
+      } } });
+  (service as any).prepareMaeBuild = async () => {
+    await reclaimBuildCaches({ cacheRoot, activeKeys: () => new Set(), retentionDays: 0, maxBytes: 0, allUnused: true });
+  };
+  try {
+    const created = service.create({ account: "dev", title: "共享缓存启动竞态", description: "检查启动前准备", ticket: "DTS-CACHE" });
+    await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "idle" ? issue : undefined;
+    }, "容器准备完成");
+    assert.equal(checked, true);
+  } finally {
+    await service.shutdown().catch(() => {});
+    await model.stop();
+    removeFixture(dataDir);
   }
 });

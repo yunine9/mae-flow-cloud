@@ -11,8 +11,10 @@
  */
 
 import { mkdirSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { touchBuildCache } from "./buildCache.ts";
+import { dirname, join, posix, resolve } from "node:path";
+import { touchBuildCache, touchSharedBuildCache } from "./buildCache.ts";
+
+export const SHARED_MAVEN_DESTINATION = "/cache/maven/repository/.mfc-remote";
 
 export interface PerRepoBuildCacheMountsInput {
   /** 分仓构建缓存宿主根;缺席 = 该容器不挂平台缓存,只回种子环境
@@ -69,12 +71,19 @@ export function perRepoBuildCacheMounts(
   ]);
   for (const volume of input.volumes) {
     const destination = volume.split(":")[1];
-    const normalized = destination?.replace(/\/+$/, "");
-    if (destination && normalized && destinations.has(normalized)) {
+    const normalized = destination && posix.resolve(destination);
+    if (normalized && (destinations.has(normalized)
+        || normalized === SHARED_MAVEN_DESTINATION
+        || normalized.startsWith(`${SHARED_MAVEN_DESTINATION}/`)
+        || SHARED_MAVEN_DESTINATION.startsWith(`${normalized}/`)
+        || normalized === "/")) {
       throw new Error(`自定义挂载不能覆盖平台的分仓缓存目录: ${normalized}`);
     }
   }
   const { base: cacheBase } = touchBuildCache(input.cacheRoot, input.cacheKeySource);
+  const { base: sharedBase } = touchSharedBuildCache(input.cacheRoot, "shared-maven");
+  const sharedRemote = join(sharedBase, "remote");
+  mkdirSync(sharedRemote, { recursive: true });
   const caches: Array<[string, string]> = [
     ["maven", "/cache/maven"],
     ["npm", "/cache/npm"],
@@ -85,17 +94,39 @@ export function perRepoBuildCacheMounts(
       : []),
   ];
   for (const [name] of caches) mkdirSync(join(cacheBase, name), { recursive: true });
+  // 提前建好嵌套挂载点，让属主准备包含其父目录；否则 Docker 会以 root 创建，
+  // 非 root 的 Maven 无法在 repository 下 install 或写旧式元数据。
+  mkdirSync(join(cacheBase, "maven", "repository", ".mfc-remote"), { recursive: true });
   const mavenOptions = String(environment.MAVEN_OPTS ?? "").trim();
   return {
     volumes: [
       ...input.volumes,
       ...caches.map(([name, destination]) =>
         `${join(cacheBase, name)}:${destination}`),
+      `${sharedRemote}:${SHARED_MAVEN_DESTINATION}`,
     ],
     environment: {
       ...environment,
+      // Resolver 1.9.22：下载包括 SDK zip，共享；install 与旧缓存仍在原分仓根。
+      // SDK 插件会修改解压内容和 mtime，cpp-sdk 不能改成共享可写目录。
       MAVEN_OPTS: [mavenOptions,
-        "-Dmaven.repo.local=/cache/maven/repository"]
+        "-Dmaven.repo.local=/cache/maven/repository",
+        "-Daether.enhancedLocalRepository.split=true",
+        "-Daether.enhancedLocalRepository.localPrefix=",
+        "-Daether.enhancedLocalRepository.remotePrefix=.mfc-remote",
+        "-Daether.enhancedLocalRepository.splitLocal=false",
+        "-Daether.enhancedLocalRepository.splitRemote=false",
+        "-Daether.enhancedLocalRepository.splitRemoteRepository=true",
+        // 保留时间戳文件名，避免另一容器更新快照时改写本次编译正在读的 jar/zip。
+        "-Daether.artifactResolver.snapshotNormalization=false",
+        "-Daether.syncContext.named.factory=file-lock",
+        "-Daether.syncContext.named.nameMapper=file-gav",
+        // Resolver 默认 DELETE_ON_CLOSE 在 Unix 打开时就 unlink，跨 JVM 会锁到
+        // 不同 inode。必须保留锁文件，随整个闲置共享缓存一起回收。
+        "-Daether.named.file-lock.deleteLockFiles=false",
+        // 锁必须与下载区共用宿主目录；每仓自己的 .locks 无法跨容器同步。
+        `-Daether.syncContext.named.basedir.locksDir=${SHARED_MAVEN_DESTINATION}/.locks`,
+        "-Daether.syncContext.named.time=300"]
         .filter(Boolean).join(" "),
       npm_config_cache: "/cache/npm",
       NPM_CONFIG_CACHE: "/cache/npm",

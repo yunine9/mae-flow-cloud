@@ -29,6 +29,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 const CACHE_DESTINATIONS = new Set([
   "/cache/maven",
+  "/cache/maven/repository/.mfc-remote",
   "/cache/npm",
   "/cache/ccache",
   "/cache/xdg",
@@ -225,6 +226,19 @@ export function prepareContainerHostPaths(input: {
     if (!source || seen.has(source)) continue;
     seen.add(source);
     if (prepareCache(source, owner, resolve(input.markerRoot))) cacheTrees += 1;
+    if (volume.split(":")[1] === "/cache/maven") {
+      // 升级时这两层可能刚由 root 创建，旧 maven 根的属主标记仍然有效。
+      // 只检查挂载所需的两层目录，不能为此每次重扫数十 GB 的老本地仓。
+      for (const relative of ["repository", "repository/.mfc-remote"]) {
+        const path = join(source, relative);
+        if (!existsSync(path)) break;
+        const info = lstatSync(path);
+        if (!info.isDirectory() || info.isSymbolicLink()) {
+          throw new Error(`Maven 缓存挂载父目录必须是真实目录：${path}`);
+        }
+        if (info.uid !== owner.uid || info.gid !== owner.gid) chownSync(path, owner.uid, owner.gid);
+      }
+    }
   }
   return { active: true, owner, workspaceEntries, cacheTrees };
   } finally {

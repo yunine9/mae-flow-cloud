@@ -71,8 +71,9 @@ transcript 形状全部零改动——门禁看到的世界不变,变的只是�
 - `safe.directory` 只认当前 workspace；额外挂载禁止覆盖 workspace、
   HOME、`/tmp` 或 Docker Socket；同名外部容器没有 ownership labels 时
   拒绝误杀;
-- Maven/npm/ccache/XDG 缓存按仓库地址哈希隔离。它是速度层而不是质量
-  证据；同仓缓存仍应由运维做清理/容量策略，最终流水线仍是裁判;
+- Maven 远端下载（含 SDK zip）共享，并使用跨进程文件锁；本地 install、
+  SDK 解压目录及 npm/ccache/XDG 按仓隔离。共享区纳入独立容量统计，实际
+  挂载容器保护回收；它是速度层而不是质量证据，最终流水线仍是裁判;
 - 文件 Read/Edit/Write 留宿主以维持 Pi/内核结构，但 Gate 用真实路径、
   软链与任务 workspace 做 fail-closed 边界；Cloud 控制面、凭据、clone/
   push、MR 与通知也仍留可信宿主;

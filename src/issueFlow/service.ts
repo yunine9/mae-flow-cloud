@@ -3882,6 +3882,10 @@ export class IssueFlowService {
     }
     const isolation = this.options.isolation;
     const instance = taskContainerInstance(this.options.dataDir);
+    // 辅助仓拉取会等待网络；缓存目录要在等待结束后、登记容器前创建，
+    // 避免准备期间被闲置回收，随后 Docker 又以 root 重建空挂载源。
+    const maeBuildError = await this.prepareMaeBuild(live);
+    if (this.shuttingDown || live.controlEpoch !== epoch) throw new IssueControlError("会话已停止");
     // 分仓构建缓存挂载:与需求侧共用 perRepoBuildCacheMounts
     // (2026-09-03, issue #78 抽取;防覆盖守卫、合并顺序、touch/mkdir
     // 时机都在共享函数里,两侧不再各养一份)。issueFlow 容器内要跑
@@ -3904,8 +3908,6 @@ export class IssueFlowService {
     });
     // The issue container exists before pull_repo; keep a stable parent bind so late host preparation is visible.
     // 降级口径见 prepareMaeBuild:错误挂环境变量,不阻断容器与会话。
-    const maeBuildError = await this.prepareMaeBuild(live);
-    if (this.shuttingDown || live.controlEpoch !== epoch) throw new IssueControlError("会话已停止");
     const volumes = [...mounts.volumes, `${MAE_BUILD_ASSETS}:${MAE_BUILD_MOUNT}:ro`];
     const environment = { ...mounts.environment, MFC_MAE_BUILD_ROOT: join(live.root, "repo"),
       MFC_MAE_BASELINE: live.state.baseline ?? "",

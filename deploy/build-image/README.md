@@ -78,7 +78,8 @@ Mae-Flow Cloud 的服务账号 UID/GID 重建镜像。服务若由 root 守护�
 
 ## 运行时挂载约定
 
-每个仓库使用独立的 Maven、npm、ccache、XDG 和 C++ SDK 缓存目录。任务
+Maven 远端下载（包括 C++ SDK zip）跨仓共享；本地 `install`、旧 Maven
+缓存、npm、ccache、XDG 和 C++ SDK 解压目录仍按仓隔离。任务
 代码保持 `<任务目录>/<仓名>` 的父子层级；内部 C++ 构建脚本可自然通过
 `build/../..` 找到聚合根，不允许把仓库拍扁挂到固定 `/workspace`。下面仅展示挂载
 约定，具体 CPU、内存、PID、临时磁盘和网络限制由 Cloud 运行时统一
@@ -87,6 +88,7 @@ Mae-Flow Cloud 的服务账号 UID/GID 重建镜像。服务若由 root 守护�
 ```text
 <task-workspace>:<same-absolute-path>:rw
 <cache-root>/<repository-id>/maven:/cache/maven:rw
+<cache-root>/shared-maven/remote:/cache/maven/repository/.mfc-remote:rw
 <cache-root>/<repository-id>/npm:/cache/npm:rw
 <cache-root>/<repository-id>/ccache:/cache/ccache:rw
 <cache-root>/<repository-id>/xdg:/cache/xdg:rw
@@ -97,6 +99,37 @@ Mae-Flow Cloud 的服务账号 UID/GID 重建镜像。服务若由 root 守护�
 tmpfs:/home/mae-flow:rw,nosuid,nodev,mode=1777
 tmpfs:/tmp:rw,exec,nosuid,nodev,mode=1777
 ```
+
+- 共享下载配置对应 Maven 3.9.9 / Resolver 1.9.22。`maven.repo.local`
+  仍为 `/cache/maven/repository`，使用 Resolver 的 local/remote 拆分，
+  localPrefix 为空，保留原有本地工件路径；远端按 repository ID 分目录。
+  所有容器使用共享目录内的 `file-lock` / `file-gav` 文件锁，禁用
+  `deleteLockFiles`，防止 Unix 上打开即 unlink 导致各进程锁到不同文件。
+  空锁文件随整个共享区回收，单次等待上限
+  300 秒。部署使用本地文件系统和一致 UID/GID；镜像或 Resolver 升级须重跑
+  共享构建验证，不把 NFS 等远端文件系统当作已验收环境。
+- C++ 插件从 Maven 获取 zip 后仍在分仓 `cpp_sdk_repository` 解压、修改
+  mtime、清理旧目录；该目录不能改成共享可写或只读。共享的是 zip 下载，
+  不会消除各仓解压目录的占用。
+- 保留 settings 的 SNAPSHOT 更新策略，不强制 `-U` 或固定旧版本。
+  关闭 snapshotNormalization，保留远端时间戳文件名，避免另一容器更新
+  快照时覆盖正在编译的 jar/zip；新构建仍按 settings 选择当前快照。
+  在线构建可能读取更新的快照，离线构建依赖已缓存版本；上线须验证业务仓
+  对最新快照的兼容性。旧分仓缓存不自动搬迁或删除，不能承诺部署立即释放
+  全部重复数据。
+- **上线前还须确认实际构建入口执行 clean。** 已复现 Maven Compiler
+  3.13.0 在其他仓库先更新共享快照后，单独 `compile` 可能保留旧 class，
+  因为它按本轮构建开始时间判断依赖是否变动。下面的真实构建测试先清理
+  测试项目的编译产物，只证明干净编译；不能据此宣称无 clean 的增量构建
+  已兼容。内网入口若允许这种调用，共享快照方案仍需修正，见 Issue #586。
+- 管理页将共享 Maven/SDK 下载作为一条缓存统计，只计一次。实际挂载的
+  容器从创建到停止共同保护共享区；最后一个容器停止后，沿用构建缓存的
+  保留期、容量上限及手动闲置清理策略。仅保留工作区的任务不永久阻止共享
+  下载回收，下次运行按需重新下载。问题单构建产物的 24 小时冷却配置不变。
+- 本地真实构建验证：
+  `MFC_REAL_BUILD_IMAGE=<含 Maven 3.9.9/JDK/C++/Python 的镜像> npx tsx --test --test-timeout=180000 --test-force-exit tests/sharedBuildCacheReal.test.ts`。
+  测试使用临时容器和 Maven 源，覆盖双仓下载、离线编译、install 隔离、
+  SDK 原生链接、快照更新、回收重建；不替代内网私有 C++ 插件的业务构建验收。
 
 - `settings.xml` 可从 `maven-settings.example.xml` 复制后填写内部 mirror，
   **不得包含可复用用户名、密码或 Token**。Agent 与仓库构建脚本共享容器

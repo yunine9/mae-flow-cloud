@@ -2,7 +2,7 @@
  * 仓库级构建缓存的生命周期。
  *
  * 缓存是速度层：同一仓库的后续任务应复用，但不能永久、不可见地占盘。
- * 本模块只管理 cacheRoot 下平台创建的 20 位哈希直属目录；不跟随符号链接，
+ * 本模块只管理 cacheRoot 下的仓库哈希目录和具名共享下载缓存；不跟随符号链接，
  * 不触碰任务工作区，也不在 HTTP/定时器路径使用同步递归扫描。
  */
 
@@ -21,7 +21,15 @@ import { basename, join, relative, resolve, sep } from "node:path";
 
 export const BUILD_CACHE_METADATA = ".mae-flow-cache.json";
 const CACHE_KEY = /^[a-f0-9]{20}$/;
+const SHARED_CACHE_NAMES = {
+  "shared-maven": "共享 Maven / C++ SDK 下载缓存",
+} as const;
+export type SharedBuildCacheKey = keyof typeof SHARED_CACHE_NAMES;
 const DAY_MS = 24 * 60 * 60_000;
+
+function isManagedCacheKey(key: string): boolean {
+  return CACHE_KEY.test(key) || Object.hasOwn(SHARED_CACHE_NAMES, key);
+}
 
 interface BuildCacheMetadata {
   schema: 1;
@@ -86,7 +94,7 @@ function repositoryHint(repository: string): string {
 }
 
 function safeCacheBase(cacheRoot: string, key: string): string {
-  if (!CACHE_KEY.test(key)) throw new Error(`非法构建缓存分区: ${key}`);
+  if (!isManagedCacheKey(key)) throw new Error(`非法构建缓存分区: ${key}`);
   const root = resolve(cacheRoot);
   const base = resolve(root, key);
   if (base === root || !base.startsWith(root + sep)) {
@@ -113,16 +121,21 @@ export function touchBuildCache(
   now = Date.now(),
 ): { key: string; base: string } {
   const key = buildCacheKey(repository);
+  return touchCache(cacheRoot, key, repositoryHint(repository), now);
+}
+
+export function touchSharedBuildCache(cacheRoot: string, key: SharedBuildCacheKey, now = Date.now()): { key: string; base: string } {
+  return touchCache(cacheRoot, key, SHARED_CACHE_NAMES[key], now);
+}
+
+function touchCache(cacheRoot: string, key: string, hint: string, now: number): { key: string; base: string } {
   const root = resolve(cacheRoot);
   const base = safeCacheBase(root, key);
   mkdirSync(root, { recursive: true });
-  if (existsSync(base)) {
-    const info = lstatSync(base);
-    if (!info.isDirectory() || info.isSymbolicLink()) {
-      throw new Error(`构建缓存分区 ${key} 不是可信目录，拒绝挂载`);
-    }
-  } else {
-    mkdirSync(base);
+  mkdirSync(base, { recursive: true });
+  const info = lstatSync(base);
+  if (!info.isDirectory() || info.isSymbolicLink()) {
+    throw new Error(`构建缓存分区 ${key} 不是可信目录，拒绝挂载`);
   }
 
   const path = join(base, BUILD_CACHE_METADATA);
@@ -132,7 +145,7 @@ export function touchBuildCache(
   const metadata: BuildCacheMetadata = {
     schema: 1,
     key,
-    repository_hint: repositoryHint(repository),
+    repository_hint: hint,
     created_at: typeof previous.created_at === "string"
       ? previous.created_at : instant,
     last_used_at: instant,
@@ -141,13 +154,14 @@ export function touchBuildCache(
   return { key, base };
 }
 
-/** 从真实 volume source 反查所属分区；只认 cacheRoot 的直属哈希目录。 */
+/** 从真实挂载源反查缓存。共享区沿用容器占用记录，最后一个容器停止后才回收；
+ * 仅保留工作区的闲置任务不应永久锁住所有仓库的下载缓存。 */
 export function cacheKeyFromPath(
   cacheRoot: string,
   source: string,
 ): string | undefined {
   const parts = relative(resolve(cacheRoot), resolve(source)).split(sep);
-  return parts.length >= 2 && CACHE_KEY.test(parts[0]) ? parts[0] : undefined;
+  return parts.length >= 2 && isManagedCacheKey(parts[0]) ? parts[0] : undefined;
 }
 
 async function treeSize(root: string): Promise<number> {
@@ -202,7 +216,7 @@ export async function inspectBuildCaches(options: {
     };
   }
   for await (const child of directory) {
-    if (!CACHE_KEY.test(child.name) || !child.isDirectory()
+    if (!isManagedCacheKey(child.name) || !child.isDirectory()
         || child.isSymbolicLink()) continue;
     const base = safeCacheBase(root, child.name);
     const metadata = await readMetadata(join(base, BUILD_CACHE_METADATA));
@@ -211,7 +225,7 @@ export async function inspectBuildCaches(options: {
     const lastUsed = metadata?.last_used_at ?? new Date(fallback).toISOString();
     entries.push({
       key: child.name,
-      repository_hint: metadata?.repository_hint,
+      repository_hint: metadata?.repository_hint || SHARED_CACHE_NAMES[child.name as SharedBuildCacheKey],
       last_used_at: lastUsed,
       size_bytes: await treeSize(base),
       active: options.activeKeys?.has(child.name) ?? false,

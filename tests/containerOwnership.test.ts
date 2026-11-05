@@ -41,7 +41,7 @@ test("只有 Linux root 宿主需要 chown，且必须给数字非 root uid:gid"
   }
 });
 
-test("工作区与五类缓存统一交给容器用户，符号链接不跟随到外部", () => {
+test("工作区、分仓缓存与共享下载缓存统一交给容器用户，符号链接不跟随到外部", () => {
   const root = mkdtempSync(join(tmpdir(), "mfc-container-owner-"));
   const workspace = join(root, "repo");
   const nested = join(workspace, "src");
@@ -65,6 +65,9 @@ test("工作区与五类缓存统一交给容器用户，符号链接不跟随�
   volumes.push(
     `${cppSdk}:${join(dirname(workspace), "cpp_sdk_repository")}`,
   );
+  const shared = join(cache, "shared-maven", "remote");
+  mkdirSync(shared, { recursive: true });
+  volumes.push(`${shared}:/cache/maven/repository/.mfc-remote`);
   const customOutsideCacheRoot = join(root, "custom-cpp-sdk");
   mkdirSync(customOutsideCacheRoot, { recursive: true });
   volumes.push(
@@ -89,7 +92,8 @@ test("工作区与五类缓存统一交给容器用户，符号链接不跟随�
     runtime: { platform: "linux", effectiveUid: 0 },
   });
   assert.equal(prepared.active, true);
-  assert.equal(prepared.cacheTrees, 5);
+  assert.equal(prepared.cacheTrees, 6);
+  assert.equal(statSync(shared).uid, uid, "共享下载目录也必须允许构建用户写入");
   assert.equal(statSync(customOutsideCacheRoot).uid, currentUid,
     "即使目标同名，自定义 volume 也不能被平台递归 chown");
   assert.equal(statSync(workspace).uid, uid);
@@ -112,6 +116,14 @@ test("工作区与五类缓存统一交给容器用户，符号链接不跟随�
     runtime: { platform: "linux", effectiveUid: 0 },
   });
   assert.equal(repeated.cacheTrees, 0, "缓存属主正确后不应每单递归重扫");
+
+  // 共享挂载上线前 maven 根已有 marker；新增的父目录仍需交给构建用户。
+  const repository = join(cache, "maven", "repository");
+  mkdirSync(join(repository, ".mfc-remote"), { recursive: true });
+  prepareContainerHostPaths({ workspace, volumes, cacheRoot: cache, markerRoot,
+    user: `${uid}:${gid}`, runtime: { platform: "linux", effectiveUid: 0 } });
+  assert.equal(statSync(repository).uid, uid);
+  assert.equal(statSync(join(repository, ".mfc-remote")).uid, uid);
 });
 
 test("独立挂载的 reviews 目录也交给非 root 容器用户", () => {
