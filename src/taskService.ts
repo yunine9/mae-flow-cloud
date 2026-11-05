@@ -1596,6 +1596,8 @@ export interface TaskState extends MrSamplingState {
   /** 宿主操作期间暂停的原会话；不拥有工作区写权限，不持久化。 */
   retainedSession?: { driver: CloudSession; epoch: number; message?: string };
   mrCreateActive?: ReturnType<typeof createMergeRequest>;
+  /** 人工关联最终 MR 时等已启动的内核初始化结束，再登记合入。 */
+  kernelBootstrap?: Promise<string>;
   /** 流水线轮询按 SHA 防重入；新 SHA 可以立刻接棒，旧轮醒来后自退。 */
   pipelinePollSha?: string;
   pipelinePollEpoch?: number;
@@ -2269,7 +2271,7 @@ export class TaskService {
   private async activeTaskContainer(
     task: TaskState,
   ): Promise<TaskCommandContainer> {
-    if (this.shuttingDown || ["canceled", "paused", "pausing"].includes(task.summary.status))
+    if (this.shuttingDown || task.summary.delivery?.final_mr || ["canceled", "paused", "pausing"].includes(task.summary.status))
       throw new TaskControlError("任务已停止，不再启动或使用执行容器");
     if (task.container) return task.container;
     const epoch = task.controlEpoch;
@@ -14061,6 +14063,7 @@ export class TaskService {
             this.cleanupHostGitCredential(prepared);
           }
         }
+        if (!this.current(task, epoch)) return;
         task.cwd = cwd;
         materializeRequirementAssets(
           workspace, cwd, task.summary.requirement_document);
@@ -14080,6 +14083,7 @@ export class TaskService {
           this.options.log?.(
             `[cross-repo-handoff] 任务 ${task.summary.id} 交接生成失败(fail-open): ${cause}`);
         }
+        if (!this.current(task, epoch)) return;
         const activeRepository = task.summary.repo_url
           ?? this.effectiveDefaultRepo();
         if (activeRepository) {
@@ -14310,7 +14314,11 @@ export class TaskService {
         // Cloud 已经明确创建了交付任务：宿主先机械 init/current，再让
         // 模型入场。检视/流水线/冲突返工必须在此之前由可信宿主执行
         // feedback-open；bootstrap 永远不从 terminal 重开配置单。
-        const guidance = await kernel.bootstrapManaged(requirementForAgent);
+        const bootstrap = kernel.bootstrapManaged(requirementForAgent);
+        task.kernelBootstrap = bootstrap;
+        let guidance: string;
+        try { guidance = await bootstrap; }
+        finally { if (task.kernelBootstrap === bootstrap) task.kernelBootstrap = undefined; }
         repairKernelOwnership();
         if (!this.current(task, epoch)) return;
         prompt = guidance
@@ -14531,7 +14539,7 @@ export class TaskService {
           return;
         }
       }
-      if (await this.finishHostAction(task, epoch)) return;
+      if (await this.finishHostAction(task, epoch) || !this.current(task, epoch)) return;
       if (task.summary.parent_task_id) this.startBaselineWarmup(task, epoch);
       task.driver = await CloudSession.create({
         taskId: task.summary.id,
@@ -18054,10 +18062,10 @@ export class TaskService {
       const d = task.summary.delivery;
       const url = normalizeRepairMrUrl(rawUrl);
       if (task.summary.status === "completed" && d?.final_mr?.url === url) return this.project(task);
-      if (!d?.mr_url || task.summary.origin === "issue" || this.isRequirementAnalysis(task)
-          || ["completed", "canceled"].includes(task.summary.status) || continuationPending(task.summary))
-        throw new TaskControlError("请在已有初版 MR 且尚未结束的需求交付任务中关联最终 MR");
-      const previous = d.final_mr;
+      if (task.summary.origin === "issue" || this.isRequirementAnalysis(task)
+          || ["completed", "canceled", "coordinating"].includes(task.summary.status) || continuationPending(task.summary))
+        throw new TaskControlError("请在尚未结束的需求交付任务中关联最终 MR；拆分的需求请打开对应交付任务");
+      const previous = d?.final_mr;
       if (previous?.state === "merged") {
         if (previous.url !== url) throw new TaskControlError("最终 MR 已合入，不能再更换链接");
         await this.refreshFinalMr(task, previous);
@@ -18066,7 +18074,7 @@ export class TaskService {
       }
       const epoch = task.controlEpoch;
       const mr = await this.readFinalMr(task, url);
-      if (d.final_mr?.state === "merged") {
+      if (d?.final_mr?.state === "merged") {
         if (d.final_mr.url !== url) throw new TaskControlError("最终 MR 已合入，不能再更换链接");
         return this.project(task);
       }
@@ -18098,9 +18106,11 @@ export class TaskService {
   private async readFinalMr(task: TaskState, url: string) {
     const platformUrl = this.effectivePlatformUrl();
     if (!platformUrl) throw new TaskControlError("当前部署未配置 MR 平台");
+    const repositoryList = task.summary.repositories;
+    const repo = task.summary.repo_url ?? (repositoryList?.length === 1 ? repositoryList[0] : this.effectiveDefaultRepo());
+    if (!repo) throw new TaskControlError("任务未指定代码仓，无法核对最终 MR 的归属");
     const mr = await readFinalDeliveryMr({ platformUrl, url, credential: this.options.gitCredential?.(task.summary.luban_account) });
-    const repo = task.summary.repo_url ?? this.effectiveDefaultRepo();
-    if (!repo || repositoryIdentity(repo) !== repositoryIdentity(mr.repo))
+    if (repositoryIdentity(repo) !== repositoryIdentity(mr.repo))
       throw new TaskControlError("最终 MR 必须属于本任务的代码仓");
     return mr;
   }
@@ -18175,7 +18185,7 @@ export class TaskService {
     const cleanup = await Promise.allSettled([
       activePrepush?.then(() => undefined) ?? Promise.resolve(),
       task.summary.delivery?.final_mr
-        ? Promise.all([driver?.abort(), abortAuxiliarySessions(task), task.assistantActive])
+        ? Promise.all([driver?.abort(), abortAuxiliarySessions(task), task.assistantActive, task.kernelBootstrap?.catch(() => {})])
         : driver?.abort() ?? Promise.resolve(), container?.stop() ?? Promise.resolve(),
     ]);
     if (cleanup[1].status === "fulfilled" && task.driver === driver) { task.driver = undefined; driver?.dispose(); }
@@ -18327,7 +18337,7 @@ export class TaskService {
     if (this.shuttingDown || !this.effectivePlatformUrl()
         || (process.env.MAE_FLOW_UI_FIXTURE_MODE === "1" && task.summary.ui_fixture === true)
         || ["completed", "canceled"].includes(task.summary.status)
-        || (!task.summary.delivery?.mr_url && task.summary.delivery?.mr_id === undefined)) return;
+        || (!task.summary.delivery?.final_mr && !task.summary.delivery?.mr_url && task.summary.delivery?.mr_id === undefined)) return;
     this.finalMrSamples.captureInitialBase(task, createdMr);
     this.bypass(task, "合入监控", this.watchMerge(task, task.controlEpoch, true));
   }
@@ -18352,7 +18362,7 @@ export class TaskService {
             || ticketCorrectionBlocks(task.summary.ticket_correction)
             || this.tasks.get(task.summary.id) !== task
             || ["completed", "canceled"].includes(task.summary.status)
-            || (!task.summary.delivery?.mr_url && task.summary.delivery?.mr_id === undefined)) return;
+            || (!task.summary.delivery?.final_mr && !task.summary.delivery?.mr_url && task.summary.delivery?.mr_id === undefined)) return;
         const final = task.summary.delivery.final_mr;
         if (final) {
           if (final.state === "closed" && !task.summary.delivery.stalled) return;

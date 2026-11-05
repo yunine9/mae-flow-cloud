@@ -19,9 +19,9 @@ test("桌面任务关联最终 MR 并在交付分析中查看初版之后的代�
     writeFileSync(page, '<!doctype html><html data-theme="light"><meta charset="utf-8"><style>' + layers + css + '</style><div id="app"></div><pre id="result" hidden></pre><script>' + built.outputFiles[0].text.replaceAll("</script", "<\\/script") + "</script></html>");
     const preview = process.env.MFC_FINAL_MR_PREVIEW;
     if (preview) mkdirSync(preview, { recursive: true });
-    for (const scenario of ["task", "tracking", "closed", "verifying", "completed", "different-target", "unknown-target", "analysis", "origin-team", "origin-detail", "origin-count-only"]) {
+    for (const scenario of ["task", "no-initial-link", "no-initial-merged", "tracking", "closed", "verifying", "completed", "different-target", "unknown-target", "analysis", "final-only-analysis", "platform-push", "origin-team", "origin-detail", "origin-count-only"]) {
       const query = new URLSearchParams({ scenario });
-      if (scenario === "analysis") query.set("deliveryTask", "task-orders");
+      if (["analysis", "final-only-analysis", "platform-push"].includes(scenario)) query.set("deliveryTask", "task-orders");
       if (scenario === "origin-detail") query.set("deliveryTask", "task-money");
       if (scenario === "origin-count-only") query.set("deliveryTask", "task-timeout");
       const dom = await browserResultDump(chrome, ["--headless=new", "--disable-gpu", "--no-first-run", "--disable-extensions", `--user-data-dir=${join(dir, scenario)}`,

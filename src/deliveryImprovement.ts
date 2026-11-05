@@ -200,7 +200,7 @@ export class DeliveryImprovements<T extends Owner> {
       const comparison = readFinalMrComparison(snapshot);
       if (comparison) atomic(join(runRoot, "mr-comparison.json"), comparison);
       const comparisonNote = !snapshot.delivery?.final_mr ? "" : comparison
-        ? "\n请读取 analysis 范围的 mr-comparison.json。change_patch 记录初版与最终 MR 间的实际变化。comparison_basis 为 head 表示比较两版代码，为 patch 表示比较两份 MR 各自相对基线的增删行。比较结果只能说明改了什么，推断原因时须另引需求、检视、流水线或责任人反馈，并指出证据不足或截断之处。"
+        ? "\n请读取 analysis 范围的 mr-comparison.json。change_patch 记录代码差异。comparison_basis 为 final 时只有最终 MR 相对目标基线的改动，不能由此推断平台初版。head 对比两个源版本，patch 对比各自相对基线的增删行。reference 为 platform_push 时，较早版本来自平台已推送提交，尚未创建平台 MR；其余双版本对比来自初版 MR 与最终 MR。分析动机须另引需求、检视、流水线或责任人反馈，并指出证据不足或截断之处。"
         : "\n最终 MR 缺少完整比较材料。限定结论，不能用初版统计或提交标题补造最终代码和修改动机。";
       const instructions = readFileSync(join(ANALYSIS_PLATFORM_ROOT, "skills/delivery-improvement/SKILL.md"), "utf8")
         + "\n\n" + readFileSync(join(ANALYSIS_PLATFORM_ROOT, "skills/delivery-improvement/references/dimensions.md"), "utf8") + comparisonNote;

@@ -61,7 +61,6 @@ function interfaceFields(file: string, name: string, ...relatedFiles: string[]):
 const NOT_MIRRORED = new Set<string>([
   "ui_fixture",                       // 只在 UI 场景库冻结状态时写,正式任务永远没有
   "workspace",                        // 服务端现场绝对路径,页面不该拿到宿主路径
-  "origin",                           // 小鲁班手机审批卡的来源域,网页不用
   "delivery_scope_exemptions",        // 主责任人放行过的越界文件,服务端复判用
   "repository_supplement_resolved",   // 仓库补充信息已解析的内部标记
   "delivery.mr_id",                   // 平台内部编号;页面用 mr_url

@@ -15,19 +15,20 @@ function stored(path: string) {
 }
 
 /** 老任务只用首次发布时留下的证据，后续推送不能代表初版。 */
-export function originalMr(summary: Pick<TaskSummary, "delivery" | "workspace">): InitialDeliveryMr {
-  const d = summary.delivery!;
-  if (d.initial_mr) return d.initial_mr;
+export function originalMr(summary: Pick<TaskSummary, "delivery" | "workspace">): InitialDeliveryMr | undefined {
+  const d = summary.delivery;
+  if (d?.initial_mr) return d.initial_mr;
+  if (!d?.mr_url) return undefined;
   const first = stored(join(summary.workspace, "delivery-experience", "first.json"));
   const report = stored(join(summary.workspace, "delivery-summary", "state.json"));
   const head = first?.head ?? report?.first_head;
   // 旧报告的 base 来自任务工作区当时的远端跟踪分支，可能落后于 MR 平台。
-  return { url: first?.mr || d.mr_url!, head: validSha(head) ? head : undefined };
+  return { url: first?.mr || d.mr_url, head: validSha(head) ? head : undefined };
 }
 
 export function captureOriginalMr(summary: Pick<TaskSummary, "delivery" | "workspace">,
   url: string, head: string): InitialDeliveryMr {
-  return summary.delivery?.mr_url ? originalMr(summary) : { url, head };
+  return originalMr(summary) ?? { url, head };
 }
 
 export function finalMrRecord(mr: DeliveryMr): FinalDeliveryMr {

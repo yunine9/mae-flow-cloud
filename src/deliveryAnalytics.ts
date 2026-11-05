@@ -5,7 +5,7 @@ import type { TaskSummary } from "./taskService.ts";
 import { feedbackStamp, historicalRepairIntervals, intervalOrigins, validInterval, type RepairInterval } from "./deliveryAttribution.ts";
 import { frozenTaskBaseline } from "./artifacts.ts";
 import { analyticsGit, calculateDeliveryCode, finalMrSize } from "./deliveryAnalyticsGit.ts";
-import { compareFinalMr } from "./finalMrComparison.ts";
+import { compareFinalMr, compareWithoutInitialMr } from "./finalMrComparison.ts";
 import { repositoryIdentity } from "./knowledgeAssetModel.ts";
 import type { RepositoryProfile } from "./repositoryProfiles.ts";
 import { emptyOrigins, type CodeOrigin, type DeliveryAnalysisReport, type DeliveryCodeMetric, type MrComparison, type MrComparisonDetail } from "./deliveryAnalyticsTypes.ts";
@@ -47,7 +47,10 @@ export function deliveryAnalysisHead(delivery?: Delivery): string | undefined {
 }
 export function comparisonKey(delivery?: Delivery) {
   const a = delivery?.initial_mr, b = delivery?.final_mr;
-  return b ? createHash("sha256").update(JSON.stringify([a?.url, a?.head, a?.base, b.url, b.head, b.base])).digest("hex") : undefined;
+  if (!b) return;
+  const versions = [a?.url, a?.head, a?.base, b.url, b.head, b.base];
+  if (!a && !delivery?.mr_url && delivery?.git_push?.sha) versions.push(delivery.git_push.sha);
+  return createHash("sha256").update(JSON.stringify(versions)).digest("hex");
 }
 export function hasFinalMrSample(task: TaskSummary, requireUsable = false): boolean {
   const key = comparisonKey(task.delivery), saved = read(task);
@@ -57,7 +60,8 @@ export function hasFinalMrSample(task: TaskSummary, requireUsable = false): bool
   try {
     const file = lstatSync(detailLocation(task, key));
     return file.isFile() && file.size > 0 && file.size <= 2_000_000
-      && (saved.comparison.method === "patch" || saved.metric?.head === task.delivery?.final_mr?.head);
+      && (saved.comparison.method === "final" ? !task.delivery?.git_push?.sha
+        : saved.comparison.method === "patch" || saved.metric?.head === task.delivery?.final_mr?.head);
   } catch { return false; }
 }
 function matchesFinalSize(size?: FinalSizeSample, final?: Delivery["final_mr"]): boolean {
@@ -76,11 +80,28 @@ export function readFinalMrComparison(task: TaskSummary, generation?: string): M
   }
   const key = comparisonKey(scope.delivery), saved = read(scope);
   if (!key || saved?.comparison_key !== key || !saved.comparison || saved.comparison.method === "unavailable") return;
+  return readComparisonDetail(scope, key);
+}
+function readComparisonDetail(task: Task, key: string): MrComparisonDetail | undefined {
   try {
-    const path = detailLocation(scope, key), stat = lstatSync(path);
+    const path = detailLocation(task, key), stat = lstatSync(path);
     if (!lstatSync(dirname(path)).isDirectory() || !stat.isFile() || stat.size > 2_000_000) return;
     return JSON.parse(readFileSync(path, "utf8"));
   } catch { return; }
+}
+
+function hasSavedPushDetail(task: Task, key: string, summary: MrComparison): boolean {
+  const detail = readComparisonDetail(task, key);
+  if (detail?.reference !== "platform_push" || !["head", "patch"].includes(detail.comparison_basis)
+      || !Array.isArray(detail.files) || typeof detail.truncated !== "boolean" || !summary.files) return false;
+  const paths = new Set<string>();
+  for (const file of detail.files) {
+    if (typeof file?.path !== "string" || typeof file.change_patch !== "string"
+        || typeof file.initial_patch !== "string" || typeof file.final_patch !== "string") return false;
+    paths.add(file.path);
+  }
+  if (detail.truncated) return summary.files.some(file => file.changed && paths.has(file.path));
+  return summary.files.every(file => !file.changed || paths.has(file.path));
 }
 
 /** Only a bounded, explicitly identified repair interval receives a reason.
@@ -161,9 +182,16 @@ async function collectFinalMr(summary: CollectionTask, cwd: string, head: string
   const savedMetric = sameComparison && saved.metric?.base === final.base && saved.metric?.head === head ? saved.metric : undefined;
   let comparison: MrComparison;
   try {
-    const result = await compareFinalMr(cwd, { initial: initial ?? {}, final });
-    comparison = result.summary;
-    writeAnalysisFile(detailLocation(summary, key), result.detail);
+    const result = !initial && !delivery.mr_url ? await compareWithoutInitialMr(cwd, final, delivery.git_push?.sha)
+      : await compareFinalMr(cwd, { initial: initial ?? {}, final });
+    const previous = sameComparison ? saved.comparison : undefined;
+    if (previous?.reference === "platform_push" && result.summary.method === "final" && hasSavedPushDetail(summary, key, previous)) {
+      // 同一对版本的比较已保存。现场缺少早期证据时，保留原有两版差异。
+      comparison = previous;
+    } else {
+      comparison = result.summary;
+      writeAnalysisFile(detailLocation(summary, key), result.detail);
+    }
   } catch (e) {
     // Immutable evidence survives workspace reclamation. In particular, an
     // older comparison snapshot may still need its first independent line count.
@@ -172,8 +200,9 @@ async function collectFinalMr(summary: CollectionTask, cwd: string, head: string
   }
   let metric: DeliveryCodeMetric | undefined;
   let error: string | undefined;
-  if (comparison.method === "ancestry") {
-    try { metric = await collectDeliveryCode(summary, cwd, head); }
+  if (comparison.method === "ancestry" || comparison.method === "final" || comparison.reference === "platform_push") {
+    const boundary = comparison.reference === "platform_push" && comparison.method === "ancestry" ? comparison.initial_head : undefined;
+    try { metric = await collectDeliveryCode(summary, cwd, head, boundary); }
     catch (e) {
       if (matchesFinalSize(saved?.final_size, final)) metric = savedMetric;
       error = e instanceof Error ? e.message : "无法回溯最终代码的来源";
@@ -191,7 +220,7 @@ async function collectFinalMr(summary: CollectionTask, cwd: string, head: string
     final_size: { url: final.url, head, base: final.base, counts } });
 }
 
-export async function collectDeliveryCode(summary: CollectionTask, cwd: string, head: string): Promise<DeliveryCodeMetric> {
+export async function collectDeliveryCode(summary: CollectionTask, cwd: string, head: string, confirmedPlatformPush?: string): Promise<DeliveryCodeMetric> {
   const attribution = attributionKey(summary, cwd);
   const priorSample = read(summary);
   const final = summary.delivery?.final_mr;
@@ -211,7 +240,8 @@ export async function collectDeliveryCode(summary: CollectionTask, cwd: string, 
     catch { throw new Error("最终合入的外部提交缺失或没有延续平台推送，无法核实代码行与来源"); }
     head = foreign;
   }
-  const taskBase = final ? summary.delivery?.initial_mr?.base : await frozenTaskBaseline(cwd);
+  const finalOnly = !!final && !summary.delivery?.initial_mr && !summary.delivery?.mr_url;
+  const taskBase = finalOnly ? final.base : final ? summary.delivery?.initial_mr?.base : await frozenTaskBaseline(cwd);
   if (!taskBase) throw new Error("缺少任务创建时的 Git 基线，无法识别首次提交");
   const target = final?.target_branch ?? summary.delivery?.target_branch;
   if (!target) throw new Error("缺少 MR 目标分支，无法确定交付范围");
@@ -246,8 +276,10 @@ export async function collectDeliveryCode(summary: CollectionTask, cwd: string, 
   for (const source of [fallback, published, historical]) {
     for (const [sha, origin] of Object.entries(source.origins)) if (origin === "pipeline") { origins[sha] = "pipeline"; evidence[sha] = source.evidence[sha]; }
   }
+  const publishedBoundary = final ? confirmedPlatformPush ?? summary.delivery?.initial_mr?.head
+    : foreign && foreign !== publishedHead ? summary.delivery?.initial_mr?.head ?? publishedHead : undefined;
   const metric = await calculateDeliveryCode({ cwd, base, head, task_base: taskBase, first: previous?.first, origins,
-    infer_unattributed: true, initial_mr_head: final ? summary.delivery?.initial_mr?.head : foreign && foreign !== publishedHead ? summary.delivery?.initial_mr?.head ?? publishedHead : undefined, repair_commits: [...new Set([
+    infer_unattributed: true, final_only: finalOnly, initial_mr_head: publishedBoundary, repair_commits: [...new Set([
       ...Object.keys(fallback.origins), ...Object.keys(published.origins), ...Object.keys(historical.origins),
       ...(previous?.initial_implementation?.basis === "repair_record" ? previous.commits.filter(c => c.origin !== "first").map(c => c.sha) : []),
     ])] });
@@ -266,7 +298,7 @@ export async function collectDeliveryCode(summary: CollectionTask, cwd: string, 
   for (const commit of metric.commits) {
     commit.origin_evidence = commit.origin === "first" ? [metric.initial_implementation?.basis === "repair_record"
       ? "首轮实现：首次实际修复区间之前的提交" : metric.initial_implementation?.basis === "mr_publication"
-        ? "首轮实现：初版 MR 发布前的实现提交" : metric.initial_implementation?.basis === "commit_message"
+        ? "首轮实现：初版 MR 发布前的实现提交" : metric.initial_implementation?.basis === "platform_push" ? "首轮实现：平台已推送版本中的实现提交" : metric.initial_implementation?.basis === "commit_message"
         ? "推断：首次明确修复提交之前的首轮实现" : "推断：未发现修复记录或明确修复提交，暂计首轮实现"]
       : evidence[commit.sha] ?? commit.origin_evidence ?? [commit.origin === "other"
         ? "缺少覆盖该提交的修复区间证据" : "此前推送快照保留的分类"];
@@ -308,7 +340,7 @@ export function buildDeliveryAnalysis(tasks: TaskSummary[], modules: Array<{ id:
       const final = task.delivery?.final_mr, key = comparisonKey(task.delivery);
       const comparison = final ? (stored?.comparison_key === key ? stored?.comparison : undefined)
         ?? { method: "unavailable" as const, initial_head: task.delivery?.initial_mr?.head, final_head: final.head,
-          reason: final.state === "merged" && !final.head ? "代码平台尚未返回最终 MR 的源版本，待版本可读后可刷新数据" : "尚无这两份 MR 当前版本的比较证据" } : undefined;
+          reason: final.state === "merged" && !final.head ? "代码平台尚未返回最终 MR 的源版本，待版本可读后可刷新数据" : !task.delivery?.initial_mr && !task.delivery?.mr_url ? "尚无最终 MR 的代码改动记录" : "尚无这两份 MR 当前版本的比较证据" } : undefined;
       // 已完成记录可能保留待对账文案；统计合入事实不依赖该文案是否清理。
       const merged = task.status === "completed" && (final ? final.state === "merged" : ["merged", "已合入", "已合入（内核终态待对账）"].includes(task.delivery?.mr_state ?? ""));
       // merged_sha identifies the target commit (different after squash/rebase).
@@ -316,7 +348,7 @@ export function buildDeliveryAnalysis(tasks: TaskSummary[], modules: Array<{ id:
       const exactFinalMetric = final && stored?.comparison_key === key && stored?.metric?.head === head && stored?.metric?.base === final.base ? stored?.metric : undefined;
       const finalSizeMatches = matchesFinalSize(stored?.final_size, final);
       const publishedHead = final ? final.head : task.delivery?.git_push?.sha;
-      const metric = (!final || finalSizeMatches && exactFinalMetric && comparison?.method === "ancestry")
+      const metric = (!final || finalSizeMatches && exactFinalMetric && (comparison?.method === "ancestry" || comparison?.method === "final" || comparison?.reference === "platform_push"))
         && head && stored?.metric?.head === head && (stored.metric.published_head ?? stored.metric.head) === publishedHead
         && stored.metric.initial_implementation ? structuredClone(stored.metric) : undefined;
       if (metric) {

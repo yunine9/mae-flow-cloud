@@ -980,6 +980,7 @@ export interface RequirementSourceMeta {
 }
 
 export interface TaskSummary {
+  origin?: "requirement" | "issue";
   delivery_report?: { status: "running" | "completed" | "failed"; available: boolean; message: string; head: string };
   continuation?: { id: string; text: string; actor: string; at: string; state: "preparing" | "failed" | "active"; error?: string; branch: string; baseline: string };
   delivery_history?: Array<{ id: string; started_at: string; completed_at: string; delivery: TaskSummary["delivery"]; request?: string; archive: string }>;
@@ -1182,6 +1183,7 @@ export interface TaskSummary {
   };
   delivery?: {
     git_push?: { sha: string };
+    source_branch?: string;
     target_branch?: string;
     initial_mr?: { url: string; head?: string; base?: string };
     final_mr?: {

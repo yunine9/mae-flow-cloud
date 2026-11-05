@@ -2,13 +2,34 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runSafeWorktreeGitAsync } from "./safeGit.ts";
-import { analyticsCodePath, analyticsGit } from "./deliveryAnalyticsGit.ts";
+import { frozenTaskBaseline } from "./artifacts.ts";
+import { analyticsCodePath, analyticsGit, deliveryDiffPaths } from "./deliveryAnalyticsGit.ts";
 import { redactAnalysisText, restrictedAnalysisPathSegment } from "./analysisText.ts";
 import type { MrComparison, MrComparisonDetail } from "./deliveryAnalyticsTypes.ts";
 
 export interface ComparisonVersions { initial: { head?: string; base?: string }; final: { head?: string; base?: string } }
 const sha = /^(?:[\da-f]{40}|[\da-f]{64})$/;
 const maxFiles = 300, maxLines = 100_000, maxPatchChars = 8_000, maxAllPatchChars = 160_000;
+
+export async function compareWithoutInitialMr(cwd: string, final: ComparisonVersions["final"], pushed?: string) {
+  if (pushed && final.base && final.head && [pushed, final.base, final.head].every(id => sha.test(id))) {
+    let base: string | undefined;
+    try {
+      await analyticsGit(cwd, ["merge-base", "--is-ancestor", pushed, final.head]);
+      base = (await analyticsGit(cwd, ["merge-base", "--all", pushed, final.base])).trim();
+    } catch { /* 外部分支可独立改写；此时须从任务原先保存的起点还原推送差异。 */ }
+    if (!base || !sha.test(base) || base === pushed) base = await frozenTaskBaseline(cwd);
+    if (base && sha.test(base) && base !== pushed) {
+      try {
+        // compareFinalMr 检查两个起点确实属于各自分支，再逐文件比较。
+        const comparison = await compareFinalMr(cwd, { initial: { head: pushed, base }, final });
+        comparison.summary.reference = comparison.detail.reference = "platform_push";
+        return comparison;
+      } catch { /* 推送版本或其起点无法核实，仍可展示最终 MR 自身的改动。 */ }
+    }
+  }
+  return finalMrDiff(cwd, final);
+}
 
 // Strip coordinates and baseline context that shift during a rebase. Preserve
 // edit order, signs and Git's function labels, including repeated lines.
@@ -35,6 +56,35 @@ async function diffChanges(cwd: string, first: string, final: string) {
     if (hunk < 0) throw new Error("两份补丁缺少可读文本差异");
     return diff.stdout.slice(hunk + 1);
   } finally { await rm(root, { recursive: true, force: true }); }
+}
+
+/** 没有平台初版时，只展示最终 MR 相对其合入前基线的真实改动。 */
+export async function finalMrDiff(cwd: string, final: { head?: string; base?: string }): Promise<{ summary: MrComparison; detail: MrComparisonDetail }> {
+  const { base, head } = final;
+  if (!base || !head || ![base, head].every(v => sha.test(v))) throw new Error("缺少最终 MR 的源版本或比较基线，无法读取代码改动");
+  const start = Date.now();
+  const run = (args: string[]) => {
+    if (Date.now() - start > 60_000) throw new Error("读取最终 MR 改动超过一分钟");
+    return analyticsGit(cwd, args);
+  };
+  await run(["merge-base", "--is-ancestor", base, head]);
+  const visible = (path: string) => analyticsCodePath(path) && !path.split(/[\\/]/).some(part => restrictedAnalysisPathSegment.test(part));
+  const paths = (await deliveryDiffPaths(run, base, head)).filter(entry => visible(entry.path) && (!entry.old || visible(entry.old)));
+  if (paths.length > maxFiles) throw new Error("最终 MR 涉及超过 300 个代码文件，无法展示完整改动");
+  const files = paths.map(entry => ({ path: entry.path, changed: true, added: entry.added, removed: entry.removed }));
+  const detail: MrComparisonDetail = { comparison_basis: "final", files: [], truncated: false };
+  let remaining = maxAllPatchChars;
+  for (const { path, old } of paths) {
+    if (!remaining) { detail.truncated = true; break; }
+    const patch = redactAnalysisText(await run(["--literal-pathspecs", "diff", "--find-renames", "--no-color", "--no-ext-diff", "--no-textconv", "--unified=2",
+      base, head, "--", ...(old ? [old] : []), path]));
+    const change = patch.slice(0, Math.min(maxPatchChars, remaining));
+    remaining -= change.length;
+    const truncated = change.length < patch.length;
+    detail.truncated ||= truncated;
+    detail.files.push({ path, change_patch: change, initial_patch: "", final_patch: "", truncated });
+  }
+  return { summary: { method: "final", final_head: head, files }, detail };
 }
 
 /** Compare each MR against its own diff base. Equal signed lines at the same path

@@ -15,7 +15,8 @@ export function TaskMergeRequests({ task, canOperate, onChanged }: {
   const final = task.delivery?.final_mr;
   const correction = task.ticket_correction;
   const analysisTask = !task.parent_task_id && (task.requirement_analysis_requested || (task.repositories?.length ?? 0) > 1);
-  const canLink = canOperate && initial && final?.state !== "merged" && !analysisTask && !["completed", "canceled", "coordinating"].includes(task.status)
+  const canLink = canOperate && task.origin !== "issue" && !analysisTask && final?.state !== "merged"
+    && !["completed", "canceled", "coordinating"].includes(task.status)
     && (!correction || correction.state === "completed" || correction.cleanup_only)
     && (!task.continuation || task.continuation.state === "active");
 
@@ -32,14 +33,15 @@ export function TaskMergeRequests({ task, canOperate, onChanged }: {
   return <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-x-[18px]">
     <dt className="pt-[3px] text-xs leading-[1.6] text-muted-foreground">合入请求</dt>
     <dd className="m-0 grid min-w-0 gap-2">
-      <div className="flex flex-wrap items-center gap-2">
-        {initial ? <Button variant="outline" size="sm" render={<a href={initial} target="_blank" rel="noreferrer" />}>
-          初版 MR{!final && task.delivery?.mr_state ? ` · ${task.delivery.mr_state}` : ""} <ExternalLink aria-hidden /></Button> : <span>尚未记录合入请求</span>}
+      <div className="flex flex-wrap items-center gap-2 empty:hidden">
+        {!initial && !final && !canLink && <span>尚未记录合入请求</span>}
+        {initial && <Button variant="outline" size="sm" render={<a href={initial} target="_blank" rel="noreferrer" />}>
+          初版 MR{!final && task.delivery?.mr_state ? ` · ${task.delivery.mr_state}` : ""} <ExternalLink aria-hidden /></Button>}
         {final && <Button variant="outline" size="sm" render={<a href={final.url} target="_blank" rel="noreferrer" />}>
           最终 MR · {{ opened: "待合入", closed: "已关闭", merged: "已合入" }[final.state]} <ExternalLink aria-hidden /></Button>}
         {final?.state === "merged" && <a className="inline-flex items-center gap-1 px-1 text-sm text-ink underline-offset-2 hover:underline"
           href={`/?${new URLSearchParams({ deliveryAnalysis: "1", deliveryTask: task.id })}`} target="_blank" rel="noreferrer">
-          查看两版代码差异 <ExternalLink size={14} aria-hidden /></a>}
+          {initial ? "查看两版代码差异" : "查看交付分析"} <ExternalLink size={14} aria-hidden /></a>}
         {canLink && !editing && <Button variant="link" size="sm" onClick={() => {
           setError(""); setUrl(final?.url ?? ""); setEditing(true);
         }}>{final ? "更换最终 MR" : "关联最终 MR"}</Button>}

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -232,6 +232,134 @@ test("旧任务在没有初版证据时保留原 MR 链接，不把最近推送�
     workspace,
     delivery: { mr_url: url, git_push: { ref: "refs/heads/later", remote: "origin", sha: "f".repeat(40) } },
   });
+  assert.ok(first);
   assert.equal(first.url, url);
   assert.equal(first.head, undefined);
+});
+
+for (const initialized of [false, true]) {
+  test(`无平台初版 MR：${initialized ? "已开始的需求在内核登记真实合入" : "排队中尚无代码现场也可完成"}，只恢复最终 MR 监听`, async t => {
+    const dir = mkdtempSync(join(tmpdir(), "mfc-external-only-"));
+    const repo = "https://code.example/acme/service.git", mr = (id: number) => `https://code.example/acme/service/-/merge_requests/${id}`;
+    const calls: string[] = [];
+    const mergedAt = "2026-11-04T08:15:00.000Z";
+    let oldReads = 0, newReads = 0, merged = false, provideSha = false;
+    let sha = "b".repeat(40), base = "a".repeat(40), releaseOld!: () => void;
+    const held = new Promise<void>(resolve => { releaseOld = resolve; });
+    const platform = createServer(async (request, response) => {
+      const path = new URL(request.url!, "http://localhost");
+      calls.push(request.method + " " + path.pathname);
+      if (path.pathname !== "/mr/detail") { response.writeHead(404).end(); return; }
+      const url = path.searchParams.get("mr_url")!, iid = url.split("/").at(-1);
+      let state = "opened";
+      if (iid === "2" && ++oldReads > 1) { await held; state = "merged"; }
+      if (iid === "3") { newReads++; if (merged) state = "merged"; }
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ url, iid, repo: iid === "4" ? "https://code.example/other.git" : repo,
+        source_branch: "local", target_branch: "main", state,
+        sha: provideSha || state !== "merged" ? sha : undefined, base_sha: base,
+        merged_at: state === "merged" ? mergedAt : undefined }));
+    });
+    await new Promise<void>(resolve => platform.listen(0, "127.0.0.1", resolve));
+    const address = platform.address(); assert.ok(address && typeof address === "object");
+    const kernelRoot = join(process.cwd(), "kernel");
+    const make = () => new TaskService({ dataDir: dir, provider: "test", model: "test", modelsJson: {},
+      maxConcurrent: 0, host: { kernelRoot, continuousReview: true },
+      delivery: { platformUrl: `http://127.0.0.1:${address.port}`, pollIntervalMs: 20 } });
+    let service = make();
+    t.after(async () => {
+      releaseOld(); await service.shutdown();
+      platform.closeAllConnections(); await new Promise<void>(resolve => platform.close(() => resolve()));
+      rmSync(dir, { recursive: true, force: true });
+    });
+    const created = service.create("本地完成需求", { repo, ticket: "REQ-1", baseline: "main", account: "owner" });
+    const task = (service as any).tasks.get(created.id);
+    const cwd = join(created.workspace, "service");
+    if (initialized) {
+      task.cwd = cwd; mkdirSync(cwd);
+      const git = (...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+      git("init", "-q", "-b", "main"); git("config", "user.email", "owner@example.test"); git("config", "user.name", "owner");
+      git("commit", "--allow-empty", "-qm", "base"); base = git("rev-parse","HEAD");
+      writeFileSync(join(cwd, "code.ts"), "export const shipped = true;\n");
+      git("add", "code.ts"); git("commit", "-qm", "local code"); sha = git("rev-parse","HEAD");
+      const authority = ensureKernelHostCapability({ workspace: created.workspace, taskId: created.id, cwd });
+      writeFileSync(join(cwd, ".mae-flow-order.json"), JSON.stringify({ execution_contract: {
+        schema: "mae-flow-execution/1", host: "cloud", compile: "pipeline", ut_write: "agent", ut_run: "pipeline",
+        codecheck: "pipeline", git_push: "host", continuous_review: true, host_authority: authority } }));
+      await new KernelHost({ kernelRoot, workspace: cwd, transcriptPath: join(created.workspace, "transcript.jsonl"),
+        taskId: created.id }).bootstrapManaged("继续当前任务");
+      task.summary.status = "waiting_for_human"; task.summary.delivery = { pipeline: "pending" };
+      task.summary.waiting = task.humanGate.createWaiting({ taskId: created.id, step: "config_confirm", callId: "old",
+        questionInput: { question: "是否继续配置？" } });
+    }
+    if (!initialized) {
+      task.summary.origin = "issue";
+      await assert.rejects(service.linkFinalMr(created.id, mr(2)), /需求交付任务/);
+      task.summary.origin = "requirement"; task.summary.requirement_analysis_requested = true;
+      await assert.rejects(service.linkFinalMr(created.id, mr(2)), /需求交付任务/);
+      delete task.summary.requirement_analysis_requested;
+      assert.deepEqual(calls, []);
+    }
+    const waitingId = task.summary.waiting?.waiting_id;
+    await assert.rejects(service.linkFinalMr(created.id, mr(4)), /本任务的代码仓/);
+    assert.equal(task.summary.delivery?.final_mr, undefined);
+    if (!initialized) assert.equal(task.summary.delivery, undefined);
+    assert.equal(task.summary.status, initialized ? "waiting_for_human" : "queued");
+    const linked = await service.linkFinalMr(created.id, mr(2));
+    assert.equal(linked.status, "await_merge"); assert.equal(linked.delivery?.mr_url, undefined);
+    assert.equal(linked.delivery?.initial_mr, undefined); assert.equal(linked.waiting, undefined);
+    assert.equal((service as any).queue.includes(created.id), false);
+    if (waitingId) assert.equal(task.humanGate.get(waitingId).status, "superseded");
+    await until(() => oldReads > 1, "未监听已关联的最终 MR");
+    await service.linkFinalMr(created.id, mr(3)); releaseOld();
+    await until(() => newReads > 1, "旧 MR 合入回调后未继续监听新链接");
+    assert.equal(service.get(created.id)?.status, "await_merge");
+    await service.shutdown();
+    service = make();
+    assert.equal(service.recover().requeued, 0);
+    merged = true;
+    if (initialized) {
+      await until(() => !!service.get(created.id)?.delivery?.stalled?.includes("尚未返回源版本"), "已初始化内核必须等待合入版本");
+      provideSha = true;
+    }
+    await until(() => service.get(created.id)?.status === "completed", "最终 MR 合入后任务没有结束");
+    const final = service.get(created.id)!;
+    assert.equal(final.completed_at, mergedAt); assert.equal(final.delivery?.final_mr?.url, mr(3));
+    assert.equal(final.delivery?.initial_mr, undefined); assert.equal(final.delivery?.mr_url, undefined);
+    if (initialized) {
+      const state = JSON.parse(readFileSync(join(cwd, ".mae-flow.json"), "utf8"));
+      assert.equal(state.current, "end"); assert.equal(state.delivery_loop.close_events[0].sha, sha);
+      assert.equal(final.delivery?.pipeline, "pending");
+    }
+    assert.ok(calls.every(call => call === "GET /mr/detail"));
+  });
+}
+
+test("后台克隆期间关联已合入 MR，迟到的克隆不能再启动内核或 Agent", async t => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-link-during-clone-"));
+  const repo = "https://code.example/acme/service.git";
+  const url = "https://code.example/acme/service/-/merge_requests/3";
+  const service = new TaskService({ dataDir: dir, provider: "test", model: "test", modelsJson: {},
+    maxConcurrent: 1, host: { kernelRoot: join(process.cwd(), "kernel"), continuousReview: true } });
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const clone = t.mock.method(service as any, "cloneRepo", async (workspace: string) => {
+    await held;
+    const cwd = join(workspace, "repo"); mkdirSync(cwd);
+    return cwd;
+  });
+  const bootstrap = t.mock.method(KernelHost.prototype, "bootstrapManaged", async () => "");
+  t.mock.method(service as any, "readFinalMr", async () => ({ url, iid: "3", repo,
+    source_branch: "local", target_branch: "main", state: "merged" }));
+  t.after(async () => { release(); await service.shutdown(); rmSync(dir, { recursive: true, force: true }); });
+  const task = service.create("本地已经交付", { repo, ticket: "REQ-9", account: "alice", baseline: "main" });
+  await until(() => clone.mock.callCount() === 1, "任务未进入克隆");
+  const final = await service.linkFinalMr(task.id, url);
+  assert.equal(final.status, "completed", "未建立内核的任务以经核验的合入事实结束");
+  release();
+  await until(() => (service as any).runningCount === 0, "克隆完成后未释放运行名额");
+  assert.equal(bootstrap.mock.callCount(), 0);
+  assert.equal(existsSync(join(task.workspace, "repo", ".mae-flow-order.json")), false);
+  assert.equal(service.get(task.id)?.delivery?.initial_mr, undefined);
+  assert.equal(service.get(task.id)?.status, "completed");
 });

@@ -5,7 +5,7 @@ import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { createTaskServer } from "../src/server.ts";
 import type { MrComparisonDetail, DeliveryAnalysisReport } from "../src/deliveryAnalyticsTypes.ts";
@@ -16,7 +16,16 @@ async function listen(server: Server) {
   return "http://127.0.0.1:" + (server.address() as AddressInfo).port;
 }
 
-test("在任务 API 关联已合入的另一分支，历史初版补取基线，分析 API 展示实际最终代码", async t => {
+test("在任务 API 关联已合入的另一分支，历史初版补取基线，分析 API 展示实际最终代码",
+  t => verifyFinalMrDelivery(t, "initial-mr"));
+test("平台尚无 MR 和 Git 工作目录时，直接关联外部 MR 并按实际合入代码统计交付",
+  t => verifyFinalMrDelivery(t, "no-code"));
+
+test("用户拉取平台已推送的分支继续修改，自建 CodeHub MR 后可追溯后续修改",
+  t => verifyFinalMrDelivery(t, "pushed-branch"));
+
+async function verifyFinalMrDelivery(t: TestContext, start: "initial-mr" | "pushed-branch" | "no-code") {
+  const initialPublished = start === "initial-mr";
   const priorNoProxy = process.env.no_proxy;
   process.env.no_proxy = [priorNoProxy, "127.0.0.1"].filter(Boolean).join(",");
   t.after(() => { if (priorNoProxy === undefined) delete process.env.no_proxy; else process.env.no_proxy = priorNoProxy; });
@@ -34,11 +43,14 @@ test("在任务 API 关联已合入的另一分支，历史初版补取基线，
   const firstBase = commit("service.ts", "export const retries = 0;", "baseline");
   git(upstream, "switch", "-c", "initial");
   const initial = commit("service.ts", "export const retries = 1;", "first draft");
-  git(root, "clone", "--no-local", upstream, local);
+  if (start !== "no-code") git(root, "clone", "--no-local", upstream, local);
+  if (start === "pushed-branch")
+    writeFileSync(join(local, ".mae-flow.json"), JSON.stringify({ step_heads: { branch_create: firstBase } }));
   git(upstream, "switch", "main");
-  const finalBase = commit("unrelated.ts", "export const mainOnly = 1;", "separate requirement");
-  git(upstream, "switch", "-c", "local-tuning");
-  const final = commit("service.ts", "export const retries = 3;", "final implementation on different history");
+  const mainTip = commit("unrelated.ts", "export const mainOnly = 1;", "separate requirement");
+  const finalBase = start === "pushed-branch" ? firstBase : mainTip;
+  git(upstream, "switch", "-c", "local-tuning", start === "pushed-branch" ? "initial" : "main");
+  const final = commit("service.ts", "export const retries = 3;", "adjust retries");
   git(upstream, "update-server-info");
   const versionReads: string[] = [], requests: string[] = [], logs: string[] = [];
   let origin = "";
@@ -68,10 +80,15 @@ test("在任务 API 关联已合入的另一分支，历史初版补取基线，
   origin = await listen(platform);
   const mr = (i: number) => origin + "/team/repo/-/merge_requests/" + i;
   const initialDocs = join(workspace, "delivery-experience");
-  mkdirSync(initialDocs); writeFileSync(join(initialDocs, "first.json"), JSON.stringify({mr:mr(1),head:initial}));
-  writeFileSync(join(workspace, "task.json"), JSON.stringify({cwd:local, summary:{
+  if (initialPublished) {
+    mkdirSync(initialDocs); writeFileSync(join(initialDocs, "first.json"), JSON.stringify({mr:mr(1),head:initial}));
+  }
+  const delivery = initialPublished ? {mr_url:mr(1),mr_id:1,source_branch:"initial",target_branch:"main"}
+    : start === "pushed-branch" ? {git_push:{sha:initial, ref:"refs/heads/initial", remote:"origin", url:origin + "/team/repo.git"}} : undefined;
+  writeFileSync(join(workspace, "task.json"), JSON.stringify({cwd:start === "no-code" ? undefined : local, summary:{
     id:"task-1", title:"重试次数", requirement:"修改重试次数", created_at:"2026-10-29T00:00:00Z", updated_at:"2026-10-29T08:00:00Z",
-    status:"await_merge", workspace, repo_url:origin + "/team/repo.git", delivery:{mr_url:mr(1),mr_id:1,source_branch:"initial",target_branch:"main"},
+    status:initialPublished ? "await_merge" : "paused", workspace, baseline:"main", repo_url:origin + "/team/repo.git",
+    delivery,
   }}));
   const service = new TaskService({dataDir,log:message => logs.push(message),provider:"test",model:"test",modelsJson:{},maxConcurrent:0,delivery:{platformUrl:origin,pollIntervalMs:100}});
   const api = createTaskServer(service);
@@ -87,7 +104,8 @@ test("在任务 API 关联已合入的另一分支，历史初版补取基线，
   const link = await fetch(taskApi + "/final-mr", {method:"POST",body:JSON.stringify({url:mr(2)})});
   const result = await link.json() as TaskSummary;
   assert.equal(link.status, 200, JSON.stringify(result)); assert.equal(result.status, "completed");
-  assert.equal(result.completed_at, "2026-10-30T09:00:00.000Z"); assert.equal(result.delivery?.initial_mr?.head, initial);
+  assert.equal(result.completed_at, "2026-10-30T09:00:00.000Z"); assert.equal(result.delivery?.initial_mr?.head, initialPublished ? initial : undefined);
+  assert.equal(result.delivery?.mr_url, initialPublished ? mr(1) : undefined);
   let comparison: MrComparisonDetail | undefined;
   const deadline = Date.now() + 10000;
   while (Date.now() < deadline) {
@@ -97,13 +115,30 @@ test("在任务 API 关联已合入的另一分支，历史初版补取基线，
   }
   const report = await (await fetch(baseUrl + "/delivery-analytics")).json() as DeliveryAnalysisReport;
   const row = report.rows.find((r: {id:string}) => r.id === "task-1");
-  assert.ok(row); assert.ok(comparison, JSON.stringify({row,requests,logs})); assert.deepEqual(versionReads, [initial]);
-  assert.equal(row.merged, true); assert.equal(row.mr_url, mr(2)); assert.equal(row.initial_mr_url, mr(1));
-  assert.equal(row.metric, undefined, "重写历史后不沿用原 MR 的行归因");
+  assert.ok(row); assert.ok(comparison, JSON.stringify({row,requests,logs})); assert.deepEqual(versionReads, initialPublished ? [initial] : []);
+  assert.equal(row.merged, true); assert.equal(row.mr_url, mr(2)); assert.equal(row.initial_mr_url, initialPublished ? mr(1) : undefined);
+  if (start === "pushed-branch") {
+    assert.equal(result.delivery?.source_branch, "initial");
+    assert.equal(result.delivery?.final_mr?.source_branch, "local-tuning");
+    assert.equal(row.mr_comparison?.reference, "platform_push");
+    assert.equal(row.mr_comparison?.initial_head, initial);
+    assert.equal(row.metric?.retained.review, 1);
+  } else assert.equal(row.metric, undefined, "单笔外部提交缺少来源证据，不猜测三类占比");
   assert.equal(row.final_code_lines, 1, "最终 MR 修改一行服务代码，目标分支的其他文件不计");
   assert.equal(row.final_deleted_lines, 1);
   assert.deepEqual(comparison.files.map((f:{path:string}) => f.path), ["service.ts"]);
-  assert.match(comparison.files[0]!.change_patch, /retries = 3/);
-  assert.match(comparison.files[0]!.change_patch, /retries = 1/);
-  assert.equal(git(local, "rev-parse", "HEAD"), initial);
-});
+  if (start !== "no-code") {
+    assert.match(comparison.files[0]!.change_patch, /retries = 1/);
+    assert.match(comparison.files[0]!.final_patch, /retries = 3/);
+    assert.equal(git(local, "rev-parse", "HEAD"), initial);
+  } else {
+    assert.equal(result.delivery?.initial_mr, undefined);
+    assert.equal(row.external_collaboration, true);
+    assert.equal(row.mr_comparison?.method, "final");
+    assert.equal(comparison.comparison_basis, "final");
+    assert.match(comparison.files[0]!.change_patch, /-export const retries = 0/);
+    assert.match(comparison.files[0]!.change_patch, /\+export const retries = 3/);
+    assert.equal(existsSync(local), false);
+    await assert.rejects(service.continueDelivery("task-1", "再改一次", "next-round", "owner"), /工作分支.*main.*新任务/);
+  }
+}

@@ -16,7 +16,7 @@ export interface DeliveryCodeMetric {
   published_head?: string;
   base: string;
   first: string;
-  initial_implementation?: { end?: string; basis: "repair_record" | "commit_message" | "no_repair_found" | "mr_publication" };
+  initial_implementation?: { end?: string; basis: "repair_record" | "commit_message" | "no_repair_found" | "mr_publication" | "platform_push" };
   collected_at: string;
   retained: OriginCounts;
   rework: OriginCounts;
@@ -25,17 +25,19 @@ export interface DeliveryCodeMetric {
   commits: DeliveryCommitMetric[];
 }
 export interface MrComparison {
-  method: "ancestry" | "patch" | "unavailable";
+  reference?: "platform_push";
+  method: "ancestry" | "patch" | "final" | "unavailable";
   initial_head?: string;
   final_head?: string;
   retained?: number;
   removed?: number;
   added?: number;
-  files?: Array<{ path: string; changed: boolean; retained: number; removed: number; added: number }>;
+  files?: Array<{ path: string; changed: boolean; retained?: number; removed: number; added: number }>;
   reason?: string;
 }
 export interface MrComparisonDetail {
-  comparison_basis: "head" | "patch";
+  reference?: "platform_push";
+  comparison_basis: "head" | "patch" | "final";
   files: Array<{ path: string; change_patch: string; initial_patch: string; final_patch: string; truncated: boolean }>;
   truncated: boolean;
 }

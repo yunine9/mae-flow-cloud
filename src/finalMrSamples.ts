@@ -1,6 +1,11 @@
+import { existsSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { safeGitEnvironment } from "./safeGit.ts";
 import { awaitTaskDeliveryAnalytics, hasFinalMrSample, observeDeliveryCode } from "./deliveryAnalytics.ts";
 import { prepareFinalMrObjects, retainInitialMrCommit } from "./finalMrGitObjects.ts";
-import { HostGitSandbox } from "./hostGitSandbox.ts";
+import { HostGitSandbox, runGitProcess } from "./hostGitSandbox.ts";
 import { readMrVersionBase, type DeliveryMr } from "./mrImport.ts";
 import type { PipelineCredential } from "./pipelineClient.ts";
 import { continuationPending } from "./taskContinuation.ts";
@@ -29,8 +34,10 @@ export class FinalMrSamples<T extends SamplingTask> {
 
   schedule(task: T, retry = false): void {
     const final = task.summary.delivery?.final_mr, initial = task.summary.delivery?.initial_mr, cwd = task.cwd;
-    if (!this.host.current(task) || !cwd || final?.state !== "merged" || (!retry && !final.head) || task.summary.status !== "completed"
-        || task.summary.workspace_reclaimed_at || continuationPending(task.summary)) return;
+    const finalOnly = !initial && !task.summary.delivery?.mr_url;
+    const useTaskRepo = !!cwd && !task.summary.workspace_reclaimed_at && existsSync(join(cwd, ".git"));
+    if (!this.host.current(task) || (!useTaskRepo && !finalOnly) || final?.state !== "merged" || (!retry && !final.head) || task.summary.status !== "completed"
+        || continuationPending(task.summary)) return;
     const key = JSON.stringify([task.summary.delivery_generation, initial?.url, initial?.head, final.url]);
     if (task.finalMrAnalysis?.key === key && (!retry || task.finalMrAnalysis.running)) return;
     if (hasFinalMrSample(task.summary, retry)) return;
@@ -62,13 +69,23 @@ export class FinalMrSamples<T extends SamplingTask> {
         });
         if (changed) this.host.save(task);
       }
+      const sample = async (repo: string) => {
+        try {
+          const prior = initial ?? { head: finalOnly ? snapshot.delivery?.git_push?.sha : undefined };
+          await prepareFinalMrObjects(repo, final.repo, [final, prior], new HostGitSandbox(dataDir, log), credential);
+        } catch (error) { log?.(`最终 MR 代码对象暂不完整 ${snapshot.id}：${String(error)}`); }
+        if (!stillLinked()) return;
+        observeDeliveryCode(snapshot, repo, final.head!, true);
+        await awaitTaskDeliveryAnalytics(snapshot);
+      };
+      if (useTaskRepo && cwd) return sample(cwd);
+      // 任务未创建工作区时，只在临时仓读取关联 MR 的版本，分析完成即回收。
+      const temporary = await mkdtemp(join(tmpdir(), "mfc-final-mr-code-"));
       try {
-        await prepareFinalMrObjects(cwd, final.repo, [initial ?? {}, final], new HostGitSandbox(dataDir, log),
-          credential);
-      } catch (error) { log?.(`最终 MR 代码对象暂不完整 ${snapshot.id}：${String(error)}`); }
-      if (!stillLinked()) return;
-      observeDeliveryCode(snapshot, cwd, final.head!, true);
-      await awaitTaskDeliveryAnalytics(snapshot);
+        const init = await runGitProcess(["init", "--quiet", "--template="], { cwd: temporary, env: safeGitEnvironment(), timeoutMs: 5000 });
+        if (init.status !== 0) throw new Error("无法初始化最终 MR 的临时代码仓");
+        if (stillLinked()) await sample(temporary);
+      } finally { await rm(temporary, { recursive: true, force: true }); }
     }).finally(() => {
       if (task.finalMrAnalysis?.work !== work) return;
       task.finalMrAnalysis.running = false;

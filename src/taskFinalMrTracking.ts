@@ -1,15 +1,28 @@
+import { spawnSync } from "node:child_process";
 import { interruptWarmupReceipt } from "./auxiliarySessions.ts";
 import { interruptDeveloperAssistant } from "./developerAssistant.ts";
 import { TaskControlError } from "./errors.ts";
+import { repositoryIdentity } from "./knowledgeAssetModel.ts";
+import { validPushReceipt } from "./pipelineHandoff.ts";
 import type { DeliveryMr } from "./mrImportTypes.ts";
 import { finalMrRecord, originalMr, type FinalDeliveryMr } from "./taskFinalMr.ts";
 import { TaskHostLedger } from "./taskHostTools.ts";
-import type { TaskState } from "./taskService.ts";
+import type { TaskState, TaskSummary } from "./taskService.ts";
+
+/** 建初版 MR 前已推送过时，从本轮宿主推送记录恢复工作分支。 */
+function publishedWorkBranch(summary: TaskSummary, final: FinalDeliveryMr): string | undefined {
+  const receipt = summary.delivery?.git_push;
+  if (!validPushReceipt(receipt) || receipt.remote !== "origin" || ![40, 64].includes(receipt.sha.length)) return;
+  if (receipt.url !== undefined && (typeof receipt.url !== "string" || repositoryIdentity(receipt.url) !== repositoryIdentity(final.repo))) return;
+  const branch = receipt.ref.slice("refs/heads/".length);
+  const target = summary.delivery?.target_branch ?? summary.baseline;
+  if (!target || branch === target || branch === final.target_branch || !branch || branch.includes("\0") || branch.includes("@{")) return;
+  return spawnSync("git", ["check-ref-format", "--branch", branch], { stdio: "ignore" }).status === 0 ? branch : undefined;
+}
 
 export function applyFinalMrLink(task: TaskState, mr: DeliveryMr): FinalDeliveryMr {
-  const d = task.summary.delivery!;
   const initial = originalMr(task.summary);
-  if (!initial.head) {
+  if (initial && !initial.head) {
     // 使用任务工具创建的历史 MR 还可能留有当时的创建收据。
     try {
       const creation = new TaskHostLedger(task.summary).read().operations.find(op =>
@@ -21,7 +34,12 @@ export function applyFinalMrLink(task: TaskState, mr: DeliveryMr): FinalDelivery
   const waiting = task.summary.waiting && task.humanGate.get(task.summary.waiting.waiting_id);
   if (waiting?.status === "waiting") task.humanGate.supersede(waiting.waiting_id,
     { stateVersion: waiting.state_version, notes: "已关联最终 MR" });
-  d.initial_mr = initial;
+  const d = task.summary.delivery ??= {};
+  if (initial) d.initial_mr = initial;
+  if (!d.source_branch) {
+    const branch = publishedWorkBranch(task.summary, final);
+    if (branch) d.source_branch = branch;
+  }
   d.final_mr = final;
   d.merged_sha = undefined;
   d.stalled = undefined;

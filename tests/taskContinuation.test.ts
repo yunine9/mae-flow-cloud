@@ -256,3 +256,21 @@ test("最终 MR 仅换源分支，旧任务能从已记录的原基线继续并�
   assert.equal(git(f.cwd, "rev-parse", "HEAD"), f.latest);
   assert.equal(next.delivery_history?.[0].delivery?.final_mr?.source_branch, "local-edit");
 });
+
+test("未建平台 MR 时用本轮宿主推送记录恢复平台工作分支，在最终 MR 合入后继续修改", async t => {
+  const f = await fixture(t);
+  const d = f.task.summary.delivery;
+  const sha = d.git_push.sha;
+  f.task.summary.status = "await_merge";
+  delete d.mr_id; delete d.mr_url; delete d.source_branch;
+  const finalUrl = "https://code.example/team/repo/-/merge_requests/2";
+  t.mock.method(f.service as any, "readFinalMr", async () => ({ url: finalUrl, iid: "2", repo: f.source,
+    source_branch: "local-owner-branch", target_branch: "master", sha, base_sha: git(f.cwd, "rev-parse", sha + "^"), state: "merged" }));
+  const merged = await f.service.linkFinalMr(f.created.id, finalUrl);
+  assert.equal(merged.delivery?.initial_mr, undefined);
+  assert.equal(merged.delivery?.source_branch, f.branch);
+  assert.equal(merged.delivery?.final_mr?.source_branch, "local-owner-branch");
+  const next = await f.service.continueDelivery(f.created.id, "继续调整", "recovered-platform-branch", "alice");
+  assert.equal(next.status, "queued"); assert.equal(next.continuation?.branch, f.branch);
+  assert.equal(git(f.cwd, "branch", "--show-current"), f.branch);
+});

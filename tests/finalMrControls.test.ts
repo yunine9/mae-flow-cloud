@@ -126,3 +126,25 @@ test("更换链接等待详情时原最终 MR 已合入，晚到的更换结果�
   await assert.rejects(replace, /最终 MR 已合入/);
   assert.equal(task.summary.delivery.final_mr.url, mr(2));
 });
+
+test("原工作分支只认本轮同仓的宿主推送，拒绝目标分支、格式错误和其他仓的记录", async t => {
+  const { service, task, id } = fixture(t);
+  task.summary.baseline = "main";
+  const push = { ref: "refs/heads/platform/req-1", sha: "a".repeat(40), remote: "origin", url: repo };
+  const final = { ...source, target_branch: "release", iid: source.id };
+  t.mock.method(service as any, "readFinalMr", async () => final);
+  for (const receipt of [
+    { ...push, ref: "refs/heads/main" }, { ...push, ref: "refs/heads/release" },
+    { ...push, ref: "refs/tags/platform" }, { ...push, ref: "refs/heads/not..valid" },
+    { ...push, remote: "fork" }, { ...push, url: "https://code.example/org/other.git" },
+    { ...push, sha: "bad" }, undefined,
+  ]) {
+    task.summary.delivery = { git_push: receipt };
+    const linked = await service.linkFinalMr(id, mr(2));
+    assert.equal(linked.delivery?.source_branch, undefined, JSON.stringify(receipt));
+    assert.equal(linked.delivery?.initial_mr, undefined);
+  }
+  task.summary.delivery = { git_push: push };
+  const linked = await service.linkFinalMr(id, mr(2));
+  assert.equal(linked.delivery?.source_branch, "platform/req-1");
+});

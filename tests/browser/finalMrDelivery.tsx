@@ -12,7 +12,7 @@ const when = "2026-11-04T02:36:00Z";
 const sourceFile = "src/order/retry.ts";
 let task: TaskSummary = { id: "task-orders", title: "订单查询超时重试", requirement: "订单查询超时后再尝试一次", status: "await_merge",
   status_label: "等待合入", ticket: "REQ-1846", luban_account: "chen", created_at: when,
-  delivery: { target_branch: "main", mr_url: initialUrl, mr_state: "打开", initial_mr: { url: initialUrl, head: "a".repeat(40) } } };
+  delivery: { source_branch: "feature/order-timeout", target_branch: "main", mr_url: initialUrl, mr_state: "打开", initial_mr: { url: initialUrl, head: "a".repeat(40) } } };
 const row: DeliveryAnalysisRow = { id: task.id, title: task.title!, delivery_id: "r2", at: when, completed_at: when, repo: "orders",
   modules: [], merged: true, mr_url: finalUrl, initial_mr_url: initialUrl, mr_comparison: { method: "patch", initial_head: "a".repeat(40), final_head: "b".repeat(40),
     retained: 8, removed: 1, added: 4, files: [
@@ -47,13 +47,50 @@ window.fetch = async (input, init) => {
   calls.push({ url, method: init?.method ?? "GET", body: init?.body?.toString() });
   if (url === "/tasks/task-orders/final-mr") {
     if (rejectLink) return Response.json({ error: "最终 MR 不属于当前仓库" }, { status: 400 });
-    task = { ...task, delivery: { ...task.delivery, final_mr: { id: 126, repo: "orders", url: finalUrl,
+    task = { ...task, status: "await_merge", status_label: "等待合入", delivery: { ...task.delivery, final_mr: { id: 126, repo: "orders", url: finalUrl,
       source_branch: "dev/retry-order", target_branch: "main", state: "opened" } } };
     return Response.json(task);
+  }
+  if (scenario === "final-only-analysis") {
+    if (url === "/delivery-analytics") return Response.json({ generated_at: when, rows: [{ ...row, initial_mr_url: undefined,
+      final_code_lines: 1, final_deleted_lines: 1, external_collaboration: true,
+      mr_comparison: { method: "final", final_head: "b".repeat(40), files: [{ path: sourceFile, changed: true, added: 1, removed: 1 }] } }] });
+    if (url.endsWith("/final-mr-comparison?generation=r2")) return Response.json({ comparison_basis: "final", truncated: false,
+      files: [{ path: sourceFile, change_patch: "@@ -8 +8 @@\n-return fail(response);\n+return retryOrder(id);", initial_patch: "", final_patch: "", truncated: false }] });
+  }
+  if (scenario === "platform-push") {
+    const first = "a".repeat(40), head = "b".repeat(40);
+    if (url === "/delivery-analytics") {
+      const sample: DeliveryAnalysisRow = { ...row, initial_mr_url: undefined, external_collaboration: true, languages: ["typescript"],
+        final_code_lines: 10, final_deleted_lines: 0,
+        mr_comparison: { method: "ancestry", reference: "platform_push", initial_head: first, final_head: head, retained: 7, removed: 1, added: 3,
+          files: [{ path: sourceFile, changed: true, retained: 7, removed: 1, added: 3 }] },
+        metric: { ...metric(7, 1, 2), first, head, deleted: 0, excluded_files: 0, initial_implementation: { end: first, basis: "platform_push" },
+          rework: { first: 0, pipeline: 1, review: 3, other: 0 }, commits: [
+            { sha: first, at: when, subject: "处理订单查询超时", origin: "first", additions: 8, deletions: 0 },
+            { sha: "e".repeat(40), at: when, subject: "修复流水线发现的错误处理缺失", origin: "pipeline", additions: 1, deletions: 0 },
+            { sha: head, at: when, subject: "按检视意见重试超时查询", origin: "review", additions: 2, deletions: 1 },
+          ] },
+      };
+      return Response.json({ generated_at: when, rows: [sample] });
+    }
+    if (url.endsWith("/final-mr-comparison?generation=r2")) {
+      const before = ["export async function order(id) {", "  const response = await queryOrder(id);", "  if (response.timedOut) {",
+        "    return fail(response);", "  }", "  if (!response.ok) return fail(response);", "  return response.order;", "}"];
+      const retry = ["    const retry = await queryOrder(id);", "    if (!retry.ok) return fail(retry);", "    return retry.order;"];
+      const after = [...before.slice(0, 3), ...retry, ...before.slice(4)];
+      const additions = (lines: string[]) => lines.map(line => "+" + line).join("\n");
+      return Response.json({ comparison_basis: "head", reference: "platform_push", truncated: false, files: [{ path: sourceFile, truncated: false,
+        change_patch: "@@ -3,3 +3,5 @@\n " + before[2] + "\n-" + before[3] + "\n" + additions(retry) + "\n " + before[4],
+        initial_patch: "@@ -0,0 +1,8 @@\n" + additions(before), final_patch: "@@ -0,0 +1,10 @@\n" + additions(after),
+      }] });
+    }
   }
   if (url === "/delivery-analytics") return Response.json({ generated_at: when, rows: scenario.startsWith("origin-") ? coverageRows : [row] });
   if (url === "/tasks/task-orders/final-mr-comparison?generation=r2") return Response.json(comparison);
   if (url === "/technology-stacks") return Response.json({ stacks: [] });
+  if (url.endsWith("/developer-assistant")) return Response.json({ state: "idle", messages: [], tools: [],
+    availability: { available: false, code: "host_wait", mode: "unavailable", reason: "请先暂停当前开发任务" } });
   if (url.includes("/annotations")) return Response.json({ items: [], checks: [], closures: [] });
   if (url.includes("/conversation")) return Response.json({ items: [], problems: [] });
   if (url.endsWith("/artifacts") || url.endsWith("/reviews") || url === "/auth/people" || url === "/auth/committers") return Response.json([]);
@@ -119,7 +156,27 @@ async function verifyCoverage() {
   }
 }
 async function run() {
-  if (scenario.startsWith("origin-")) {
+  if (scenario === "platform-push") {
+    root.render(<main className="tw-root p-8"><DeliveryAnalytics onOpenTask={() => {}} /></main>);
+    await until(() => document.querySelector('pre[aria-label="从平台已推送版本到最终版代码"]'), "应显示平台推送版本到最终 MR 的差异");
+    const panel = document.querySelector('[aria-label="平台已推送版本与最终版的代码差异"]')!;
+    const delta = panel.querySelector("pre");
+    assert(delta?.textContent?.includes("-    return fail(response);") && delta.textContent.includes("+    const retry"),
+      "差异必须包含平台已推送版本之后的实际代码改动");
+    assert(panel.querySelectorAll("a").length === 1 && panel.querySelector("a")?.href === finalUrl && !panel.textContent?.includes("初版 MR"),
+      "没有原 MR 时只链接最终 MR，不能把平台推送版本标为初版 MR");
+    const sources = document.querySelector('.delivery-detail-body [aria-label="交付代码来源"]')!;
+    const legend = [...sources.querySelectorAll(".delivery-legend > div")].map(item => item.textContent);
+    assert(sources.textContent?.includes("交付代码行数 10 行") && sources.textContent.includes("已追溯来源 1/1"), "最终 MR 的 10 行均须计入来源分析");
+    assert(legend.join("|") === "首次实现7 行70.0%|流水线修复1 行10.0%|检视修改2 行20.0%", "三类占比应按最终保留的 7、1、2 行计算");
+    panel.scrollIntoView({ block: "start" });
+  } else if (scenario === "final-only-analysis") {
+    root.render(<main className="tw-root p-8"><DeliveryAnalytics onOpenTask={() => {}} /></main>);
+    await until(() => document.querySelector('pre[aria-label="相对目标分支的改动代码"]'), "只有最终 MR 时应自动显示代码改动");
+    const panel = document.querySelector('[aria-label="最终 MR 的代码改动"]')!;
+    assert(panel.textContent?.includes("+return retryOrder(id);") && !panel.textContent.includes("初版"), "只呈现最终 MR 有证据的内容");
+    assert(panel.querySelector('a')?.href === finalUrl, "应链接实际 MR");
+  } else if (scenario.startsWith("origin-")) {
     await verifyCoverage();
   } else if (new URLSearchParams(location.search).has("deliveryTask")) {
     root.render(<main className="tw-root p-8"><DeliveryAnalytics onOpenTask={() => {}} /></main>);
@@ -132,6 +189,49 @@ async function run() {
     await until(() => document.querySelector('pre[aria-label="从初版到最终版代码"]')?.textContent?.includes("toBe(2)"), "切换文件应更新代码");
     assert(calls.filter(call => call.url.includes("final-mr-comparison")).length === 1, "同一轮交付的证据按需读取一次");
     button(sourceFile).click(); await pause();
+  } else if (scenario === "no-initial-link" || scenario === "no-initial-merged") {
+    const original: TaskSummary = { ...task, status: "running", status_label: "开发中", baseline: "main", delivery: undefined };
+    task = original;
+    renderWorkspace(false);
+    await until(() => [...document.querySelectorAll("button")].some(el => el.textContent?.startsWith("任务详情")), "无交付记录时也应能打开任务详情");
+    button("任务详情 ↗").click();
+    await until(() => document.querySelector('[data-slot="dialog-content"]'), "任务详情应打开");
+    const hasLinkAction = () => [...document.querySelectorAll("button")].some(item => item.textContent === "关联最终 MR");
+    assert(!hasLinkAction(), "访客不能关联最终 MR");
+    const excludedCases: Partial<TaskSummary>[] = [{ origin: "issue" }, { requirement_analysis_requested: true },
+      { status: "coordinating" }, { repositories: ["orders", "payment"] }, { status: "completed" }, { status: "canceled" }];
+    for (const excluded of excludedCases) {
+      task = { ...original, ...excluded };
+      renderWorkspace(); await pause();
+      assert(!hasLinkAction(), "此任务不能关联最终 MR " + JSON.stringify(excluded));
+    }
+    task = original;
+    renderWorkspace(); await pause(); button("关联最终 MR").click(); await pause();
+    const input = document.querySelector<HTMLInputElement>('input[type="url"]')!;
+    assert(!document.querySelector('[data-slot="dialog-content"] a[href="' + initialUrl + '"]'), "没有初版时不能生成初版 MR 链接");
+    assert(button("关联并切换为只读跟踪").disabled, "需要先提供最终 MR 链接");
+    assert(!calls.some(call => call.method === "POST"), "打开表单不会停止云端工作");
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, finalUrl);
+    input.dispatchEvent(new Event("input", { bubbles: true })); await pause();
+    if (scenario === "no-initial-merged") {
+      rejectLink = false;
+      button("关联并切换为只读跟踪").click();
+      const dialog = document.querySelector('[data-slot="dialog-content"]')!;
+      await until(() => dialog.querySelector('a[href="' + finalUrl + '"]'), "保存成功后应只显示实际最终 MR");
+      assert(!dialog.textContent?.includes("初版 MR") && !dialog.textContent?.includes("尚未记录合入请求"), "已关联时不可显示虚假的初版或空态");
+      button("关闭任务详情").click(); await pause();
+      assert(document.querySelector('a[href="' + finalUrl + '"]')?.textContent?.includes("打开最终 MR"), "工作台无需原 MR 就能直接打开最终 MR");
+      task = { ...task, status: "completed", status_label: "已完成", completed_at: when,
+        delivery: { ...task.delivery, mr_state: "已合入", final_mr: { ...task.delivery!.final_mr!, state: "merged" } } };
+      renderWorkspace(); await pause();
+      const continuation = document.querySelector('[aria-label="继续修改与交付历史"]');
+      assert(continuation && !continuation.querySelector("button") && continuation.textContent?.includes("工作分支")
+        && continuation.textContent.includes("main"), "尚无云端工作分支时，应显示从目标分支新建任务");
+      button("任务详情 ↗").click(); await pause();
+      const analysis = document.querySelector('a[href="/?deliveryAnalysis=1&deliveryTask=task-orders"]');
+      assert(analysis?.textContent?.includes("查看交付分析") && !analysis.textContent.includes("两版"), "只有最终版时应打开交付分析");
+      assert(!document.querySelector('a[href="' + initialUrl + '"]') && !hasLinkAction(), "合入后不能补出初版或更换最终 MR");
+    }
   } else if (scenario === "task") {
     const initialTask = task;
     renderWorkspace();

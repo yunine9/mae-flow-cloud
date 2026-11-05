@@ -1,7 +1,7 @@
 interface ContinuationTargets {
   baseline?: string;
-  delivery?: { target_branch?: string; final_mr?: { target_branch?: string; state?: string } };
-  continuation?: { state: string; baseline?: string };
+  delivery?: { source_branch?: string; target_branch?: string; final_mr?: { target_branch?: string; state?: string } };
+  continuation?: { state: string; branch?: string; baseline?: string };
 }
 
 function originalTarget(task: ContinuationTargets): string | undefined {
@@ -20,7 +20,11 @@ export function finalMrContinuationBlock(task: ContinuationTargets): string | un
   const original = originalTarget(task);
   const target = final.target_branch;
   const next = continuationTarget(task);
-  if (target && target === target.trim() && target === original && target === next) return;
+  if (target && target === target.trim() && target === original && target === next) {
+    const branch = task.continuation && task.continuation.state !== "active" ? task.continuation.branch : task.delivery?.source_branch;
+    if (!branch) return `任务没有记录可继续使用的平台工作分支，请以「${target}」为基线创建新任务。`;
+    return;
+  }
   const reason = `原交付目标分支为${original?.trim() ? `「${original}」` : "未知"}，最终 MR 的目标分支为${target?.trim() ? `「${target}」` : "未知"}。`;
   const retry = next !== original ? `上次准备继续修改时保存的基线为${next?.trim() ? `「${next}」` : "未知"}。` : "";
   const action = target?.trim() ? `请以「${target}」为基线创建新任务，接着修改已合入的代码。`

@@ -29,7 +29,7 @@ export async function analyticsGit(cwd: string, args: string[]): Promise<string>
   return String(result.stdout ?? "");
 }
 
-function deliveryDiffPaths(run: (args: string[]) => Promise<string>, base: string, head: string) {
+export function deliveryDiffPaths(run: (args: string[]) => Promise<string>, base: string, head: string) {
   return run(["diff", "--numstat", "--no-ext-diff", "--no-textconv", "--find-renames", "-z", base, head, "--"]).then(numstat);
 }
 
@@ -54,6 +54,7 @@ export async function calculateDeliveryCode(input: {
   infer_unattributed?: boolean;
   repair_commits?: string[];
   initial_mr_head?: string;
+  final_only?: boolean;
 }): Promise<DeliveryCodeMetric> {
   const { cwd, base, head } = input;
   if (![base, head, ...(input.first ? [input.first] : []), ...(input.task_base ? [input.task_base] : [])].every(sha => SHA.test(sha))) throw new Error("缺少完整的统计版本");
@@ -101,8 +102,11 @@ export async function calculateDeliveryCode(input: {
   if (boundary < 0) { boundary = hashes.length; basis = "no_repair_found"; }
   if (afterPublication) {
     const firstLater = hashes.findIndex(sha => afterPublication.has(sha));
-    if (firstLater >= 0 && firstLater < boundary) { boundary = firstLater; basis = "mr_publication"; }
+    if (firstLater >= 0 && firstLater < boundary) { boundary = firstLater; basis = input.final_only ? "platform_push" : "mr_publication"; }
+    if (input.final_only && !afterPublication.size && basis === "no_repair_found") basis = "platform_push";
   }
+  if (input.final_only && (basis === "no_repair_found" || (basis === "commit_message" && hashes.length === 1)))
+    throw new Error("最终 MR 缺少可核实的实现与修复分界，无法计算三类占比");
   const initial = new Set(input.infer_unattributed ? hashes.slice(0, boundary) : [first]);
   const origins = { ...input.origins };
   const origin = (sha: string): CodeOrigin => initial.has(sha) ? "first"
@@ -123,7 +127,7 @@ export async function calculateDeliveryCode(input: {
     }
     const category = origin(sha);
     const originEvidence = afterPublication?.has(sha) && inferred?.origin === "review" && !inferred.explicitRepair
-      ? ["初版 MR 发布后的修改。提交记录未显示明确的流水线修复依据。"] : inferred?.evidence;
+      ? [input.final_only ? "平台推送后的修改。提交记录未显示明确的流水线修复依据。" : "初版 MR 发布后的修改。提交记录未显示明确的流水线修复依据。"] : inferred?.evidence;
     metric.commits.push({ sha, at, subject: message[0] ?? "", origin: category, additions, deletions, ...(originEvidence ? { origin_evidence: originEvidence } : {}) });
     if (category !== "first") metric.rework[category] += additions + deletions;
   }
@@ -147,7 +151,7 @@ export async function calculateDeliveryCode(input: {
     let counted = 0;
     for (const match of blame.matchAll(/^([a-f0-9]{40,64}) \d+ (\d+)(?: \d+)?$/gm)) {
       if (!added.has(Number(match[2]))) continue;
-      if (afterPublication && !messages.has(match[1])) {
+      if ((afterPublication || input.final_only) && !messages.has(match[1])) {
         throw new Error("部分最终代码来自主提交链之外或合并提交，无法核实三类来源");
       }
       metric.retained[origin(match[1])]++;

@@ -636,3 +636,103 @@ test("原 MR 外部改写后合入或 Git 对象缺失，不得继续展示平�
     assert.match(row.unavailable ?? "", /外部提交/);
   }
 });
+
+test("只有最终 MR 时按实际补丁展示代码，提交历史提供修复分界后才计算占比", async t => {
+  const f = fixture(t);
+  f.write("feature.cpp", "initial();\ncheck();\nflow();\n");
+  const first = f.commit("实现订单查询");
+  setFinalMr(f, first, first, f.base); delete f.summary.delivery!.initial_mr;
+  observeDeliveryCode(f.summary, f.cwd, first); await awaitDeliveryAnalytics();
+  let row = buildDeliveryAnalysis([f.summary]).rows[0];
+  assert.equal(row.mr_comparison?.method, "final"); assert.equal(row.initial_mr_url, undefined);
+  assert.equal(row.final_code_lines, 3); assert.equal(row.metric, undefined);
+  const detail = readFinalMrComparison(f.summary)!;
+  assert.equal(detail.comparison_basis, "final"); assert.equal(detail.files[0].initial_patch, "");
+  assert.match(detail.files[0].change_patch, /\+initial\(\);/);
+  f.write("feature.cpp", "initial();\nchecked();\nflow();\n"); f.commit("fix CI failure in CodeCheck");
+  f.write("feature.cpp", "initial();\nchecked();\nowner();\n"); const final = f.commit("调整订单路径");
+  f.summary.delivery!.final_mr!.head = final;
+  observeDeliveryCode(f.summary, f.cwd, final); await awaitDeliveryAnalytics();
+  row = buildDeliveryAnalysis([f.summary]).rows[0];
+  assert.equal(row.mr_comparison?.method, "final"); assert.equal(row.final_code_lines, 3);
+  assert.deepEqual(row.metric?.retained, {first:1,pipeline:1,review:1,other:0}, row.unavailable);
+  assert.equal(row.metric?.initial_implementation?.basis, "commit_message");
+  assert.match(row.metric!.commits[1].origin_evidence!.join(" "), /推断/);
+});
+
+test("平台推了分支但尚未建 MR：精确对照推送版本，区分后续本地补丁与目标仓的更新", async t => {
+  const f = fixture(t);
+  f.write("feature.cpp", "first();\nold();\n"); const pushed = f.commit("平台实现"); f.publish(pushed);
+  f.git("checkout", "main"); f.write("other.cpp","upstream();\n"); const base = f.commit("其他需求");
+  f.git("checkout", "task"); f.git("merge", "--no-ff", "main", "-m", "同步目标分支");
+  f.write("feature.cpp", "first();\nlocal();\n"); const final = f.commit("开发者本地改动");
+  setFinalMr(f, pushed, final, base); delete f.summary.delivery!.initial_mr;
+  observeDeliveryCode(f.summary, f.cwd, final); await awaitDeliveryAnalytics();
+  let row = buildDeliveryAnalysis([f.summary]).rows[0];
+  assert.equal(row.initial_mr_url, undefined); assert.equal(row.mr_url, finalUrl);
+  assert.equal(row.mr_comparison?.initial_head, pushed); assert.equal(row.mr_comparison?.reference, "platform_push");
+  assert.deepEqual(row.mr_comparison?.files?.map(f => f.path), ["feature.cpp"]);
+  let detail = readFinalMrComparison(f.summary)!;
+  assert.equal(detail.reference, "platform_push"); assert.equal(detail.comparison_basis, "patch");
+  assert.match(detail.files[0].change_patch, /old\(\)/); assert.match(detail.files[0].change_patch, /local\(\)/);
+  assert.deepEqual(row.metric?.retained, { first:1,pipeline:0,review:1,other:0 }, row.unavailable);
+  assert.equal(row.metric?.initial_implementation?.basis, "platform_push");
+  assert.doesNotMatch(JSON.stringify(row.metric), /初版 MR/);
+  // 外部分支独立改写，合入版本可查，但不再冒充从平台提交延续。
+  f.git("checkout", "-b", "standalone", base); f.write("feature.cpp", "rewritten();\n"); const rewritten = f.commit("重写需求");
+  f.summary.delivery!.final_mr!.head = rewritten;
+  observeDeliveryCode(f.summary, f.cwd, rewritten); await awaitDeliveryAnalytics();
+  row = buildDeliveryAnalysis([f.summary]).rows[0]; detail = readFinalMrComparison(f.summary)!;
+  assert.equal(row.mr_comparison?.method, "final"); assert.equal(row.mr_comparison?.reference, undefined);
+  assert.equal(row.metric, undefined); assert.equal(row.final_code_lines, 1); assert.equal(detail.comparison_basis, "final");
+  f.write(".mae-flow.json", JSON.stringify({ step_heads: { branch_create: rewritten } }));
+  observeDeliveryCode(f.summary, f.cwd, rewritten, true); await awaitDeliveryAnalytics();
+  assert.equal(buildDeliveryAnalysis([f.summary]).rows[0].mr_comparison?.method, "final", "记录的起点不属于平台推送历史");
+  f.write(".mae-flow.json", JSON.stringify({ step_heads: { branch_create: f.base } }));
+  observeDeliveryCode(f.summary, f.cwd, rewritten, true); await awaitDeliveryAnalytics();
+  row = buildDeliveryAnalysis([f.summary]).rows[0]; detail = readFinalMrComparison(f.summary)!;
+  assert.equal(row.mr_comparison?.method, "patch"); assert.equal(row.mr_comparison?.reference, "platform_push");
+  assert.equal(detail.reference, "platform_push"); assert.equal(row.final_code_lines, 1); assert.equal(row.metric, undefined);
+  assert.match(detail.files[0].change_patch, /rewritten\(\)/); assert.match(detail.files[0].change_patch, /first\(\)/);
+  f.write("feature.cpp", "rewritten();\npipeline();\n"); f.commit("修复 CodeCheck");
+  f.write("feature.cpp", "rewritten();\npipeline();\nlocal();\n"); const reviewed = f.commit("本地调整");
+  f.summary.delivery!.final_mr!.head = reviewed;
+  observeDeliveryCode(f.summary, f.cwd, reviewed); await awaitDeliveryAnalytics();
+  row = buildDeliveryAnalysis([f.summary]).rows[0];
+  assert.equal(row.mr_comparison?.method, "patch");
+  assert.equal(row.metric?.initial_implementation?.basis, "commit_message");
+  assert.deepEqual(row.metric?.retained, { first: 1, pipeline: 1, review: 1, other: 0 }, row.unavailable);
+  const prior = readFinalMrComparison(f.summary)!;
+  rmSync(join(f.cwd, ".mae-flow.json"));
+  observeDeliveryCode(f.summary, f.cwd, reviewed, true); await awaitDeliveryAnalytics();
+  assert.deepEqual(readFinalMrComparison(f.summary), prior, "历史基线丢失不能覆盖已采到的两版差异");
+  assert.equal(buildDeliveryAnalysis([f.summary]).rows[0].mr_comparison?.method, "patch");
+  const dir = join(f.dir, ".delivery-analysis");
+  const reportFile = join(dir, readdirSync(dir).find(name => name.endsWith(".json") && !name.endsWith(".patch.json"))!);
+  const savedKey = JSON.parse(readFileSync(reportFile, "utf8")).comparison_key;
+  rmSync(`${reportFile}.${savedKey}.patch.json`);
+  observeDeliveryCode(f.summary, f.cwd, reviewed, true); await awaitDeliveryAnalytics();
+  assert.equal(buildDeliveryAnalysis([f.summary]).rows[0].mr_comparison?.method, "final");
+  assert.equal(readFinalMrComparison(f.summary)?.comparison_basis, "final", "旧详情已丢失时仍保存可读的最终版");
+});
+
+test("最终 MR 直接合入平台已推送版本，按真实推送划分首轮并保留推送前的修复证据", async t => {
+  const f = fixture(t);
+  f.write("feature.cpp", "first();\nsecond();\n"); const first = f.commit("需求实现"); f.publish(first);
+  setFinalMr(f, first, first, f.base); delete f.summary.delivery!.initial_mr;
+  observeDeliveryCode(f.summary, f.cwd, first); await awaitDeliveryAnalytics();
+  let row = buildDeliveryAnalysis([f.summary]).rows[0];
+  assert.equal(row.mr_comparison?.reference, "platform_push");
+  assert.ok(row.mr_comparison?.files?.every(file => !file.changed));
+  assert.deepEqual(row.metric?.retained, { first: 2, pipeline: 0, review: 0, other: 0 }, row.unavailable);
+  assert.equal(row.metric?.initial_implementation?.basis, "platform_push");
+  f.write("feature.cpp", "first();\nchecked();\n"); const ci = f.commit("调整实现"); f.publish(ci);
+  f.write(".mae-flow.json", JSON.stringify({ step_heads: { branch_create: f.base }, delivery_loop: { batches: [{
+    batch_id: "ci-before-push", task_id: f.summary.id, items: [{source:"pipeline"}], base_sha: first,
+    result_digest: "confirmed", result_head: ci }] } }));
+  f.summary.delivery!.final_mr!.head = ci;
+  observeDeliveryCode(f.summary, f.cwd, ci); await awaitDeliveryAnalytics();
+  row = buildDeliveryAnalysis([f.summary]).rows[0];
+  assert.deepEqual(row.metric?.retained, { first: 1, pipeline: 1, review: 0, other: 0 }, row.unavailable);
+  assert.equal(row.metric?.initial_implementation?.basis, "repair_record");
+});
