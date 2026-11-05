@@ -69,7 +69,7 @@ function makeService(runtime?: Record<string, number>) {
   return { service, dataDir, issuesRoot: join(dataDir, "issues") };
 }
 
-function addLibraries(root: string, ageHours = 8 * 24): void {
+function addLibraries(root: string, ageHours = 30): void {
   const old = new Date(Date.now() - ageHours * 3_600_000);
   for (const name of ["dev_lib", "lib"]) {
     const directory = join(root, "repo/demo/target", name);
@@ -80,7 +80,7 @@ function addLibraries(root: string, ageHours = 8 * 24): void {
   }
 }
 
-test("#586 长期等待回收冷链接库，保留报告并通知续跑", async () => {
+test("#586 链接库按默认24小时回收，保留报告并通知续跑", async () => {
   const { service, issuesRoot } = makeService();
   const root = fabricateIssue(issuesRoot, "issue-586", "waiting_user", { oldProducts: true });
   const repo = join(root, "repo/demo");
@@ -103,21 +103,21 @@ test("#586 长期等待回收冷链接库，保留报告并通知续跑", async 
   assert.equal((await service.sweepTerminalRepos()).productBytes, 0);
 });
 
-test("#586 一级清理不刷新闲置时间，七天后可接续回收链接库", async (t) => {
+test("#586 清理不刷新闲置时间，较新链接库满24小时后接续回收", async (t) => {
   let now = Date.now();
   t.mock.method(Date, "now", () => now);
   const { service, issuesRoot } = makeService();
   const root = fabricateIssue(issuesRoot, "issue-586", "waiting_user", { oldProducts: true });
-  addLibraries(root);
+  addLibraries(root, 12);
   const file = join(root, "issue.json");
   const state = JSON.parse(readFileSync(file, "utf8"));
-  state.updated_at = new Date(now - 6 * 24 * 3_600_000).toISOString();
+  state.updated_at = new Date(now - 30 * 3_600_000).toISOString();
   writeFileSync(file, JSON.stringify(state));
   await service.sweepTerminalRepos();
   assert.equal(existsSync(join(root, "repo/demo/target/build")), false);
   assert.ok(existsSync(join(root, "repo/demo/target/lib")));
   assert.equal(JSON.parse(readFileSync(file, "utf8")).updated_at, state.updated_at);
-  now += 2 * 24 * 3_600_000;
+  now += 13 * 3_600_000;
   assert.equal((await service.sweepTerminalRepos()).productBytes, 14);
   assert.equal(existsSync(join(root, "repo/demo/target/dev_lib")), false);
   const after = JSON.parse(readFileSync(file, "utf8"));
@@ -127,7 +127,7 @@ test("#586 一级清理不刷新闲置时间，七天后可接续回收链接库
 
 test("#586 链接库保护近期写入、近期预热和不可自动回收的会话", async () => {
   for (const scenario of ["fresh_file", "warmup", "running", "failed", "queued", "disabled", "long_cooldown"]) {
-    const runtime = { issue_build_products_cooldown_hours: scenario === "disabled" ? 0 : scenario === "long_cooldown" ? 9 * 24 : 24 };
+    const runtime = { issue_build_products_cooldown_hours: scenario === "disabled" ? 0 : scenario === "long_cooldown" ? 48 : 24 };
     const { service, issuesRoot } = makeService(runtime);
     const status = ["running", "failed", "queued"].includes(scenario) ? scenario : "idle";
     const root = fabricateIssue(issuesRoot, "issue-586", status, { oldProducts: true });
@@ -139,7 +139,7 @@ test("#586 链接库保护近期写入、近期预热和不可自动回收的会
     if (scenario === "warmup") {
       const file = join(root, "issue.json");
       const state = JSON.parse(readFileSync(file, "utf8"));
-      state.warmup = { finished_at: new Date(Date.now() - 2 * 24 * 3_600_000).toISOString() };
+      state.warmup = { finished_at: new Date(Date.now() - 2 * 3_600_000).toISOString() };
       writeFileSync(file, JSON.stringify(state));
     }
     await service.sweepTerminalRepos();
@@ -301,6 +301,7 @@ test("24小时默认值与动态配置：近期交互不删，0关闭，调小�
   const runtime = { issue_build_products_cooldown_hours: 24 };
   const { service, issuesRoot } = makeService(runtime);
   const root = fabricateIssue(issuesRoot, "issue-1", "waiting_user", { oldProducts: true });
+  addLibraries(root);
   const file = join(root, "issue.json");
   const state = JSON.parse(readFileSync(file, "utf8"));
   state.updated_at = new Date(Date.now() - 2 * 3_600_000).toISOString();
@@ -308,12 +309,16 @@ test("24小时默认值与动态配置：近期交互不删，0关闭，调小�
   const product = join(root, "repo/demo/target/build");
   await service.sweepTerminalRepos();
   assert.ok(existsSync(product));
+  assert.ok(existsSync(join(root, "repo/demo/target/lib")));
   runtime.issue_build_products_cooldown_hours = 0;
   await service.sweepTerminalRepos();
   assert.ok(existsSync(product));
+  assert.ok(existsSync(join(root, "repo/demo/target/lib")));
   runtime.issue_build_products_cooldown_hours = 1;
   await service.sweepTerminalRepos();
   assert.ok(!existsSync(product));
+  assert.equal(existsSync(join(root, "repo/demo/target/lib")), false);
+  assert.equal(existsSync(join(root, "repo/demo/target/dev_lib")), false);
 });
 
 test("主回合、预热、辅助会话、容器命令、人工接管期间均不清理", async () => {

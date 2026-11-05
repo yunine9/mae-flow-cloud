@@ -11,7 +11,7 @@ import { concurrentWorkPrompt } from "../concurrentWorkPrompt.ts";
 import { resolveProductBranch } from "../configurationCenter.ts";
 import { readResourceBlocks, resourceBlocked } from "../repositoryResourcePolicy.ts";
 import { auxiliarySessionEpoch, trackAuxiliarySession, untrackAuxiliarySession, abortAuxiliarySessions, interruptWarmupReceipt, hasAuxiliarySessions } from "../auxiliarySessions.ts";
-import { BUILD_LIBRARIES_COOLDOWN_MS, reclaimBuildProducts } from "./buildProducts.ts";
+import { reclaimBuildProducts } from "./buildProducts.ts";
 import { withinDataDir } from "../workspaceReclaim.ts";
 import { prepareMaeBuildSupport, isMaeRepository, MAE_BUILD_ASSETS, MAE_BUILD_MOUNT, MAE_CONTAINER_BOOTSTRAP } from "../maeBuildSupport.ts";
 /**
@@ -5742,11 +5742,7 @@ export class IssueFlowService {
               || !(Date.parse(state.updated_at) <= cutoff)
               || (state.warmup?.finished_at && !(Date.parse(state.warmup.finished_at) <= cutoff))) continue;
           // 从检查到删除完成不 await，新回合只能在删除结束后启动。
-          const libraryCutoff = Date.now() - Math.max(productsCooldownMs, BUILD_LIBRARIES_COOLDOWN_MS);
-          const librariesCold = Date.parse(state.updated_at) <= libraryCutoff
-            && (!state.warmup?.finished_at || Date.parse(state.warmup.finished_at) <= libraryCutoff);
-          const { bytes: size, directories: removed } = reclaimBuildProducts(join(root, "repo"), cutoff,
-            librariesCold ? libraryCutoff : undefined);
+          const { bytes: size, directories: removed } = reclaimBuildProducts(join(root, "repo"), cutoff);
           if (removed > 0) {
             state.build_products_reclaimed_at = new Date().toISOString();
             const notice = promptCopy("notices", "rework.products_reclaimed");
