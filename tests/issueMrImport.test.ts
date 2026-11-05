@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
 import { handleIssueRoutes, type IssueRouteOptions } from "../src/issueFlow/routes.ts";
@@ -58,7 +58,10 @@ test("已有 MR 复用原生会话：原分支拉取、红灯修复、真实推�
     const done = await until(() => {
       const state = service.get(created.id);
       if (state.status === "failed") throw new Error(state.error);
-      return state.stage_states?.[0] === "done" && state.status === "idle" ? state : undefined;
+      // ADR-0073:mr_repair 修绿总结轮后直接落 archived,idle 只是总结轮
+      // 尚未落定时的中间态,两者都算收口完成。
+      return state.stage_states?.[0] === "done"
+        && (state.status === "idle" || state.status === "archived") ? state : undefined;
     }, "原生 MR 红转绿", 30_000);
     assert.notEqual(head(), firstSha);
     assert.equal(done.pushes?.[0]?.sha, head());
@@ -133,6 +136,43 @@ test("已有 MR 当前提交已经全绿：先拉原分支再核验，无需制�
     assert.equal(service.get(created.id).gate, undefined);
     assert.equal(service.get(created.id).pipelines?.[repo]?.sha, sha);
     assert.equal(platform.seen.some(call => call.method === "POST" && call.url === "/mr"), false);
+  } finally { await service.shutdown(); await model.stop(); await platform.stop(); }
+});
+
+test("修绿总结轮落定即归档收口(ADR-0073):终态当场清名单外,现场不再永驻", async () => {
+  const dataDir = mfcTemp("issue-mr-archive-"), repo = bareOrigin(dataDir);
+  execFileSync("git", ["--git-dir", repo, "branch", fixture.source_branch, "master"], { env: GIT_ENV });
+  const sha = execFileSync("git", ["--git-dir", repo, "rev-parse", fixture.source_branch], { encoding: "utf8" }).trim();
+  const platform = new LoopPlatform("success"); await platform.start();
+  const model = new ScriptedModelServer([
+    { tool: { name: "pull_repo", input: { url: repo } } },
+    { tool: { name: "complete_stage", input: { note: "核验已有 MR", mrs: [repo] } } },
+    { text: "修复核验完成,本次修复总结如下。" },
+  ], "scripted-v1", { linear: true }); await model.start();
+  const service = new IssueFlowService({ purpose: "pipeline_repair", dataDir, provider: "maeflow", model: "scripted-v1", modelsJson: model.modelsJson(), settings: fastPoll,
+    platformUrl: platform.baseUrl, gitCredential: credential, mrDetails: async () => ({ ...fixture, repo, sha }) });
+  try {
+    const created = await service.importMr(url, "dev");
+    const root = join(dataDir, "pipeline-repairs", created.id);
+    // 名单外堆积(现网 2026-11 同款):导入后、收尾前在场。
+    for (const name of ["pi-agent", ".codecheck-home", "skills"]) {
+      mkdirSync(join(root, name), { recursive: true });
+      writeFileSync(join(root, name, "payload.bin"), "heavy");
+    }
+    await until(() => service.get(created.id).status === "archived" ? true : undefined,
+      "修绿总结轮后落终态", 15_000);
+    const state = loadState(root);
+    assert.equal(state?.conclusion?.kind, "delivered", "结论落账");
+    assert.equal(state?.mr_repair_closing, undefined, "收口旗子清除");
+    for (const name of ["pi-agent", ".codecheck-home", "skills"]) {
+      assert.equal(existsSync(join(root, name)), false,
+        `${name} 名单外当场清,不等清扫`);
+    }
+    assert.ok(existsSync(join(root, "issue.json")), "台账保留");
+    const events = readFileSync(join(root, "events.jsonl"), "utf-8")
+      .split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    assert.ok(events.some((event) => event.kind === "workspace_reclaimed"
+      && event.payload.scope === "loose"), "当场清留痕落事件账");
   } finally { await service.shutdown(); await model.stop(); await platform.stop(); }
 });
 

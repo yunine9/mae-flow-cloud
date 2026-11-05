@@ -1,53 +1,71 @@
 /**
- * 问题会话临时目录回收：只处理已归档或取消且超过保留期的会话。
- * 分析报告、图片、流水线日志、现场日志及未知目录默认保留。
- * 失败任务仍可恢复，不清理；容器仍在运行或路径越界时也不清理。
+ * 问题会话工作区回收(ADR-0073 白名单反转):保留名单钉死,名单之外
+ * 终态当场清——不分目录文件,不看大小。
  *
- * 代码回收由 IssueFlowService 单独负责，遵守 issue_repo_reclaim 开关，
- * 并等待代码统计完成。这里不能再删 repo，否则会绕过开关和等待条件。
+ * 判定方向从"猜什么该删"反转成"枚举什么在用":宿主往会话根写的条目
+ * 在代码里枚举得出(全在保留名单);枚举不出的只能是会话里 Agent 自建
+ * 的,正是该删的。宿主新增工作区根条目必须同步进保留名单,否则当场清
+ * 会把它删掉——靠评审把关,不靠时间窗口兜底。
  *
- * 解耦纪律:本模块不 import IssueFlowService/TaskService——扫盘自己来,
- * 容器探活由调用方注入谓词,保留期由调用方传入(serve 复用需求流的
- * workspaceRetentionDays(),两流同一旋钮,不新增配置项)。
+ * `repo/` 代码现场不在本模块管辖:它走 IssueFlowService 的专属路径
+ * (首次生成归属等待 + issue_repo_reclaim 开关 + repo_reclaimed_at
+ * 标记,ADR-0044),本模块的清理跳过它,井水不犯河水。
+ *
+ * 图片中转(issue-image-staging)永不入清扫:回显接口按内容哈希读
+ * 中转原件,删了老会话截图就 404——它是软件在用的数据。附件中转
+ * (issue-attachment-staging)在提交登记时已复制进工作区,按年龄 GC
+ * (sweepIssueAttachmentStaging)。
+ *
+ * 解耦纪律:本模块不 import IssueFlowService/TaskService——判据纯函数
+ * 化,容器探活与旋钮值由调用方注入。
  */
 
 import {
   existsSync,
   readdirSync,
   rmSync,
-  statSync,
+  lstatSync,
 } from "node:fs";
 import { join } from "node:path";
-import { loadState } from "./issueFlow/state.ts";
 import { humanBytes, withinDataDir } from "./workspaceReclaim.ts";
 
 /**
- * 回收时点名的重货目录(会话根一级)。加条目就是在说"这东西确认是
- * 能再生的重货",请连证据一起写;拿不准就别加——留着只占地方,删错
- * 烧的是复盘现场。
+ * 保留名单(工作区根一级,终态后永不回收)。准入门是"软件在用,枚举
+ * 得出",不是"拿不准就留"——复盘材料、台账、宿主辅助会话记录都在这;
+ * 加条目就是在说"本服务的哪些功能还要读它",拿不准就别加。
  */
-export const ISSUE_RECLAIM_HEAVY: readonly string[] = [
-  "pi-agent",     // Agent 运行时目录(需求流同款回收:models.json 躺着密钥)
-  "vision-cache", // 图片分析缓存(名字即语义,inspect_image 时可重建)
-  ".ops-tools",   // 分发进会话的 ops 二进制(每次开容器 stageOpsBinaries 重放)
+export const ISSUE_WORKSPACE_KEEP_FILES: readonly string[] = [
+  "issue.json",           // 状态台账
+  "events.jsonl",         // 事件账
+  "transcript.jsonl",     // 会话记录
+  "knowledge-events.jsonl", // 知识事件账
+  "waiting.json",         // 等人卡
+  "issue-analysis.md",    // 分析报告(正本)
+  "reviews.jsonl",        // 检视意见账(reviews.ts REVIEWS_FILE)
+  "code-origin.json",     // 首次生成归属的伴生统计(ADR-0044)
+  "manual-edits.jsonl",   // 人工编辑账(ADR-0028 遗留口径:历史会话在盘,永不回收)
 ];
 
-/** 回收扫描的会话目录名约定(与 IssueFlowService.recover() 同一把尺子)。 */
-const ISSUE_DIR_PREFIX = "issue-";
+export const ISSUE_WORKSPACE_KEEP_DIRS: readonly string[] = [
+  "attachments",    // 登记附件(分析材料)
+  "ticket-images",  // 拉单截图(报告证据)
+  "issue-images",   // 会话传图(报告证据)
+  "local-logs",     // 现场日志
+  "pipeline",       // 流水线取证(红灯修复的依据)
+  "feedback",       // 意见账
+  "reviews",        // 检视意见快照 + 分析报告版本快照(reviews.ts REVIEWS_DIR)
+  "codecheck",      // 宿主的代码检查辅助会话记录
+  "warmup",         // 预热会话记录
+];
+
+const ATTACHMENT_STAGING_DIR = "issue-attachment-staging";
 
 const DAY_MS = 24 * 60 * 60_000;
 
-function instant(value: unknown): number {
-  const ms = Date.parse(String(value ?? ""));
-  return Number.isFinite(ms) ? ms : NaN;
-}
-
 export type IssueReclaimSkipCode =
-  | "retention_off"      // 保留期 0 = 永不回收
+  | "retention_off"      // 保留期 0 = 整体禁运
   | "not_terminal"       // 除归档和取消外，均保留现场供继续处理或恢复
-  | "container_running"  // 容器探活为真(belt-and-suspenders)
-  | "no_timestamp"       // 判不了年纪:没有可信的终态时间
-  | "not_expired";       // 终态但未过保留期
+  | "container_running"; // 容器探活为真(belt-and-suspenders)
 
 export interface IssueReclaimVerdict {
   reclaim: boolean;
@@ -59,34 +77,22 @@ export interface IssueReclaimVerdict {
 
 /** 判据的输入面:只取 issue.json 里裁决要用的字段(纯函数,好测)。 */
 export interface IssueReclaimCandidate {
-  id: string;
   status: string;
-  /** 结论时刻(归档/转正收口必写,归档路的终态锚)。 */
-  concluded_at?: string;
-  /** 取消时没有结论时刻，使用最后一次状态写入时间。 */
-  updated_at?: string;
 }
 
 /**
- * 判不判得回收(纯函数,好测)。四保险里的前三个在这里,边界闸在删除
- * 动作自己身上(删除必须自证,不信调用方)。
- *
- * 终态时间锚的选取:归档/转正三条路都写 conclusion.at(结论时刻,语义
- * 就叫"收口");取消没有专门的终态字段,但它的终态落盘就是最后
- * 一次 saveState——updated_at 即收口时刻。所以 [conclusion.at,
- * updated_at] 取第一个读得动的;两个都读不出来**不回收**,宁可留着占
- * 地方,也不许猜着删(与需求流 judgeReclaim 同一纪律)。
+ * 判不判得回收(纯函数,好测)。当场制(ADR-0073)不看年龄:终态即到点,
+ * 判据只剩三道闸——旋钮开、终态、容器不在跑。failed 是可恢复态,出口
+ * 是手动转取消或异常重跑(ADR-0055),永不自动回收。
  */
 export function judgeIssueReclaim(
   issue: IssueReclaimCandidate,
   options: {
-    now: number;
-    retentionDays: number;
+    retentionEnabled: boolean;
     containerRunning?: boolean;
   },
 ): IssueReclaimVerdict {
-  const { now, retentionDays } = options;
-  if (!(retentionDays > 0)) {
+  if (!options.retentionEnabled) {
     return { reclaim: false, reason: "保留期配置为 0,永不回收", skip: "retention_off" };
   }
   if (!["archived", "canceled"].includes(issue.status)) {
@@ -103,32 +109,13 @@ export function judgeIssueReclaim(
       skip: "container_running",
     };
   }
-  const settled = [issue.concluded_at, issue.updated_at]
-    .map(instant).find((ms) => !Number.isNaN(ms));
-  if (settled === undefined) {
-    return {
-      reclaim: false,
-      reason: "没有可信的终态时间,判不了年纪",
-      skip: "no_timestamp",
-    };
-  }
-  const ageDays = (now - settled) / DAY_MS;
-  if (ageDays < retentionDays) {
-    return {
-      reclaim: false,
-      reason: `收口 ${ageDays.toFixed(1)} 天,未到保留期 ${retentionDays} 天`,
-      skip: "not_expired",
-    };
-  }
-  return {
-    reclaim: true,
-    reason: `收口 ${ageDays.toFixed(1)} 天,超过保留期 ${retentionDays} 天`,
-  };
+  return { reclaim: true, reason: "终态会话,保留名单外当场清(ADR-0073)" };
 }
 
+/** 量条目体积:lstat 不跟软链——链接指向哪儿都不可信,量原件会虚高。 */
 function sizeOf(path: string): number {
   try {
-    const info = statSync(path);
+    const info = lstatSync(path);
     if (!info.isDirectory()) return info.size;
     let total = 0;
     for (const name of readdirSync(path)) total += sizeOf(join(path, name));
@@ -138,16 +125,22 @@ function sizeOf(path: string): number {
   }
 }
 
+export interface ReclaimedEntry {
+  name: string;
+  bytes: number;
+}
+
 export interface IssueReclaimResult {
-  removed: string[];
+  removed: ReclaimedEntry[];
   freed: number;
   /** 被边界拦下时的原因;有值 = 一个字节都没删。 */
   refused?: string;
 }
 
 /**
- * 真删单个会话的重货。只动 ISSUE_RECLAIM_HEAVY 点名的目录,其余一律
- * 不碰(台账与未知条目天然保留)。
+ * 真删单个会话现场里保留名单之外的条目(含文件与目录,软链只解链不跟链)。
+ * `repo/` 跳过——代码现场由服务专属路径管(归属等待/开关/标记),这里
+ * 不越权。
  *
  * 删除前自证边界(2026-08-22 的血泪:issues/ 下若被人换了软链接,
  * readdir 看着在 dataDir 里,realpath 一解在外面——删的是原件)。
@@ -157,7 +150,7 @@ export function reclaimIssueWorkspace(
   root: string,
   options: { dataDir: string },
 ): IssueReclaimResult {
-  const removed: string[] = [];
+  const removed: ReclaimedEntry[] = [];
   let freed = 0;
   if (!withinDataDir(root, options.dataDir)) {
     return {
@@ -166,111 +159,75 @@ export function reclaimIssueWorkspace(
         + `${options.dataDir} 内,拒绝删除`,
     };
   }
-  let entries: string[] = [];
+  let entries;
   try {
-    entries = readdirSync(root);
+    entries = readdirSync(root, { withFileTypes: true });
   } catch {
     return { removed, freed };
   }
-  const heavy = new Set(ISSUE_RECLAIM_HEAVY);
-  for (const name of entries) {
-    if (!heavy.has(name)) continue;
-    const target = join(root, name);
-    const size = sizeOf(target);
+  const keep = new Set<string>([
+    ...ISSUE_WORKSPACE_KEEP_FILES,
+    ...ISSUE_WORKSPACE_KEEP_DIRS,
+    "repo",
+  ]);
+  for (const entry of entries) {
+    if (keep.has(entry.name)) continue;
+    const target = join(root, entry.name);
     try {
+      const size = entry.isDirectory()
+        ? sizeOf(target)
+        : lstatSync(target).size;
       rmSync(target, { recursive: true, force: true });
-      removed.push(name);
+      removed.push({ name: entry.name, bytes: size });
       freed += size;
     } catch {
-      // 单个条目删不动(权限/占用)不中断,下一个接着来。
+      // 单个条目量不动/删不动(竞态消失/权限/占用)不中断,下一个接着来。
     }
   }
   return { removed, freed };
 }
 
-export interface IssueReclaimOptions {
-  /** 服务数据目录(会话现场在 <dataDir>/issues/<id>/)。 */
-  dataDir: string;
-  /** 保留期(天);与需求流同一旋钮,0 = 永不回收。 */
-  retentionDays: number;
-  /** 容器探活谓词(注入,解耦):真 = 该会话容器还在跑,跳过。 */
-  containerRunning?: (issueId: string) => boolean;
-  now?: number;
-  /** 旁路日志通道(单会话动作与失败;fail-open 的出口)。 */
-  log?: (message: string) => void;
-}
-
-export interface IssueReclaimSummary {
-  /** 真删到了东西的会话数(判了该删但已无重货的不计,日志不注水)。 */
-  reclaimed: number;
+export interface IssueStagingSweepResult {
+  removed: number;
   freed: number;
-  /** 因容器在跑跳过的会话数(保险丝工作记录)。 */
-  skipped_container: number;
-  /** 单会话失败数(fail-open:失败不影响其余会话,只计数留痕)。 */
-  failed: number;
 }
 
 /**
- * 扫 <dataDir>/issues/*,对满足全部条件的终态会话回收重货。
+ * 附件中转目录的孤儿 GC(ADR-0073):提交登记时文件已复制进会话工作区,
+ * AI 读的是工作区副本——中转原件满保留期即删,没提交的是无人引用的
+ * 孤儿(单文件上限 500MB,不 GC 就是永久堆积)。图片中转
+ * (issue-image-staging)不在本函数范围:回显接口读中转原件,删了老
+ * 会话截图就 404——豁免以本函数只扫附件目录的方式钉死。
  *
- * 纯旁路 fail-open:读不动的 issue.json、删不动的目录、单个会话的任何
- * 异常,都只 log + 计数,绝不扩散到其他会话,更不许把调用方(serve 的
- * 每日清扫)带下水。保留期 0 直接短路,连盘都不扫。
+ * 纯旁路 fail-open:目录缺席/单文件失败只计数,不抛。
  */
-export function reclaimIssueWorkspaces(
-  options: IssueReclaimOptions,
-): IssueReclaimSummary {
-  const summary: IssueReclaimSummary = {
-    reclaimed: 0, freed: 0, skipped_container: 0, failed: 0,
-  };
-  if (!(options.retentionDays > 0)) return summary;
-  const now = options.now ?? Date.now();
-  const issuesRoot = join(options.dataDir, "issues");
-  if (!existsSync(issuesRoot)) return summary;
+export function sweepIssueAttachmentStaging(
+  dataDir: string,
+  options: { retentionDays: number; now?: number },
+): IssueStagingSweepResult {
+  const result = { removed: 0, freed: 0 };
+  if (!(options.retentionDays > 0)) return result;
+  const dir = join(dataDir, ATTACHMENT_STAGING_DIR);
+  if (!existsSync(dir)) return result;
+  const cutoff = (options.now ?? Date.now()) - options.retentionDays * DAY_MS;
   let names: string[] = [];
   try {
-    names = readdirSync(issuesRoot);
-  } catch (error) {
-    options.log?.(`问题现场回收扫描失败(不影响服务): ${String(error)}`);
-    return summary;
+    names = readdirSync(dir);
+  } catch {
+    return result;
   }
   for (const name of names) {
-    if (!name.startsWith(ISSUE_DIR_PREFIX)) continue;
-    const root = join(issuesRoot, name);
+    const file = join(dir, name);
     try {
-      // loadState 读 issue.json 并做旧词表迁移;读不到/读坏了当没有,
-      // 这个会话今天先放过(台账可能正在被人写,第二天再看)。
-      const state = loadState(root);
-      if (!state) continue;
-      const verdict = judgeIssueReclaim({
-        id: state.id,
-        status: state.status,
-        concluded_at: state.conclusion?.at,
-        updated_at: state.updated_at,
-      }, {
-        now,
-        retentionDays: options.retentionDays,
-        containerRunning: options.containerRunning?.(state.id) ?? false,
-      });
-      if (verdict.skip === "container_running") summary.skipped_container += 1;
-      if (!verdict.reclaim) continue;
-      const result = reclaimIssueWorkspace(root, { dataDir: options.dataDir });
-      if (result.refused) {
-        options.log?.(`回收问题现场 ${state.id} 被边界拦下: ${result.refused}`);
-        continue;
-      }
-      if (!result.removed.length) continue; // 已是干净现场,不计不吵
-      summary.reclaimed += 1;
-      summary.freed += result.freed;
-      options.log?.(`回收问题现场 ${state.id}(${verdict.reason}):释放 `
-        + `${humanBytes(result.freed)},删除 ${result.removed.join("、")}`
-        + `;文档、日志、过程记录与未知条目保留`);
-    } catch (error) {
-      // 回收是旁路:单个会话翻车绝不影响其他会话,更不影响服务。
-      summary.failed += 1;
-      options.log?.(`回收问题现场 ${name} 失败(跳过,不影响其余): `
-        + `${String(error)}`);
+      const info = lstatSync(file);
+      if (!info.isFile() || info.mtimeMs > cutoff) continue;
+      rmSync(file, { force: true });
+      result.removed += 1;
+      result.freed += info.size;
+    } catch {
+      // 单文件失败不中断:旁路清扫,下一轮再来。
     }
   }
-  return summary;
+  return result;
 }
+

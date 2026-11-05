@@ -239,10 +239,10 @@ function RuntimeCard({ view, onSaved }: {
         value={timeout_} onChange={setTimeout_} />
       {/* 回收是不可逆动作,note 必须把"删什么、留什么"说全——
           光写"保留期"会让人以为整单历史都没了。 */}
-      <KnobField label="任务现场保留期（天）"
+      <KnobField label="现场保留期（天）"
         defaultText={defaults.workspace_retention_days === 0
           ? "永不回收" : `${defaults.workspace_retention_days} 天`}
-        note="已完成或取消的需求过期后回收代码和临时目录；失败任务保留供恢复，文档、图片与历史记录保留。问题单在此只清临时目录，代码回收由上方开关控制；0 关闭本项回收"
+        note="需求任务：已完成或取消的过期后回收代码和临时目录；失败任务保留供恢复，文档、图片与历史记录保留。问题会话：归档或取消当场清理（只留状态台账、报告、附件、截图、日志等记录），不看本天数，本天数只管附件中转目录孤儿文件的清理。0 关闭全部回收"
         value={retention} onChange={setRetention} />
       <Button type="submit" disabled={busy} className="col-span-full sm:col-span-1">{busy ? "正在保存…" : "保存运行参数"}</Button>
       <Feedback message={message} />

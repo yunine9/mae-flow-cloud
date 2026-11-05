@@ -12,7 +12,8 @@ import { resolveProductBranch } from "../configurationCenter.ts";
 import { readResourceBlocks, resourceBlocked } from "../repositoryResourcePolicy.ts";
 import { auxiliarySessionEpoch, trackAuxiliarySession, untrackAuxiliarySession, abortAuxiliarySessions, interruptWarmupReceipt, hasAuxiliarySessions } from "../auxiliarySessions.ts";
 import { reclaimBuildProducts } from "./buildProducts.ts";
-import { withinDataDir } from "../workspaceReclaim.ts";
+import { withinDataDir, humanBytes } from "../workspaceReclaim.ts";
+import { judgeIssueReclaim, reclaimIssueWorkspace } from "../issueFlowWorkspaceReclaim.ts";
 import { prepareMaeBuildSupport, isMaeRepository, MAE_BUILD_ASSETS, MAE_BUILD_MOUNT, MAE_CONTAINER_BOOTSTRAP } from "../maeBuildSupport.ts";
 /**
  * 问题流服务:与需求任务并行的独立会话域。
@@ -673,6 +674,9 @@ export interface IssueFlowOptions {
       /** 闲置或等待中的会话，无工作活动超过此小时数后回收可再生中间文件。
        *  源码、依赖和报告保留；缺省 24，0 关闭。 */
       issue_build_products_cooldown_hours?: number;
+      /** 现场保留期(与需求侧同一旋钮):对问题流只剩通断语义(ADR-0073
+       *  当场制)——0=整体禁运;非 0 天数只用于附件中转孤儿 GC。 */
+      workspace_retention_days?: number;
     };
   };
   /** 不可自动修复工具名单(--unfixable-tools,与需求交付同一面旗):
@@ -3132,6 +3136,17 @@ export class IssueFlowService {
     if (state.takeover) {
       saveState(live.root, state);
       return;
+    }
+    if (state.mr_repair_closing && outcome.status === "turn_finished") {
+      // 修绿总结轮落定(ADR-0073):修复会话的终点就是修绿,总结即归档
+      // ——打通终态卫生尾巴,现场不再永驻。总结轮若转等人(AI 提问),
+      // 旗子保留:用户的回答仍是收口对话的一部分,下一个落定的回合照常
+      // 收口。阶段若已被重开(返工),旗子作废,等下次收口再举。
+      if (state.scenario === "mr_repair" && this.mrGreenClosed(state)) {
+        this.archiveMrRepair(live);
+        return;
+      }
+      delete state.mr_repair_closing;
     }
     if (outcome.status === "waiting_for_human") {
       state.status = "waiting_user";
@@ -5620,35 +5635,63 @@ export class IssueFlowService {
    *  这里——冻结终态快照(ADR-0042,待办作废账落定后)→清理环境凭据
    *  →入队首次生成归属并在算完后回收现场(ADR-0044:响应不等计算,
    *  伴生统计挂后台通道,现场回收为它让路;不入队(伴生已在/不支持
-   *  期/无仓)则当场后台回收;崩溃缺口由每日清扫器兜底)。三处调用:
-   *  取消、结论闸闭环归档、交付自动归档。漏一处的代价(#434 实证):
-   *  单子顶着「待算」等下一轮清扫(最长 24h),凭据等重启对账才清。
-   *  停容器同步/异步、通知、提单模板由触发场景决定,留在各路径。 */
+   *  期/无仓)则当场后台回收;崩溃缺口由每小时清扫器兜底)。三处调用:
+   *  取消、结论闸闭环归档、交付自动归档(mr_repair 修绿总结轮后的落
+   *  终态也汇到 settle 的 archiveMrRepair,同走这里)。漏一处的代价
+   *  (#434 实证):单子顶着「待算」等下一轮清扫(最长 1h),凭据等
+   *  重启对账才清。停容器同步/异步、通知、提单模板由触发场景决定,
+   *  留在各路径。流水线修复会话同规则(ADR-0073 去掉了用途早退)。 */
   private finishTerminalHygiene(
     live: Pick<LiveIssue, "root" | "id" | "state">,
   ): void {
-    if (this.options.purpose === "pipeline_repair") return;
     this.freezeMetricsSnapshot(live);
-    this.vault.remove(live.id);
+    try {
+      this.vault.remove(live.id);
+    } catch (error) {
+      // 凭据库只认 issue- 编号;mr-repair-* 会话从无凭据可清(ADR-0073
+      // 去掉用途早退后修复会话也走这里),无害,fail-open。
+      this.log(`[issue-flow] ${live.id} 环境凭据清理跳过: `
+        + String(error instanceof Error ? error.message : error));
+    }
     this.reclaimAfterCodeOrigin(live);
+  }
+
+  /** 保留期旋钮的通断语义(ADR-0073):0 = 整体禁运;缺席/非 0 = 开。
+   *  天数值对问题流不再有意义(当场制),只供需求侧与附件中转 GC 用。 */
+  private workspaceRetentionOn(): boolean {
+    const value = this.options.settings?.runtime?.()
+      ?.workspace_retention_days;
+    return !(typeof value === "number" && value === 0);
   }
 
   private reclaimAfterCodeOrigin(
     live: Pick<LiveIssue, "root" | "id" | "state">,
   ): void {
-    if (this.options.purpose === "pipeline_repair") return;
     const reclaim = (): void => {
-      if (!this.repoReclaimOn()) return;
       setImmediate(() => {
-        try {
-          const bytes = this.reclaimRepoDir(live.root, live.id, live.state);
-          if (bytes > 0) {
-            this.log(`[issue-flow] ${live.id} 终态现场已回收 `
-              + `(${(bytes / 1024 ** 3).toFixed(2)} GB)`);
+        // 代码现场:专属路径(开关+标记+事件账),先删——留痕标记
+        // repo_reclaimed_at 只有这条路写。
+        if (this.repoReclaimOn()) {
+          try {
+            const bytes = this.reclaimRepoDir(live.root, live.id, live.state);
+            if (bytes > 0) {
+              this.log(`[issue-flow] ${live.id} 终态现场已回收 `
+                + `(${(bytes / 1024 ** 3).toFixed(2)} GB)`);
+            }
+          } catch (error) {
+            this.log(`[issue-flow] ${live.id} 终态现场回收失败(下次清扫重试): `
+              + String(error instanceof Error ? error.message : error));
           }
-        } catch (error) {
-          this.log(`[issue-flow] ${live.id} 终态现场回收失败(下次清扫重试): `
-            + String(error instanceof Error ? error.message : error));
+        }
+        // 保留名单外当场清(ADR-0073):旋钮 0 整体禁运;repo 已被
+        // 上面(或开关关闭时原样保留),本模块跳过它。
+        if (this.workspaceRetentionOn()) {
+          try {
+            this.reclaimLooseEntries(live.root, live.id);
+          } catch (error) {
+            this.log(`[issue-flow] ${live.id} 名单外当场清失败(下次清扫重试): `
+              + String(error instanceof Error ? error.message : error));
+          }
         }
       });
     };
@@ -5656,6 +5699,28 @@ export class IssueFlowService {
       fetchCredential: this.options.gitCredential?.(live.state.account),
     }, { onSettled: reclaim, log: (message) => this.log(message) });
     if (!queued) reclaim();
+  }
+
+  /** 保留名单外清理的共享出口(ADR-0073):当场路与兜底清扫同走这一段
+   *  ——删除、逐条目事件账(条目名+字节数,漏项对账靠它定位到条)、
+   *  日志。repo/ 不归这里(专属路径管)。返回释放字节数。 */
+  private reclaimLooseEntries(root: string, id: string): number {
+    const result = reclaimIssueWorkspace(root,
+      { dataDir: this.options.dataDir });
+    if (result.refused) {
+      this.log(`[issue-flow] ${id} 名单外清理被边界拦下: ${result.refused}`);
+      return 0;
+    }
+    if (!result.removed.length) return 0;
+    this.appendSessionEvent({ root, id }, "workspace_reclaimed", {
+      bytes: result.freed,
+      scope: "loose",
+      entries: result.removed,
+    });
+    this.log(`[issue-flow] ${id} 清名单外 ${result.removed.length} 项`
+      + `(释放 ${humanBytes(result.freed)}): `
+      + result.removed.map((entry) => entry.name).join("、"));
+    return result.freed;
   }
 
   // ---- 磁盘治理:终态现场回收与构建产物冷却清理(票 01/03) ----
@@ -5674,8 +5739,10 @@ export class IssueFlowService {
 
   /** 终态整仓回收和闲置中间文件清理分别受各自配置控制；同一实例不重叠扫描。 */
   async sweepTerminalRepos(): Promise<{ reclaimed: number; bytes: number;
-    productBytes: number }> {
-    if (this.storageSweepActive) return { reclaimed: 0, bytes: 0, productBytes: 0 };
+    productBytes: number; looseBytes: number }> {
+    if (this.storageSweepActive) {
+      return { reclaimed: 0, bytes: 0, productBytes: 0, looseBytes: 0 };
+    }
     this.storageSweepActive = true;
     try {
       return await this.sweepRepos();
@@ -5684,15 +5751,18 @@ export class IssueFlowService {
     }
   }
 
-  private async sweepRepos(): Promise<{ reclaimed: number; bytes: number; productBytes: number }> {
+  private async sweepRepos(): Promise<{ reclaimed: number; bytes: number;
+    productBytes: number; looseBytes: number }> {
     const productsCooldownMs = this.buildProductsCooldownMs();
     const reclaimOn = this.repoReclaimOn();
-    if (!reclaimOn && productsCooldownMs <= 0) {
-      return { reclaimed: 0, bytes: 0, productBytes: 0 };
+    const retentionOn = this.workspaceRetentionOn();
+    if ((!reclaimOn && !retentionOn) && productsCooldownMs <= 0) {
+      return { reclaimed: 0, bytes: 0, productBytes: 0, looseBytes: 0 };
     }
     let reclaimed = 0;
     let bytes = 0;
     let productBytes = 0;
+    let looseBytes = 0;
     for (const name of readdirSync(this.issuesRoot)) {
       if (!name.startsWith(this.idPrefix)) continue;
       const root = join(this.issuesRoot, name);
@@ -5711,28 +5781,39 @@ export class IssueFlowService {
       // 等待中的容器会长期保留，是否正在工作须看回合、辅助会话和命令。
       const terminal = state.status === "canceled" || state.status === "archived";
       if (this.turning.has(name)) continue;
-      if (terminal && live?.container?.isAlive) continue;
       try {
         if (terminal) {
-          if (!reclaimOn) continue;
-          // 首次生成归属兜底(ADR-0044):现场还在而伴生缺失(进程曾在
-          // 归档与算完之间退出),回收前补算一次再删;支持期外的终态
-          // 会话不试算。通道在途的由兜底函数自己让路。
-          try {
-            await backfillCodeOrigin(root, state, {
-              fetchCredential: this.options.gitCredential?.(state.account),
-            }, (message) => this.log(message));
-          } catch (error) {
-            this.log(`[issue-flow] ${name} 首次生成归属补算异常(不阻塞回收): `
-              + String(error instanceof Error ? error.message : error));
+          // 兜底清扫(ADR-0073):崩溃缺口与存量欠账见一个清一个,不等
+          // 保留期。判据与当场制同一把尺子(旋钮/终态/容器),单点住在
+          // judgeIssueReclaim——容器探活统一走注册表,不再只看内存句柄。
+          const verdict = judgeIssueReclaim(
+            { status: state.status },
+            { retentionEnabled: retentionOn,
+              containerRunning: this.hasRunningContainer(name) });
+          if (!verdict.reclaim) continue;
+          if (reclaimOn) {
+            // 首次生成归属兜底(ADR-0044):现场还在而伴生缺失(进程曾在
+            // 归档与算完之间退出),回收前补算一次再删;支持期外的终态
+            // 会话不试算。通道在途的由兜底函数自己让路。
+            try {
+              await backfillCodeOrigin(root, state, {
+                fetchCredential: this.options.gitCredential?.(state.account),
+              }, (message) => this.log(message));
+            } catch (error) {
+              this.log(`[issue-flow] ${name} 首次生成归属补算异常(不阻塞回收): `
+                + String(error instanceof Error ? error.message : error));
+            }
+            const size = this.reclaimRepoDir(root, name, state);
+            if (size > 0) {
+              reclaimed += 1;
+              bytes += size;
+              this.log(`[issue-flow] ${name} 清扫回收终态现场 `
+                + `(${(size / 1024 ** 3).toFixed(2)} GB)`);
+            }
           }
-          const size = this.reclaimRepoDir(root, name, state);
-          if (size > 0) {
-            reclaimed += 1;
-            bytes += size;
-            this.log(`[issue-flow] ${name} 清扫回收终态现场 `
-              + `(${(size / 1024 ** 3).toFixed(2)} GB)`);
-          }
+          // 保留名单外(ADR-0073):repo 已被上面处理(开关关闭时原样
+          // 保留),这里清其余全部——见一个清一个。
+          looseBytes += this.reclaimLooseEntries(root, name);
         } else if (productsCooldownMs > 0 && withinDataDir(root, this.options.dataDir)) {
           const cutoff = Date.now() - productsCooldownMs;
           if (!["idle", "waiting_user"].includes(state.status)
@@ -5764,7 +5845,7 @@ export class IssueFlowService {
           + String(error instanceof Error ? error.message : error));
       }
     }
-    return { reclaimed, bytes, productBytes };
+    return { reclaimed, bytes, productBytes, looseBytes };
   }
 
   /** 回收 repo/ 整个子树:落 repo_reclaimed_at 标记 + 事件账,返回回收
@@ -6264,6 +6345,39 @@ export class IssueFlowService {
     this.notifyMergeFact(live,
       `全部 MR 已合入(${mrs.length} 个)——已自动归档收口,交付完成`);
     this.log(`[issue-flow] ${live.id} 全部 MR 合入,自动归档收口`);
+  }
+
+  /** 流水线修复会话修绿收口后落终态(ADR-0073):修复的终点就是修绿,
+   *  总结轮跑完即归档——终态卫生尾巴照走,现场不再永驻 idle 占盘。
+   *  旗子(mr_repair_closing)在此清除;崩溃恢复的总结轮重放同路收口。 */
+  private archiveMrRepair(live: LiveIssue): void {
+    const state = live.state;
+    delete state.mr_repair_closing;
+    state.conclusion = {
+      kind: "delivered",
+      summary: state.last_reply || state.stage_note || "流水线修复完成",
+      at: new Date().toISOString(),
+    };
+    state.status = "archived";
+    fixedComplete(state, "流水线修复完成,已归档收口");
+    delete state.gate;
+    saveState(live.root, state);
+    for (const record of live.humanGate.pending()) {
+      try {
+        live.humanGate.supersede(record.waiting_id, {
+          stateVersion: record.state_version,
+          notes: "会话已自动归档,待办作废",
+        });
+      } catch (error) {
+        this.log(`[issue-flow] ${live.id} 自动归档作废待办 `
+          + `${record.waiting_id} 失败: `
+          + String(error instanceof Error ? error.message : error));
+      }
+    }
+    this.releaseDriver(live);
+    this.stopContainerInBackground(live, "修复完成自动归档");
+    this.finishTerminalHygiene(live);
+    this.log(`[issue-flow] ${live.id} 流水线修复完成,已归档收口`);
   }
 
   private notifyMergeFact(live: LiveIssue, summary: string): void {
@@ -7237,7 +7351,9 @@ export class IssueFlowService {
    * 换库验证封存):当前阶段 fixedComplete、用户小鲁班通知、等归属人
    * 合入即自动归档(ADR-0034,归档收尾走终态卫生尾巴)。合入前用户
    * 续聊即重开本阶段返工(见 reply 的收口重开),AI 修完重推再申报,
-   * 可多轮。状态保持 idle——收口是"等合入事实",不是终态。 */
+   * 可多轮。ticket 场景状态保持 idle——收口是"等合入事实",不是终态;
+   * mr_repair 场景总结轮结束后落 archived(ADR-0073:修复会话的终点
+   * 就是修绿,不再永驻 idle 占现场)。 */
   private closeMrGreen(live: LiveIssue, note: string): void {
     fixedComplete(live.state, note);
     // 收口即启动合入事实监看(ADR-0022):两条收口路都汇到这里,
@@ -7245,8 +7361,11 @@ export class IssueFlowService {
     this.watchMergeStates(live);
     if (live.state.scenario === "mr_repair") {
       live.state.stage_note = "流水线修复完成";
+      // 总结轮在飞的旗子(ADR-0073):settle 的 turn_finished 据此落
+      // archived。持久化——崩溃后 recover() 重放总结轮,收口照样完成。
+      live.state.mr_repair_closing = true;
       saveState(live.root, live.state);
-      this.startPlatformTurn(live, "已有 MR 的当前提交流水线已通过。请总结本次修复并结束本轮；本工具不推进 DTS、审批、合入或归档。");
+      this.startPlatformTurn(live, "已有 MR 的当前提交流水线已通过。请总结本次修复并结束本轮；本轮回结束后本工具将自动归档收口，不推进 DTS、审批或合入。");
       return;
     }
     // 全绿事实发送(ADR-0024,#246):平台不代举验证卡——收口后把

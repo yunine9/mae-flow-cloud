@@ -26,7 +26,6 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
-import { reclaimIssueWorkspaces } from "../src/issueFlowWorkspaceReclaim.ts";
 import { mfcTemp } from "./mfcTmp.ts";
 import { auxiliarySessionEpoch, trackAuxiliarySession } from "../src/auxiliarySessions.ts";
 
@@ -48,13 +47,23 @@ function fabricateIssue(
   }));
   writeFileSync(join(dir, "repo", "demo", "src", "a.ts"), "export {}");
   writeFileSync(join(dir, "repo", "demo", "target", "build", "x.o"), "binary");
-  writeFileSync(join(dir, "report.md"), "分析报告(必须保留)");
+  writeFileSync(join(dir, "issue-analysis.md"), "分析报告(必须保留)");
   if (opts?.oldProducts) {
     const old = new Date(Date.now() - 30 * 3_600_000);
     utimesSync(join(dir, "repo", "demo", "target", "build"), old, old);
     utimesSync(join(dir, "repo", "demo", "target", "build", "x.o"), old, old);
   }
   return dir;
+}
+
+/** 在会话现场造一份 2026-11 现网同款的名单外堆积(codecheck 变体、
+ * 技能物化、AI 倾倒、Agent 运行时),供存量清理用例使用。 */
+function fabricateLooseHeavy(root: string): void {
+  for (const name of [".codecheck-home", ".codecheck-tmp", "cc-home",
+                      "skills", ".mae-flow-work", "pi-agent"]) {
+    mkdirSync(join(root, name), { recursive: true });
+    writeFileSync(join(root, name, "payload.bin"), "h".repeat(2048));
+  }
 }
 
 function makeService(runtime?: Record<string, number>) {
@@ -172,7 +181,7 @@ test("终态回收:canceled/archived 的 repo 整树消失,标记与事件账落
 
   assert.ok(!existsSync(join(canceled, "repo")), "canceled repo 已删");
   assert.ok(!existsSync(join(archived, "repo")), "archived repo 已删");
-  assert.ok(existsSync(join(canceled, "report.md")), "报告保留");
+  assert.ok(existsSync(join(canceled, "issue-analysis.md")), "报告保留");
   assert.ok(existsSync(join(canceled, "issue.json")), "状态文件保留");
   assert.ok(existsSync(join(failed, "repo")), "failed 不在回收范围(用户拍板)");
 
@@ -203,7 +212,7 @@ test("构建产物冷却:idle 单过期产物删、新鲜不动、源码保留�
     "冷却过期的 target/build 已删");
   assert.ok(existsSync(join(stale, "repo", "demo", "src", "a.ts")),
     "源码保留");
-  assert.ok(existsSync(join(stale, "report.md")), "报告保留");
+  assert.ok(existsSync(join(stale, "issue-analysis.md")), "报告保留");
   assert.ok(existsSync(join(fresh, "repo", "demo", "target")),
     "未冷却的产物不动");
   assert.ok(existsSync(join(failedStale, "repo", "demo", "target")),
@@ -217,20 +226,89 @@ test("构建产物冷却:idle 单过期产物删、新鲜不动、源码保留�
   assert.equal(reclaim.payload.scope, "products", "事件 scope=products");
 });
 
-test("旋钮解耦:issue_repo_reclaim=0 只关整仓回收,产物清理按自己的旋钮走", async () => {
-  const { service, dataDir, issuesRoot } = makeService({ issue_repo_reclaim: 0 });
+test("旋钮解耦:issue_repo_reclaim=0 只关整仓回收,产物清理与名单外清理按自己的旋钮走", async () => {
+  const { service, issuesRoot } = makeService({ issue_repo_reclaim: 0 });
   const canceled = fabricateIssue(issuesRoot, "issue-1", "canceled");
+  fabricateLooseHeavy(canceled);
   const idleStale = fabricateIssue(issuesRoot, "issue-2", "idle",
     { oldProducts: true });
 
   const result = await service.sweepTerminalRepos();
-  // 每日清理两条入口都会执行，临时目录清扫不能绕过代码回收开关。
-  reclaimIssueWorkspaces({ dataDir, retentionDays: 14, now: Date.parse("2027-01-01T00:00:00Z") });
   assert.equal(result.reclaimed, 0, "整仓回收被旋钮关掉");
-  assert.ok(existsSync(join(canceled, "repo")), "终态现场保留");
+  assert.ok(existsSync(join(canceled, "repo")), "终态现场保留(开关语义)");
+  assert.ok(!existsSync(join(canceled, ".codecheck-home")),
+    "名单外清理不受整仓开关连带(ADR-0073 只认保留期旋钮)");
   assert.ok(!existsSync(join(idleStale, "repo", "demo", "target", "build")),
     "产物清理独立生效(自己的冷却旋钮,不被整仓旋钮连带)");
   assert.equal(result.productBytes > 0, true, "产物回收字节照记");
+});
+
+test("存量欠账清扫:终态会话的名单外堆积见一个清一个,不等保留期;留痕落事件账", async () => {
+  const { service, issuesRoot } = makeService();
+  const stale = fabricateIssue(issuesRoot, "issue-1", "archived");
+  fabricateLooseHeavy(stale);
+  mkdirSync(join(stale, "local-logs"), { recursive: true });
+  writeFileSync(join(stale, "local-logs", "alarm.log"), "现场日志");
+  mkdirSync(join(stale, "attachments"), { recursive: true });
+  writeFileSync(join(stale, "attachments", "a3f.log"), "登记附件");
+
+  const result = await service.sweepTerminalRepos();
+
+  for (const name of [".codecheck-home", ".codecheck-tmp", "cc-home",
+                      "skills", ".mae-flow-work", "pi-agent"]) {
+    assert.ok(!existsSync(join(stale, name)), `${name} 存量欠账被清`);
+  }
+  assert.ok(existsSync(join(stale, "local-logs", "alarm.log")),
+    "现场日志在保留名单,原样");
+  assert.ok(existsSync(join(stale, "attachments", "a3f.log")),
+    "登记附件在保留名单,原样");
+  assert.ok(existsSync(join(stale, "issue-analysis.md")), "报告保留");
+  assert.ok(result.looseBytes > 0, "名单外回收字节照记");
+  const events = readFileSync(join(stale, "events.jsonl"), "utf-8")
+    .split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  const loose = events.find((event) => event.kind === "workspace_reclaimed"
+    && event.payload.scope === "loose");
+  assert.ok(loose, "名单外清理落事件账");
+  assert.ok(Array.isArray(loose.payload.entries)
+    && loose.payload.entries.some((entry: { name: string; bytes: number }) =>
+      entry.name === ".codecheck-home" && entry.bytes > 0),
+  "逐条目留痕(条目名+字节数,ADR-0073 漏项对账靠它)");
+});
+
+test("保留期旋钮 0 = 整体禁运:终态会话的名单外堆积也不碰", async () => {
+  const { service, issuesRoot } = makeService({ workspace_retention_days: 0 });
+  const stale = fabricateIssue(issuesRoot, "issue-1", "archived");
+  fabricateLooseHeavy(stale);
+
+  const result = await service.sweepTerminalRepos();
+
+  assert.equal(result.reclaimed, 0);
+  assert.equal(result.looseBytes, 0);
+  assert.ok(existsSync(join(stale, "repo")), "repo 原样");
+  assert.ok(existsSync(join(stale, ".codecheck-home")),
+    "0 = 永不回收,名单外也原样(诚实的关掉)");
+});
+
+test("流水线修复会话的存量:mr-repair- 前缀同尺扫描,名单外同规则清理", async () => {
+  const dataDir = mfcTemp("mfc-mr-repair-reclaim-");
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1", modelsJson: {},
+    settings: { models: () => ({}), runtime: () => ({}) },
+    purpose: "pipeline_repair",
+  });
+  try {
+    const root = fabricateIssue(join(dataDir, "pipeline-repairs"),
+      "mr-repair-1", "archived");
+    fabricateLooseHeavy(root);
+
+    const result = await service.sweepTerminalRepos();
+
+    assert.ok(!existsSync(join(root, "repo")), "修复会话 repo 照清");
+    assert.ok(!existsSync(join(root, ".codecheck-home")),
+      "修复会话名单外照清");
+    assert.ok(existsSync(join(root, "issue-analysis.md")), "报告保留");
+    assert.ok(result.looseBytes > 0);
+  } finally { await service.shutdown(); }
 });
 
 test("部署后扫描存量:waiting_user 冷却后释放编译目录，running 保留", async () => {
