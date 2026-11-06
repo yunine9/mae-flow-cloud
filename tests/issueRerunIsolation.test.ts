@@ -189,7 +189,7 @@ test("取消后重跑同单:新会话新目录全新克隆,各用各的时间戳
   }
 });
 
-test("推送撞远端同名分支(罕见异动兜底):失败信息点名非快进并指路 force", async () => {
+test("推送撞远端同名分支(罕见异动兜底):失败信息点名非快进并指路 sync_branch", async () => {
   const dataDir = mfcTemp("mfc-issue-push-");
   const origin = bareOrigin(dataDir);
   // 异动现场:远端已有同名分支且带一笔分叉提交。
@@ -213,10 +213,10 @@ test("推送撞远端同名分支(罕见异动兜底):失败信息点名非快�
     (error: Error) => {
       assert.match(error.message, /非快进/);
       assert.match(error.message, /罕见异动/);
-      // 处置指路 force=true:AI 能自持完成覆盖,不让用户去平台手删
-      // 远端分支;提醒保留"已有 MR 随覆盖更新"。
-      assert.match(error.message, /force=true/);
-      assert.match(error.message, /已有 MR/);
+      // 处置指路 sync_branch(ADR-0074):先并入手改再重推,不盲盖、
+      // 不再建议 force 重推(覆盖外部提交须人工核对后显式放行)。
+      assert.match(error.message, /sync_branch/);
+      assert.match(error.message, /外部提交/);
       return true;
     },
     "非快进失败要带人话:原因(罕见异动)+ 处置方向",
