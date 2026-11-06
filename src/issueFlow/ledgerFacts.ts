@@ -27,6 +27,35 @@ const HEAD_DISCARDED_NOTE = "旧提交";
 export const EXTERNAL_HEAD_COMMIT =
   /^分支头已被平台外提交 ([0-9a-f]{7,40}) 取代/;
 
+/** 外部提交合并的逐笔吸收账(ADR-0074)解析正则:匹配「外部提交合并:
+ * <仓> <分支> 并入平台外提交 <短码>」。写账方一律走 absorbedCommitNote
+ * / absorbedScopeNote 构造(下一组),字面改两处一起改,不许手拼漂移。
+ * 范围小结(「并入远端外部提交 N 条(… → …)」)不带逐笔短码,对不上
+ * 这条正则。 */
+export const ABSORBED_EXTERNAL_COMMIT =
+  /^外部提交合并:\S+ \S+ 并入平台外提交 ([0-9a-f]{7,40})$/;
+
+// ---- 外部提交合并的账面文案单一来源(ADR-0074,与上面的解析正则
+// ---- 同源;写账方 tools.ts / turnStartAbsorb.ts 只从这两个构造函数
+// ---- 取字面,不许各拼一份) ----
+
+/** 范围小结条目:「外部提交合并:<仓> <分支> 并入远端外部提交 N 条
+ * (<from12> → <to12>)」。提交号按账面惯例取前 12 位(见 LedgerPush)。 */
+export function absorbedScopeNote(
+  repo: string, branch: string, count: number, fromSha: string, toSha: string,
+): string {
+  return `外部提交合并:${repo} ${branch} 并入远端外部提交 ${count} 条(`
+    + `${fromSha.slice(0, 12)} → ${toSha.slice(0, 12)})`;
+}
+
+/** 逐笔条目(即 ABSORBED_EXTERNAL_COMMIT 匹配的形态):「外部提交合并:
+ * <仓> <分支> 并入平台外提交 <短码>」。 */
+export function absorbedCommitNote(
+  repo: string, branch: string, sha: string,
+): string {
+  return `外部提交合并:${repo} ${branch} 并入平台外提交 ${sha.slice(0, 12)}`;
+}
+
 /** 回退轮次(fixedRollback 的「第 N 轮:原因」)。 */
 export const ROLLBACK_NOTE = /^第 \d+ 轮:(.*)$/s;
 
@@ -61,6 +90,26 @@ export function ledgerPushes(
   return pushes;
 }
 
+/** 本会话在指定仓、分支的推送收据组(账面顺序):push_branch 的 force
+ * 收据门(ADR-0074)整组核对用。 */
+export function ledgerReceiptsOf(
+  transitions: ReadonlyArray<{ note: string; at: string }>,
+  repo: string, branch: string,
+): LedgerPush[] {
+  return ledgerPushes(transitions)
+    .filter((entry) => entry.repo === repo && entry.branch === branch);
+}
+
+/** 吸收判定的锚点(ADR-0074):本会话在该仓该分支的最后一笔推送收据;
+ * 推送链路、sync_branch 与回合开始探针三入口共用同一份投影,判定不
+ * 漂移。 */
+export function lastReceiptOf(
+  transitions: ReadonlyArray<{ note: string; at: string }>,
+  repo: string, branch: string,
+): LedgerPush | undefined {
+  return ledgerReceiptsOf(transitions, repo, branch).at(-1);
+}
+
 export function isRedLightRepaired(note: string): boolean {
   return note.startsWith(RED_FAILED_NOTE);
 }
@@ -85,13 +134,16 @@ export function countVerifyFailures(
   ).length;
 }
 
-/** 外部头观测明细(分支头被平台外推送取代的每一次发现:短码+时刻)。 */
+/** 外部头观测明细:分支头被平台外推送取代的每一次发现(检查目标
+ * 跟随)+ 外部提交合并逐笔吸收的用户提交(ADR-0074)——归属统计
+ * 据此把两类提交都记平台外,不落进平台推送区间被误算成平台工作量。 */
 export function externalHeadObservations(
   transitions: ReadonlyArray<{ note: string; at: string }>,
 ): Array<{ sha: string; at: string }> {
   const records: Array<{ sha: string; at: string }> = [];
   for (const transition of transitions) {
-    const match = EXTERNAL_HEAD_COMMIT.exec(transition.note);
+    const match = EXTERNAL_HEAD_COMMIT.exec(transition.note)
+      ?? ABSORBED_EXTERNAL_COMMIT.exec(transition.note);
     if (match) records.push({ sha: match[1]!, at: transition.at });
   }
   return records;

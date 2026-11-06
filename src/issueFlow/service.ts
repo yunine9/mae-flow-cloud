@@ -230,6 +230,11 @@ import {
   type IssueToolContext,
 } from "./tools.ts";
 import {
+  absorbExternalAtTurnStart,
+  createBranchTransferMutex,
+  type BranchTransferMutex,
+} from "./turnStartAbsorb.ts";
+import {
   buildIssueTimeline,
   type IssueSessionTimeline,
 } from "./sessionView.ts";
@@ -777,6 +782,10 @@ interface LiveIssue {
   driver?: CloudSession;
   container?: TaskContainer;
   toolContext?: IssueToolContext;
+  /** 分支传输在途互斥(ADR-0074 票 3):回合开始探针与 push_branch/
+   *  sync_branch 共用一把;LiveIssue 级单例,driver 重建不断链。懒建,
+   *  见 branchTransferOf。 */
+  branchTransfer?: BranchTransferMutex;
   /** 环境预热在跑的内存闸:预热会话与主会话共享容器,重复启动会
    * 叠加编译负载;重启后丢内存态没关系,收据(state.warmup)兜底
    * 幂等。 */
@@ -2696,8 +2705,27 @@ export class IssueFlowService {
     this.beginTurn(live, () => this.resumeTurnBody(live, message));
   }
 
+  /** 分支传输在途互斥的单例口(ADR-0074 票 3):懒建挂 LiveIssue,
+   *  driver 重建换上下文也取同一把——回合开始探针与 push_branch/
+   *  sync_branch 三者互斥才成立。 */
+  private branchTransferOf(live: LiveIssue): BranchTransferMutex {
+    return live.branchTransfer ??= createBranchTransferMutex();
+  }
+
+  /** 宿主合并以宿主身份写文件,交回容器前修属主(ADR-0071 同一纪律);
+   *  非隔离部署零开销。工具上下文与回合开始吸收共用一份——回合开始
+   *  吸收先于 driver 重建跑,不能经 toolContext 取。 */
+  private repairOwnershipFor(live: LiveIssue): (dir: string) => void {
+    return (dir) => repairContainerCloneOwnership({
+      workspace: live.root,
+      dir,
+      user: this.options.isolation?.user,
+      runtime: this.options.ownershipRuntime,
+    });
+  }
+
   /** 续聊/续跑共用的回合体:话递给在场 driver,或重建后以续聊提示词
-   * 开回合(issueResumePrompt 带登记元信息与最近阶段,上下文不流失)。 */
+   *  开回合(issueResumePrompt 带登记元信息与最近阶段,上下文不流失)。 */
   private async resumeTurnBody(
     live: LiveIssue,
     message: string,
@@ -2709,10 +2737,32 @@ export class IssueFlowService {
     // 脏树,会把半成品的编译错扣到基线头上。重启续跑与用户消息同享
     // 这条自愈路:阶段单向,没有别的时机再进 analyze。
     if (live.state.stage === "analyze") this.startBaselineWarmup(live);
+    // 回合开工前的外部提交吸收(ADR-0074 票 3):探针比对远端修复分支
+    // 头与本会话最后一笔推送收据,远端前进(用户把手改推回)即合并进
+    // 工作区再开工——AI 醒来见到的就是含手改的最新代码。远端没动零
+    // fetch/merge;首轮(分支未定名)、无收据的仓、传输在途、探针失败
+    // 一律放行(探针经济,守门在 absorbExternalAtTurnStart);撞冲突/
+    // 非严格后代只还原现场交通知词,回合照常开工。入口自身绝不抛错,
+    // 这里再兜一层——吸收绝不拦回合是硬契约。
+    const absorbNotice = await absorbExternalAtTurnStart({
+      state: live.state,
+      workspace: live.root,
+      dataRoot: this.options.dataDir,
+      gitCredential: () => this.options.gitCredential?.(live.state.account),
+      persist: () => saveState(live.root, live.state),
+      repairOwnership: this.repairOwnershipFor(live),
+      branchTransfer: this.branchTransferOf(live),
+      log: (note) => this.log(`[issue-flow] ${live.id} ${note}`),
+    }).catch((error) => {
+      this.log(`[issue-flow] ${live.id} 回合开始外部提交吸收失败`
+        + `(跳过,照常开工): ${String(error)}`);
+      return "";
+    });
     // 欠账便签随行(#244 发送必达):任何续聊形态的回合都把停靠通知
     // 捎给模型——落到便签的通知不能停在显示摘要里没人看见。
     return this.withParkedNotices(live, async (replay) => {
-      const full = replay ? `${message}\n\n${replay}` : message;
+      const full = [message, absorbNotice, replay].filter(Boolean)
+        .join("\n\n");
       if (live.driver) {
         return live.driver.continueWith(full);
       }
@@ -4326,14 +4376,11 @@ export class IssueFlowService {
         this.options.gitCredential?.(live.state.account),
       // 基线同步冲突现场交回容器前修属主(ADR-0071):宿主 merge 以宿主
       // 身份写文件,容器用户改不动;幂等 walk,非隔离部署零开销。
-      repairOwnership: (dir: string) => {
-        repairContainerCloneOwnership({
-          workspace: live.root,
-          dir,
-          user: this.options.isolation?.user,
-          runtime: this.options.ownershipRuntime,
-        });
-      },
+      // 与回合开始吸收共用一份(见 repairOwnershipFor)。
+      repairOwnership: this.repairOwnershipFor(live),
+      // 分支传输在途互斥(ADR-0074 票 3):工具侧与回合开始探针共用
+      // LiveIssue 级单例,两边互斥不漂。
+      branchTransfer: this.branchTransferOf(live),
       // 介入档位现值:build_deploy 随路 env_verify 卡的举卡条件(三档
       // 独有);env_needed 配置卡三档同举,不再随档位分叉(ADR-0019
       // 2026-10-31 增补)。

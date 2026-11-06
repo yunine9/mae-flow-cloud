@@ -379,6 +379,24 @@ export interface PushReceipt {
   forced?: boolean;
 }
 
+/** force 收据门的机械拒绝(ADR-0074):force 覆盖前,远端 tip 必须是
+ * 平台历史推送收据中的一笔;查不到远端状态同样拒绝(宁误拦不误放——
+ * force 是唯一能盖掉用户手改的路径,没有远端拒收兜底)。错误只带
+ * 事实,人话回执由工具层组装(ADR-0016);人工核对后由调用方以显式
+ * 放行参数(forceOverrideExternal)重试,租赁核对在放行后保留。 */
+export class ForceReceiptGateError extends Error {
+  constructor(
+    /** external=远端 tip 不在收据内;unreachable=远端状态查不到。 */
+    readonly reason: "external" | "unreachable",
+    /** 拒绝时探到的远端 tip(unreachable 时为空串)。 */
+    readonly remoteTip: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ForceReceiptGateError";
+  }
+}
+
 /** 宿主唯一一次传输:从工作区经 safeGit 只读视图读对象,在临时 bare
  * 仓里 push 到显式远端,再 ls-remote 复核 SHA。分支名单由调用方
  * (单号门禁)先行校验,这里只管传输与复核的可靠性。
@@ -386,7 +404,12 @@ export interface PushReceipt {
  * force(同单重跑强制覆盖,2026-09-11 增补):不用裸 --force,而是先
  * ls-remote 探远端同名分支 tip,再 --force-with-lease=ref:tip 推——
  * 探测到推送之间远端又动了(他人/另一会话推送),租赁核对失败拒推,
- * 不会盲盖。远端还没有同名分支时无从覆盖,按普通推送走。 */
+ * 不会盲盖。远端还没有同名分支时无从覆盖,按普通推送走。
+ * force 收据门(ADR-0074 票4):租赁防不了会话之外就已发生的手推——
+ * 探到的 tip 本身可能就是用户改好的代码。所以同一探针再加一道机械
+ * 校验:tip 必须在调用方传入的推送收据投影(ledgerPushes,同仓同分支)
+ * 内,不在即抛 ForceReceiptGateError(人工核对后以 forceOverrideExternal
+ * 显式放行,放行只跳过收据门,租赁核对保留,双保险不回退)。 */
 export async function pushFromIssueWorkspace(options: {
   dataDir: string;
   repoDir: string;
@@ -394,6 +417,12 @@ export async function pushFromIssueWorkspace(options: {
   branch: string;
   credential?: GitCredential;
   force?: boolean;
+  /** force 收据门的凭据(ADR-0074):本会话在本仓本分支的推送收据投影
+   * (ledgerPushes,ADR-0064 去重)。force=true 时远端 tip 必须是其中
+   * 一笔;缺席/为空 = 无收据,远端有同名分支即拒绝。 */
+  forceReceiptShas?: string[];
+  /** 显式放行(人工核对后):跳过收据门完成覆盖;租赁核对保留。 */
+  forceOverrideExternal?: boolean;
   log?: (message: string) => void;
 }): Promise<PushReceipt> {
   if (!existsSync(join(options.repoDir, ".git"))) {
@@ -434,19 +463,46 @@ export async function pushFromIssueWorkspace(options: {
       ...sandbox.args, `--git-dir=${staging}`, "cat-file", "-e", `${sha}^{commit}`,
     ], { env: { ...sandbox.env, ...objectEnv }, timeoutMs: 30_000 });
     if (objectCheck.code !== 0) throw new Error("待推送 HEAD 不是可读取的提交对象");
-    const probeRemoteTip = async (): Promise<string | undefined> => {
+    const probeRemoteTip = async (): Promise<
+      { state: "absent" } | { state: "tip"; tip: string }
+      | { state: "unreachable"; detail: string }
+    > => {
       const probed = await runGit([
         ...sandbox.args, `--git-dir=${staging}`,
         "ls-remote", "--heads", remoteUrl, ref,
       ], { env: sandbox.env, timeoutMs: 60_000 });
-      const tip = probed.code === 0 ? probed.stdout.trim().split(/\s+/)[0] : "";
-      return /^[0-9a-f]{40}$/i.test(tip) ? tip : undefined;
+      if (probed.code !== 0) {
+        return { state: "unreachable",
+          detail: (probed.stderr || probed.stdout).trim()
+            .split(/\r?\n/)[0] ?? "" };
+      }
+      const tip = probed.stdout.trim().split(/\s+/)[0] ?? "";
+      return /^[0-9a-f]{40}$/i.test(tip)
+        ? { state: "tip", tip }
+        : { state: "absent" };
     };
     let forceLease: string[] = [];
     if (options.force === true) {
-      const remoteTip = await probeRemoteTip();
-      if (remoteTip) {
-        forceLease = [`--force-with-lease=${ref}:${remoteTip}`];
+      const probed = await probeRemoteTip();
+      if (probed.state === "tip") {
+        // 租赁核对照旧锚定探到的 tip(防探测到推送之间远端又动)。
+        forceLease = [`--force-with-lease=${ref}:${probed.tip}`];
+        // 收据门(ADR-0074):tip 必须有平台推送收据背书——lease 防不了
+        // 会话之外就已发生的手推。放行参数只跳过这道门,租赁保留。
+        if (options.forceOverrideExternal !== true
+            && !options.forceReceiptShas?.some((sha) =>
+              probed.tip.startsWith(sha.toLowerCase()))) {
+          throw new ForceReceiptGateError("external", probed.tip,
+            `远端分支 ${options.branch} 当前提交 ${probed.tip.slice(0, 12)} `
+              + "不在本会话推送收据内,拒绝强制覆盖");
+        }
+      } else if (probed.state === "unreachable"
+          && options.forceOverrideExternal !== true) {
+        // 查不到远端状态就无从核对收据,也没有租赁锚点;force 是唯一
+        // 没有远端拒收兜底的路径,宁误拦不误放(同 #240 删除门禁口径)。
+        throw new ForceReceiptGateError("unreachable", "",
+          `远端状态查不到(${probed.detail.slice(0, 200)}),`
+            + "无法核对强制覆盖的收据门");
       }
       // 远端还没有同名分支:无从覆盖,按普通推送走(不带租赁参数)。
     }
@@ -470,9 +526,9 @@ export async function pushFromIssueWorkspace(options: {
         ? " 强制覆盖被拒:远端分支状态与推送时不一致,或受平台分支保护"
           + "限制——先与用户核对远端分支状态再决定,不要盲目重试。"
         : " 远端同名分支已存在且非快进(新命名下正常流程不会撞名,"
-          + "这通常是平台侧罕见异动)——与用户核对后带 force=true 重推"
-          + "即可覆盖(该分支已有 MR 时覆盖后原 MR 随之更新,不要重复"
-          + "创建)。";
+          + "这通常是平台侧罕见异动,远端可能有用户手改推回的外部提交)"
+          + "——调 sync_branch 把远端最新提交并入工作区后再重推,"
+          + "不要盲目重试。";
       throw new Error(authFailureHint("推送代码", options.credential, raw)
         ?? `宿主推送失败: ${raw.slice(0, 500)}${staleBranch}`);
     }
@@ -645,6 +701,176 @@ export async function syncBaselineBeforePush(options: {
       return { kind: "failed", reason: `冲突现场落盘失败: ${String(error)}` };
     }
     return { kind: "conflict", files: conflicted };
+  } finally {
+    view?.cleanup();
+    sandbox.cleanup();
+  }
+}
+
+/** 修复分支外部提交吸收(ADR-0074)的结果:调用方按结果分叉。
+ * - current:远端没有要吸收的东西(分支缺席/头没动/本地已含);
+ * - synced:远端头是最后一笔推送收据的严格后代,已 fetch+merge 进
+ *   工作区,commits=被吸收的外部提交(逐笔,喂外部头观测投影);
+ * - conflict:干净合并撞冲突,现场已 merge --abort 还原(不留半合并
+ *   工作区),files=冲突文件;
+ * - dirty:工作区有已跟踪未提交改动,不做机械合并(交 Agent 处理后
+ *   自行同步);
+ * - blocked:三类非严格后代形态(rewritten=历史被改写/unbacked=无收据
+ *   而远端有提交/rolled_back=远端被回滚)——一律拒绝喊人,绝不自动
+ *   处理、绝不 force;
+ * - unavailable:探针/取回失败(网络抖动等),fail-open 不拦调用方
+ *   流程(推送链路的门在远端拒收);
+ * - failed:merge 失败且无冲突文件,现场已 abort 还原。 */
+export type ExternalAbsorbOutcome =
+  | { kind: "current" }
+  | { kind: "synced"; remoteTip: string; commits: string[] }
+  | { kind: "conflict"; files: string[] }
+  | { kind: "dirty"; files: string[] }
+  | { kind: "blocked";
+      form: "rewritten" | "unbacked" | "rolled_back";
+      remoteTip: string }
+  | { kind: "unavailable"; reason: string }
+  | { kind: "failed"; reason: string };
+
+/** 判定并吸收修复分支远端的外部提交(ADR-0074,推送链路与回合开始
+ * 探针共用的窄函数):判据只用推送收据加祖先关系,不看作者是谁。
+ *
+ * 远端头 = 收据 → 无事(短码直比,零 fetch——常态回合只有探针开销);
+ * 收据的严格后代 → fetch 后 merge 进工作区
+ * (一律 merge 不 rebase:平台未推送提交 SHA 不变,AI 归因 notes 不断
+ * 链);收据的祖先(被回滚)或与收据不相交(历史被改写)→ fail-closed;
+ * 无收据而远端有提交 → 本地头不含它即 fail-closed(本地头含它 = 导入
+ * MR 等形态的首次推送,远端头本是本地起点,照常放行)。fetch/merge 与
+ * 其他宿主 git 写同一套边界(代理 gitdir + 一次性凭据沙箱);合并身份
+ * 与基线同步同款(-c 注入宿主用户名/邮箱),提交信息同格式(类型 fix)。
+ * 冲突只试干净合并,撞上即 abort 还原现场——解冲突要判断,交调用方
+ * 的对话现场。 */
+export async function absorbExternalCommits(options: {
+  dataDir: string;
+  repoDir: string;
+  repoUrl: string;
+  branch: string;
+  ticket: string;
+  /** 本会话最后一笔推送收据(按仓、分支取自收据投影;缺席=该分支
+   * 平台从未推过)。 */
+  receiptSha?: string;
+  credential?: GitCredential;
+}): Promise<ExternalAbsorbOutcome> {
+  if (!existsSync(join(options.repoDir, ".git"))) {
+    return { kind: "failed", reason: `代码克隆不存在: ${options.repoDir}` };
+  }
+  const remoteUrl = validateRepoUrl(options.repoUrl);
+  const sandbox = prepareSandbox(options.dataDir, options.credential,
+    options.repoDir);
+  let view: ReturnType<typeof createSafeGitView> | undefined;
+  const receipt = options.receiptSha?.trim().toLowerCase();
+  const name = options.credential?.username ?? "mae-flow-cloud";
+  const email = options.credential?.email
+    ?? `${name.replace(/[^a-zA-Z0-9_.+-]/g, "-")}@localhost`;
+  try {
+    view = createSafeGitView(options.repoDir);
+    const baseRef = `refs/remotes/origin/${options.branch}`;
+    const git = (...args: string[]) => runGit(
+      [...sandbox.args, "-c", `user.name=${name}`, "-c", `user.email=${email}`,
+        ...args], {
+        cwd: options.repoDir,
+        env: view!.environment(sandbox.env),
+        timeoutMs: args[0] === "fetch" || args[0] === "merge"
+          ? GIT_TRANSFER_TIMEOUT_MS : 30_000,
+      });
+    // 单引用探针:远端同名分支头。探针失败 fail-open(网络抖动不该
+    // 停工,同 ADR-0071 的取回基线失败口径)。
+    const probed = await runGit([
+      ...sandbox.args, "ls-remote", "--heads", remoteUrl,
+      `refs/heads/${options.branch}`,
+    ], { env: sandbox.env, timeoutMs: 60_000 });
+    if (probed.code !== 0) {
+      const detail = (probed.stderr || probed.stdout).trim()
+        .split(/\r?\n/)[0] ?? "";
+      return { kind: "unavailable", reason: `探针失败: ${detail.slice(0, 300)}` };
+    }
+    const tip = probed.stdout.trim().split(/\s+/)[0] ?? "";
+    if (!/^[0-9a-f]{40}$/i.test(tip)) return { kind: "current" };
+    const tip12 = tip.slice(0, 12);
+    // 远端头就是最后一笔收据 → 无事。纯短码比对,不用取回对象——常态
+    // 回合(用户没在回合之间推代码)到这里就收工,零 fetch/merge(ADR-0074
+    // 探针经济:探针本身是常态下唯一的开销)。
+    if (receipt && tip12 === receipt.slice(0, 12)) return { kind: "current" };
+    // 远端对象进不了本地判不了祖先关系,先 fetch(只动远端跟踪引用,
+    // 不碰工作区)。
+    const fetched = await git("fetch", "--quiet", "--no-tags",
+      "--no-recurse-submodules", remoteUrl, `+refs/heads/${options.branch}:${baseRef}`);
+    if (fetched.code !== 0) {
+      const detail = (fetched.stderr || fetched.stdout).trim()
+        .split(/\r?\n/)[0] ?? "";
+      return { kind: "unavailable", reason: `fetch ${options.branch} 失败: `
+        + `${detail.slice(0, 300)}` };
+    }
+    const isAncestor = async (older: string, newer: string): Promise<
+      boolean | "unknown"
+    > => {
+      const outcome = await git("merge-base", "--is-ancestor", older, newer);
+      if (outcome.code === 0) return true;
+      if (outcome.code === 1) return false;
+      return "unknown";
+    };
+    const head = (await git("rev-parse", "--verify", "HEAD")).stdout.trim();
+    if (!/^[0-9a-f]{40}$/i.test(head)) {
+      return { kind: "failed", reason: "读取工作区 HEAD 失败" };
+    }
+    if (!receipt) {
+      // 该分支平台从未推过:远端头是本地起点(导入 MR 等形态)照常
+      // 放行;本地头不含它 = 平台不知道的外部提交,fail-closed。
+      const contained = await isAncestor(tip, head);
+      if (contained === true) return { kind: "current" };
+      if (contained === false) return { kind: "blocked", form: "unbacked", remoteTip: tip12 };
+      return { kind: "unavailable", reason: "无法比对远端头与本地历史" };
+    }
+    const descended = await isAncestor(receipt, tip);
+    if (descended === true) {
+      // 严格后代:本地已含(Agent 自己并过)就无事,否则吸收。
+      const contained = await isAncestor(tip, head);
+      if (contained === true) return { kind: "current" };
+      if (contained === "unknown") {
+        return { kind: "unavailable", reason: "无法比对远端头与本地历史" };
+      }
+      // 机械合并要求干净的树(同 ADR-0071 脏工作区口径);推送链路
+      // 的脏熔断在先,这里是回合开始探针等复用方的自家守门。
+      const dirty = (await dirtyWorktree(options.repoDir))
+        .filter((line) => !line.startsWith("??"));
+      if (dirty.length) return { kind: "dirty", files: dirty };
+      const listed = await git("rev-list", `${receipt}..${tip}`);
+      const commits = listed.code === 0
+        ? listed.stdout.trim().split("\n").filter(
+            (line) => /^[0-9a-f]{40}$/i.test(line))
+        : [];
+      const message = `[${options.ticket}][fix] 并入远端外部提交 ${tip12}`;
+      const merged = await git("merge", "-m", message, baseRef);
+      if (merged.code === 0) {
+        return { kind: "synced", remoteTip: tip12, commits };
+      }
+      const conflicted = String((await git(
+        "diff", "--no-ext-diff", "--no-textconv",
+        "--name-only", "--diff-filter=U")).stdout || "")
+        .trim().split("\n").filter(Boolean);
+      // 只试干净合并:冲突与否都还原现场,不留半合并工作区。
+      await git("merge", "--abort");
+      if (!conflicted.length) {
+        return { kind: "failed", reason: `merge 失败但没有冲突文件: `
+          + `${(merged.stderr || merged.stdout).trim().slice(0, 300)}` };
+      }
+      return { kind: "conflict", files: conflicted };
+    }
+    if (descended === false) {
+      const rolledBack = await isAncestor(tip, receipt);
+      if (rolledBack === true) {
+        return { kind: "blocked", form: "rolled_back", remoteTip: tip12 };
+      }
+      if (rolledBack === false) {
+        return { kind: "blocked", form: "rewritten", remoteTip: tip12 };
+      }
+    }
+    return { kind: "unavailable", reason: "无法比对远端头与推送收据" };
   } finally {
     view?.cleanup();
     sandbox.cleanup();

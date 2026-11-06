@@ -77,8 +77,12 @@ function baseOptions(dataDir: string, model: ScriptedModelServer): IssueFlowOpti
 
 /** 推送回归现场:盘上种子一个固定流程会话(「提交 MR·跑绿」阶段的
  * 续推:交付工具收敛后 push_branch 只在该阶段开放,收口态不牵催办)。
+ * 可选注入转移账(如 force 收据门要的推送收据)。
  * 必须在构造服务**之前**调用。 */
-function seedFixedIssue(dataDir: string, repoUrl: string): { id: string } {
+function seedFixedIssue(
+  dataDir: string, repoUrl: string,
+  notes?: Array<{ note: string }>,
+): { id: string } {
   const now = new Date().toISOString();
   mkdirSync(join(dataDir, "issues", "issue-1"), { recursive: true });
   writeFileSync(join(dataDir, "issues", "issue-1", "issue.json"), JSON.stringify({
@@ -91,6 +95,9 @@ function seedFixedIssue(dataDir: string, repoUrl: string): { id: string } {
     stage_states: ["done", "done", "done", "done", "pending"],
     status: "running",
     stage: "mr_green", stage_note: "等待跑绿", stage_at: now,
+    ...(notes ? { transitions: notes.map((entry) => ({
+      at: now, source: "platform", ...entry,
+    })) } : {}),
   }));
   return { id: "issue-1" };
 }
@@ -287,7 +294,11 @@ test("强制覆盖直推(三档):force=true 直接覆盖远端同名分支,不�
   ];
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
   await model.start();
-  const created = seedFixedIssue(dataDir, origin);
+  // force 收据门(ADR-0074):远端 tip 在本会话推送收据内才可覆盖。
+  // 种子收据代表"平台先前推过这个 tip"(收据集合内的重试场景)。
+  const created = seedFixedIssue(dataDir, origin, [
+    { note: `分支已推送 ${origin} ${BRANCH} @ ${leftover.tip.slice(0, 12)}` },
+  ]);
   const service = new IssueFlowService({
     ...baseOptions(dataDir, model),
     interventionTier: () => "3",

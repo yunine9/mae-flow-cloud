@@ -112,6 +112,14 @@ test("阶段注册表:门禁矩阵在注册表层面钉死(工读全程,出口�
   assert.equal(stageAllowsTool("ticket", "fix", "create_mr"), false);
   assert.equal(stageAllowsTool("ticket", "mr_green", "push_branch"), true);
   assert.equal(stageAllowsTool("ticket", "mr_green", "create_mr"), true);
+  // 分支同步(ADR-0074 票 2):修复与交付两阶段开放——修复阶段按需
+  // 同步用户手改,交付阶段收推送前吸收的冲突;它不启动流水线监看,
+  // 不属交付类独占。无单场景没有修复分支,路线不含这两阶段,无处开放。
+  assert.deepEqual(stagesAllowingTool("ticket", "sync_branch"),
+    ["fix", "mr_green"]);
+  assert.equal(stageAllowsTool("mr_repair", "mr_green", "sync_branch"), true);
+  assert.deepEqual(stagesAllowingTool("no_ticket", "sync_branch"), []);
+  assert.equal(stageAllowsTool("no_ticket", "analyze", "sync_branch"), false);
   // 无单 conclude:提交与跳过不再开放,拉仓/工读仍在。
   assert.equal(stageAllowsTool("no_ticket", "conclude", "submit_analysis"), false);
   assert.equal(stageAllowsTool("no_ticket", "conclude", "complete_stage"), false);
