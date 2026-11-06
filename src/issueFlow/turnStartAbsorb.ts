@@ -29,7 +29,12 @@ import {
   type ExternalAbsorbOutcome,
   type GitCredential,
 } from "./issueGit.ts";
-import { ledgerPushes } from "./ledgerFacts.ts";
+import { lastReceiptOf } from "./ledgerFacts.ts";
+import {
+  absorbConflictEscalation,
+  recordAbsorbedCommits,
+  resetAbsorbConflicts,
+} from "./absorbLedger.ts";
 import {
   recordTransition,
   fixedFixBranch,
@@ -117,9 +122,8 @@ export async function absorbExternalAtTurnStart(
       if (!existsSync(join(repo.dir, ".git"))) continue; // 克隆未落地,等 pull_repo
       // 无收据不探(ADR-0074 探针经济):该仓该分支平台从未推过,没有
       // 比对锚点——首轮分支刚建远端必然不存在,不在这里浪费一次探针。
-      const receipts = ledgerPushes(state.transitions ?? [])
-        .filter((entry) => entry.repo === repo.url && entry.branch === branch);
-      const lastReceiptSha = receipts.at(-1)?.sha;
+      const lastReceiptSha = lastReceiptOf(state.transitions ?? [],
+        repo.url, branch)?.sha;
       if (!lastReceiptSha) continue;
       const absorb = await absorbExternalCommits({
         dataDir: ctx.dataRoot,
@@ -154,7 +158,11 @@ async function absorbTurnOutcome(
   absorb: ExternalAbsorbOutcome,
 ): Promise<string> {
   const { state } = ctx;
-  if (absorb.kind === "current") return "";
+  if (absorb.kind === "current") {
+    // 远端头已被本地包含 = 冲突(若有)已了结,计数从 1 重数(#589)。
+    resetAbsorbConflicts(ctx);
+    return "";
+  }
   if (absorb.kind === "unavailable") {
     // 探针/取回失败 fail-open(ADR-0074):网络抖动不该停工,只留日志,
     // 不递通知词(远端状态不可判定时不给 Agent 猜的材料)。
@@ -163,25 +171,11 @@ async function absorbTurnOutcome(
     return "";
   }
   if (absorb.kind === "synced") {
-    // 记账与推送链路同一份文案(范围小结 + 逐笔,喂外部头观测投影,
-    // 归属统计据此记平台外)——两处漂移会让归属账漏算。
-    recordTransition(state, {
-      source: "platform",
-      note: `外部提交合并:${repoUrl} ${branch} 并入远端外部提交 `
-        + `${absorb.commits.length} 条(${lastReceiptSha.slice(0, 12)} → `
-        + `${absorb.remoteTip.slice(0, 12)})`,
-    });
-    for (const sha of absorb.commits) {
-      recordTransition(state, {
-        source: "platform",
-        note: `外部提交合并:${repoUrl} ${branch} 并入平台外提交 `
-          + `${sha.slice(0, 12)}`,
-      });
-    }
-    ctx.persist();
-    // 宿主合并把用户手改以宿主身份写进工作区,交回容器前修属主;
-    // 非隔离部署零开销(与基线同步同一纪律)。
-    ctx.repairOwnership?.(repoDir);
+    // 记账走三入口共用的助手(absorbLedger):与推送/sync_branch 同一份
+    // 文案与落盘(范围小结 + 逐笔,喂外部头观测投影,归属统计据此记
+    // 平台外)。
+    recordAbsorbedCommits(ctx, { dir: repoDir, url: repoUrl }, branch,
+      absorb, lastReceiptSha);
     return promptCopy("notices", "absorb.merged", {
       branch,
       count: absorb.commits.length,
@@ -201,11 +195,14 @@ async function absorbTurnOutcome(
     // merge 尝试写过工作区文件(冲突标记)再 abort 还原,被重写的文件
     // 可能已是宿主属主;交回容器前修属主(与基线同步冲突路径同一纪律)。
     ctx.repairOwnership?.(repoDir);
+    // 连续冲突计数与升级提示(#589,基线同步 ADR-0071 同款形态),
+    // 追加在通知词后。
+    const escalate = absorbConflictEscalation(ctx, "开工");
     return promptCopy("notices", "absorb.conflict", {
       branch,
       count: absorb.files.length,
       files: absorb.files.join("\n"),
-    });
+    }) + escalate;
   }
   if (absorb.kind === "blocked") {
     // 非严格后代(改写/回滚/无收据的外部头):照常开工但声明吸收已

@@ -565,6 +565,11 @@ export interface IssueSessionState {
   /** 连续「推送前基线同步撞冲突」计数(ADR-0071):任何一次推送成功
    * 即清零;满 3 次回执升级提示人工确认时机,不硬停。内部机制账。 */
   baseline_sync_conflicts?: number;
+  /** 连续「外部提交合并撞冲突」计数(#589,推送链路/sync_branch/回合
+   * 开始探针三条吸收路径共用):合并落定(并入或本地已含)即清零,
+   * 与 baseline_sync_conflicts 互相独立;满 3 次回执/通知词升级提示
+   * 人工确认时机,不硬停。内部机制账。 */
+  absorb_conflicts?: number;
   /** MR 账(按仓,一仓一 MR):AI 的"上报"即 create_mr 的调用记录;
    *  merged_at/merged_sha/closed_at 是合入事实(ADR-0022)。 */
   mrs?: IssueMrRecord[];
@@ -771,8 +776,10 @@ export function summarize(state: IssueSessionState): IssueSummary {
     // baseline_syncs(基线同步账,ADR-0071)与 baseline_sync_conflicts
     // (连续同步冲突计数)不上 wire:推送的内部前置卫生,工作台事实
     // 经推送账与回执呈现;要上前端先补镜像与样例,不白送。
+    // absorb_conflicts(#589,连续外部提交合并冲突计数)同理。
     baseline_syncs: _baselineSyncs,
     baseline_sync_conflicts: _baselineSyncConflicts,
+    absorb_conflicts: _absorbConflicts,
     ...rest } = state;
   return {
     ...rest,

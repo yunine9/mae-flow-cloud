@@ -125,7 +125,7 @@ test("回合开始吸收的通知词(notices.absorb.*):各形态一段,纪律与
   const blocked = promptCopy("notices", "absorb.blocked", {
     finding: "远端修复分支头 ccc333ddd333 的历史对不上,疑似被改写",
   });
-  assert.match(blocked, /吸收已暂停/);
+  assert.match(blocked, /合并已暂停/);
   assert.match(blocked, /照常进行/);
   assert.match(blocked, /绝不自动处理、绝不强制覆盖/);
   assert.match(blocked, /转告用户/);

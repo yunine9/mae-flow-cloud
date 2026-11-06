@@ -274,6 +274,40 @@ test("同步撞冲突:现场还原、回执列冲突文件;解决提交后再同
   assert.match(second.text, /无需同步/);
 });
 
+// ---- 连续吸收冲突:回执升级提示人工确认(#589,基线同步同款形态) ----
+
+test("连续 3 次同步撞吸收冲突:回执升级提示人工确认;合并落定即清零", async () => {
+  const root = mfcTemp("mfc-issue-sync-escalate-");
+  const { origin, clone } = seedIssueRepo(root);
+  const state = issueState(origin);
+  await platformFirstPush(root, origin, clone, state);
+  // 计数在首笔推送之后预置:推送成功即清零,先种后推会被首推冲掉。
+  state.absorb_conflicts = 2;
+  userPush(root, origin, "fix.txt", "用户也改了 fix.txt\n");
+  commitIn(clone, "fix.txt", "平台也改了 fix.txt\n",
+    `[${TICKET}][fix] 平台侧改动`);
+  const harness = makeTools(state, root);
+  const outcome = await syncCall(harness, { branch: BRANCH });
+  assert.equal(outcome.error, true, "冲突同步应失败收口");
+  assert.match(outcome.text, /外部提交持续变动/,
+    "连续 3 次后回执追加升级文案");
+  assert.match(outcome.text, /连续 3 次/);
+  assert.match(outcome.text, /人工确认/, "升级提示建议人工确认合并时机");
+  assert.equal(state.absorb_conflicts, 3, "连续冲突计数记 3");
+  // Agent 收尾解决冲突:远端头已被本地包含,回执回到无需同步,计数清零。
+  try {
+    git(["-C", clone, "merge", "origin/" + BRANCH]);
+    assert.fail("合并应撞冲突");
+  } catch { /* 预期的冲突退出 */ }
+  writeFileSync(join(clone, "fix.txt"), "双方都保留\n");
+  git(["-C", clone, "add", "-A"]);
+  git(["-C", clone, "commit", "-q"]);
+  const settled = await syncCall(harness, { branch: BRANCH });
+  assert.equal(settled.error, false, settled.text);
+  assert.match(settled.text, /无需同步/);
+  assert.equal(state.absorb_conflicts, 0, "合并落定即清零计数");
+});
+
 // ---- 回执四:异常喊人(非严格后代形态) ----
 
 test("远端历史被改写:拒绝喊人并留痕,不动工作区、不动远端", async () => {

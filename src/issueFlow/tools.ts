@@ -91,12 +91,17 @@ import {
   syncBaselineBeforePush,
   type GitCredential,
 } from "./issueGit.ts";
-import { ledgerPushes } from "./ledgerFacts.ts";
+import { lastReceiptOf, ledgerReceiptsOf } from "./ledgerFacts.ts";
 import {
   absorbBlockedFinding,
   createBranchTransferMutex,
   type BranchTransferMutex,
 } from "./turnStartAbsorb.ts";
+import {
+  absorbConflictEscalation,
+  recordAbsorbedCommits,
+  resetAbsorbConflicts,
+} from "./absorbLedger.ts";
 import { createMergeRequest } from "../mrClient.ts";
 import { resolveModuleMrParticipants } from "../moduleMrParticipants.ts";
 import { mrParticipantsMessage } from "../mrParticipants.ts";
@@ -973,8 +978,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     }
     // 推送收据投影(ADR-0064 去重,同仓同分支口径):非 force 路径取
     // 末笔作吸收锚点;force 路径整组传给收据门(ADR-0074)。
-    const receipts = ledgerPushes(state.transitions ?? [])
-      .filter((entry) => entry.repo === repo.url && entry.branch === branch);
+    const receipts = ledgerReceiptsOf(state.transitions ?? [], repo.url, branch);
     // 推送前外部提交吸收(ADR-0074):用户把手改拉到本地推回远端是协作
     // 的正常形态——远端修复分支头前进(本会话最后一笔推送收据的严格
     // 后代)即先 fetch+merge 进工作区再推;撞冲突还原现场交回本回合;
@@ -997,31 +1001,18 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         credential: ctx.gitCredential?.(),
       });
       if (absorb.kind === "synced") {
-        const from = lastReceiptSha!;
-        recordTransition(state, {
-          source: "platform",
-          note: `外部提交合并:${repo.url} ${branch} 并入远端外部提交 `
-            + `${absorb.commits.length} 条(${from.slice(0, 12)} → `
-            + `${absorb.remoteTip.slice(0, 12)})`,
-        });
-        for (const sha of absorb.commits) {
-          recordTransition(state, {
-            source: "platform",
-            note: `外部提交合并:${repo.url} ${branch} 并入平台外提交 `
-              + `${sha.slice(0, 12)}`,
-          });
-        }
-        ctx.persist();
-        // 宿主合并把用户手改以宿主身份写进工作区,交回容器前修属主;
-        // 非隔离部署零开销(与基线同步同一纪律)。
-        ctx.repairOwnership?.(repo.dir);
+        // 吸收记账走三入口共用的助手(absorbLedger):范围小结 + 逐笔
+        // 留痕、计数清零、落盘、修属主,一条不漏(归属统计的来源)。
+        recordAbsorbedCommits(ctx, repo, branch, absorb, lastReceiptSha!);
         absorbedNote = `;已并入远端外部提交 ${absorb.commits.length} 条`;
       } else if (absorb.kind === "conflict") {
+        // 连续冲突计数与升级提示(#589,基线同步 ADR-0071 同款形态)。
+        const escalate = absorbConflictEscalation(ctx, "推送");
         fail(promptCopy("receipts", "push.absorb_conflict", {
           branch, ticket,
           count: absorb.files.length,
           files: absorb.files.join("\n"),
-        }));
+        }) + escalate);
       } else if (absorb.kind === "blocked") {
         const finding = absorbBlockedFinding(absorb, lastReceiptSha);
         recordTransition(state, {
@@ -1140,10 +1131,12 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
             note: `强制覆盖被收据门拒绝:${finding};需人工核对后显式放行`,
           });
           ctx.persist();
-          fail(promptCopy("receipts",
-            error.reason === "external"
-              ? "push.force_external" : "push.force_unreachable",
-            { tip: error.remoteTip.slice(0, 12) || "-" }));
+          // 各自取各的文案:force_unreachable 模板没有 {{tip}} 槽,不传
+          // 占位参数。
+          fail(error.reason === "external"
+            ? promptCopy("receipts", "push.force_external",
+              { tip: error.remoteTip.slice(0, 12) || "-" })
+            : promptCopy("receipts", "push.force_unreachable"));
         }
         throw error;
       }
@@ -1159,6 +1152,9 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     if (slot >= 0) pushes[slot] = record; else pushes.push(record);
     // 推送成功即清零连续同步冲突计数(ADR-0071:「连续」指推送接连被拒)。
     if (state.baseline_sync_conflicts) state.baseline_sync_conflicts = 0;
+    // 外部提交合并的连续冲突计数同理(#589):走到推送即吸收没有拦路
+    // (拦路在前面就拒推了),与基线同步计数互相独立。
+    if (state.absorb_conflicts) state.absorb_conflicts = 0;
     recordTransition(state, {
       source: "platform",
       note: `分支已推送 ${repo.url} ${receipt.branch} @ ${receipt.sha.slice(0, 12)}`
@@ -1252,9 +1248,8 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     const ticket = state.ticket ?? `MR !${state.imported_mr!.iid}`;
     // 吸收判定的锚点:本会话在该仓该分支的最后一笔推送收据(与推送链路
     // 同一份收据投影,两边判定不漂移)。
-    const receipts = ledgerPushes(state.transitions ?? [])
-      .filter((entry) => entry.repo === repo.url && entry.branch === branch);
-    const lastReceiptSha = receipts.at(-1)?.sha;
+    const lastReceiptSha = lastReceiptOf(state.transitions ?? [],
+      repo.url, branch)?.sha;
     const absorb = await absorbExternalCommits({
       dataDir: ctx.dataRoot,
       repoDir: repo.dir,
@@ -1265,42 +1260,29 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       credential: ctx.gitCredential?.(),
     });
     if (absorb.kind === "current") {
+      // 远端头已被本地包含 = 冲突(若有)已了结,计数从 1 重数(#589)。
+      resetAbsorbConflicts(ctx);
       return ok(promptCopy("receipts", "sync.current", { branch }));
     }
     if (absorb.kind === "synced") {
-      const from = lastReceiptSha!;
-      // 吸收记账与推送链路同一份文案(逐笔条目喂外部头观测投影,归属
-      // 统计据此记平台外)——两处漂移会让归属账漏算。
-      recordTransition(state, {
-        source: "platform",
-        note: `外部提交合并:${repo.url} ${branch} 并入远端外部提交 `
-          + `${absorb.commits.length} 条(${from.slice(0, 12)} → `
-          + `${absorb.remoteTip.slice(0, 12)})`,
-      });
-      for (const sha of absorb.commits) {
-        recordTransition(state, {
-          source: "platform",
-          note: `外部提交合并:${repo.url} ${branch} 并入平台外提交 `
-            + `${sha.slice(0, 12)}`,
-        });
-      }
-      ctx.persist();
-      // 宿主合并把用户手改以宿主身份写进工作区,交回容器前修属主;
-      // 非隔离部署零开销(与基线同步同一纪律)。
-      ctx.repairOwnership?.(repo.dir);
+      // 吸收记账走三入口共用的助手(absorbLedger):与推送链路同一份
+      // 文案与落盘(逐笔条目喂外部头观测投影,归属统计据此记平台外)。
+      recordAbsorbedCommits(ctx, repo, branch, absorb, lastReceiptSha!);
       return ok(promptCopy("receipts", "sync.merged", {
         branch,
         count: absorb.commits.length,
-        from: from.slice(0, 12),
+        from: lastReceiptSha!.slice(0, 12),
         to: absorb.remoteTip.slice(0, 12),
       }));
     }
     if (absorb.kind === "conflict") {
+      // 连续冲突计数与升级提示(#589,基线同步 ADR-0071 同款形态)。
+      const escalate = absorbConflictEscalation(ctx, "同步");
       fail(promptCopy("receipts", "sync.conflict", {
         branch, ticket,
         count: absorb.files.length,
         files: absorb.files.join("\n"),
-      }));
+      }) + escalate);
     }
     if (absorb.kind === "blocked") {
       const finding = absorbBlockedFinding(absorb, lastReceiptSha);

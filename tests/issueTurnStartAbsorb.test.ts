@@ -363,6 +363,28 @@ test("开工前撞冲突:现场还原、回合照常开工,通知词点名冲突
   assert.equal(second, "", "冲突解决后再次开工应无事");
 });
 
+// ---- 连续吸收冲突:通知词升级提示人工确认(#589,基线同步同款形态) ----
+
+test("连续 3 次开工吸收撞冲突:通知词出现升级文案,计数落状态", async () => {
+  const root = mfcTemp("mfc-issue-turnabsorb-escalate-");
+  const { origin, clone } = seedIssueRepo(root);
+  const state = issueState(origin);
+  await platformFirstPush(root, origin, clone, state);
+  // 计数在首笔推送之后预置:推送成功即清零,先种后推会被首推冲掉。
+  state.absorb_conflicts = 2;
+  userPush(root, origin, "fix.txt", "用户也改了 fix.txt\n");
+  commitIn(clone, "fix.txt", "平台也改了 fix.txt\n",
+    `[${TICKET}][fix] 平台侧改动`);
+  const deps = makeDeps(state, root);
+  const notice = await runAbsorb(deps);
+  assert.match(notice, /冲突/);
+  assert.match(notice, /外部提交持续变动/,
+    "连续 3 次后通知词追加升级文案");
+  assert.match(notice, /连续 3 次/);
+  assert.match(notice, /人工确认/, "升级提示建议人工确认合并时机");
+  assert.equal(state.absorb_conflicts, 3, "连续冲突计数记 3");
+});
+
 // ---- 非严格后代:照常开工,通知词声明吸收暂停喊人 ----
 
 test("远端历史被改写:照常开工但通知词声明暂停吸收喊人,留痕不动现场", async () => {
