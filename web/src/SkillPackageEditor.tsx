@@ -6,6 +6,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { updateSkillPackage, type SkillUploadFile } from "./api";
 import { componentRequest } from "./componentResearchApi";
 import { base64Text, skillPackageFiles } from "./KnowledgeSkillImport";
+import { confirmDialog } from "./ConfirmDialog";
 
 interface SkillPackage {
   package_digest: string;
@@ -33,7 +34,14 @@ export function SkillPackageEditor({ directory, mode, initialPath = "SKILL.md", 
   const current = pack?.files.find(file => file.path === selected);
   const dirty = mode === "edit" ? changed.length > 0 : replacement.length > 0;
   function close() {
-    if (!busy && (!dirty || window.confirm("尚未保存，确定放弃本次修改？"))) onClose();
+    if (busy) return;
+    if (dirty) void confirmDialog({
+      title: "放弃未保存的修改？",
+      message: "本次改动尚未保存。",
+      confirmLabel: "放弃修改",
+      danger: true,
+    }).then(confirmed => { if (confirmed) onClose(); });
+    else onClose();
   }
   function pick(files: FileList | null) {
     if (!files?.length) return;

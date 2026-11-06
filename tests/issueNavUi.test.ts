@@ -98,7 +98,9 @@ test("子页签状态:默认落问题会话,选择经父层驱动右侧页面", 
 test("右侧三页面常驻驻留:登记/DTS/会话列表都是隐藏切换,不卸载", () => {
   // 登记域仅开发者渲染(服务端拒 admin 发起,入口语义不变),面板由
   // 子页签受控;可见性走 hidden,不得条件卸载(卸载即丢表单驻留)。
-  assert.match(board, /viewer\.role !== "admin" && <IssueRegistration/);
+  // 例外只在「流水线修复」独立工具页签(587a1264:与 DTS 交付数据隔离),
+  // 登记/DTS/会话三个问题页签之间仍全程常驻。
+  assert.match(board, /viewer\.role !== "admin" && childTab !== "pipeline" && <IssueRegistration/);
   assert.match(board, /visible=\{/, "登记域显隐经 visible 属性驱动");
   assert.doesNotMatch(board,
     /childTab === "sessions" && <IssueRegistration/,
@@ -113,7 +115,10 @@ test("右侧三页面常驻驻留:登记/DTS/会话列表都是隐藏切换,不�
 
 test("深链 /issues/:id:进入即子页签落问题会话(通知点开直达工作台)", () => {
   // 打开会话(点列表/团队任务联动)与浏览器前进后退两条路都要落。
-  const hits = app.match(/setIssueChildTab\("sessions"\)/g) ?? [];
+  // 流水线修复会话(mr-repair-)走独立工具页签:两路都落「流水线修复」,
+  // 普通问题会话仍落「问题会话」(587a1264 隔离流水线修复与 DTS 数据)。
+  const hits = app.match(
+    /setIssueChildTab\((?:readIssueRoute\(\)|id)\.startsWith\("mr-repair-"\) \? "pipeline" : "sessions"\)/g) ?? [];
   assert.ok(hits.length >= 2,
     `深链两路(打开会话/前进后退)都应落问题会话,实际 ${hits.length} 处`);
 });
