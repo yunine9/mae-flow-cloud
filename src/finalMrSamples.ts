@@ -1,3 +1,4 @@
+import { readLocalCodeSnapshot } from "./finalMrLocalSnapshot.ts";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -36,7 +37,7 @@ export class FinalMrSamples<T extends SamplingTask> {
     const final = task.summary.delivery?.final_mr, initial = task.summary.delivery?.initial_mr, cwd = task.cwd;
     const finalOnly = !initial && !task.summary.delivery?.mr_url;
     const useTaskRepo = !!cwd && !task.summary.workspace_reclaimed_at && existsSync(join(cwd, ".git"));
-    if (!this.host.current(task) || (!useTaskRepo && !finalOnly) || final?.state !== "merged" || (!retry && !final.head) || task.summary.status !== "completed"
+    if (!this.host.current(task) || (!useTaskRepo && !finalOnly && !readLocalCodeSnapshot(task.summary, final?.url ?? "")) || final?.state !== "merged" || (!retry && !final.head) || task.summary.status !== "completed"
         || continuationPending(task.summary)) return;
     const key = JSON.stringify([task.summary.delivery_generation, initial?.url, initial?.head, final.url]);
     if (task.finalMrAnalysis?.key === key && (!retry || task.finalMrAnalysis.running)) return;

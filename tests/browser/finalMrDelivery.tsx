@@ -58,6 +58,13 @@ window.fetch = async (input, init) => {
     if (url.endsWith("/final-mr-comparison?generation=r2")) return Response.json({ comparison_basis: "final", truncated: false,
       files: [{ path: sourceFile, change_patch: "@@ -8 +8 @@\n-return fail(response);\n+return retryOrder(id);", initial_patch: "", final_patch: "", truncated: false }] });
   }
+  if (scenario === "local-snapshot") {
+    if (url === "/delivery-analytics") return Response.json({ generated_at: when, rows: [{ ...row, final_code_lines: 12,
+      metric: { ...metric(8, 1, 3), commits: [], initial_implementation: { basis: "content_comparison" },
+        content_comparison: { reference: "local_snapshot", base: "c".repeat(40), head: "a".repeat(40), captured_at: when } },
+      mr_comparison: { ...row.mr_comparison, reference: "local_snapshot" } }] });
+    if (url.endsWith("/final-mr-comparison?generation=r2")) return Response.json({ ...comparison, reference: "local_snapshot" });
+  }
   if (scenario === "platform-push") {
     const first = "a".repeat(40), head = "b".repeat(40);
     if (url === "/delivery-analytics") {
@@ -156,7 +163,13 @@ async function verifyCoverage() {
   }
 }
 async function run() {
-  if (scenario === "platform-push") {
+  if (scenario === "local-snapshot") {
+    root.render(<main className="tw-root p-8"><DeliveryAnalytics onOpenTask={() => {}} /></main>);
+    await until(() => document.querySelector('pre[aria-label="从本地快照到最终版代码"]'), "应展示本地快照文件差异");
+    assert(document.body.textContent?.includes("关联最终 MR 时的本地快照"), "应解释内容比较基准");
+    assert(!document.querySelector(".delivery-timeline"), "内容比较不显示空时间线");
+    assert(document.querySelector('[aria-label="交付代码来源"]')?.textContent?.includes("首次实现"), "应显示三类来源");
+  } else if (scenario === "platform-push") {
     root.render(<main className="tw-root p-8"><DeliveryAnalytics onOpenTask={() => {}} /></main>);
     await until(() => document.querySelector('pre[aria-label="从平台已推送版本到最终版代码"]'), "应显示平台推送版本到最终 MR 的差异");
     const panel = document.querySelector('[aria-label="平台已推送版本与最终版的代码差异"]')!;

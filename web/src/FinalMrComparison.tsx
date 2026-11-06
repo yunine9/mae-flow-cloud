@@ -47,7 +47,7 @@ function ComparisonContent({ row, summary, expandFirst }: {
   const selected = detail?.files.find(file => file.path === path);
   const finalOnly = summary.method === "final" || (summary.method === "unavailable" && !row.initial_mr_url);
   const pushed = summary.reference === "platform_push";
-  const before = pushed ? "平台已推送版本" : "初版";
+  const before = summary.reference === "local_snapshot" ? "本地快照" : pushed ? "平台已推送版本" : "初版";
   const heading = finalOnly ? "最终 MR 的代码改动" : `${before}与最终版的代码差异`;
   return <section aria-label={heading} className="grid min-w-0 gap-3">
     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -81,7 +81,7 @@ function ComparisonContent({ row, summary, expandFirst }: {
                 <Patch title={finalOnly ? "相对目标分支的改动" : `从${before}到最终版`} text={selected.change_patch} empty="没有可展示的差异行。" />
                 {!finalOnly && <details className="min-w-0 text-xs"><summary className="cursor-pointer py-1 text-muted-foreground">查看两版各自的改动</summary>
                   <div className="mt-1 grid gap-2">
-                    <Patch title={pushed ? "平台已推送版本的改动" : "初版 MR 的改动"} text={selected.initial_patch} empty={selected.truncated ? "未保存此段差异。" : `${before}没有此文件的改动。`} />
+                    <Patch title={summary.reference === "local_snapshot" ? "本地快照的改动" : pushed ? "平台已推送版本的改动" : "初版 MR 的改动"} text={selected.initial_patch} empty={selected.truncated ? "未保存此段差异。" : `${before}没有此文件的改动。`} />
                     <Patch title="最终 MR 的改动" text={selected.final_patch} empty={selected.truncated ? "未保存此段差异。" : "最终 MR 没有此文件的改动。"} />
                   </div>
                 </details>}

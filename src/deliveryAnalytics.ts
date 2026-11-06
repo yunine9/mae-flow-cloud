@@ -1,3 +1,5 @@
+import { contentMetric } from "./deliveryContentMetric.ts";
+import { awaitLocalCodeSnapshot, readLocalCodeSnapshot, localCodeSnapshotPending } from "./finalMrLocalSnapshot.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -11,7 +13,7 @@ import type { RepositoryProfile } from "./repositoryProfiles.ts";
 import { emptyOrigins, type CodeOrigin, type DeliveryAnalysisReport, type DeliveryCodeMetric, type MrComparison, type MrComparisonDetail } from "./deliveryAnalyticsTypes.ts";
 
 interface FinalSizeSample { url: string; head: string; base?: string; counts?: { lines: number; deleted: number } }
-interface StoredAnalysis { final_size?: FinalSizeSample; version: 1; head: string; metric?: DeliveryCodeMetric; error?: string; attribution?: string; intervals?: RepairInterval[]; comparison?: MrComparison; comparison_key?: string }
+interface StoredAnalysis { content_version?: 1; final_size?: FinalSizeSample; version: 1; head: string; metric?: DeliveryCodeMetric; error?: string; attribution?: string; intervals?: RepairInterval[]; comparison?: MrComparison; comparison_key?: string }
 type Task = Pick<TaskSummary, "id" | "workspace" | "delivery_generation">;
 type CollectionTask = Pick<TaskSummary, "id" | "workspace" | "delivery" | "origin" | "delivery_generation">;
 function location(task: Task): string {
@@ -55,13 +57,18 @@ export function comparisonKey(delivery?: Delivery) {
 export function hasFinalMrSample(task: TaskSummary, requireUsable = false): boolean {
   const key = comparisonKey(task.delivery), saved = read(task);
   if (!key || saved?.comparison_key !== key || !matchesFinalSize(saved.final_size, task.delivery?.final_mr)) return false;
-  if (!requireUsable) return true;
+  const url = task.delivery?.final_mr?.url;
+  const local = url ? readLocalCodeSnapshot(task, url) : undefined;
+  if (url && localCodeSnapshotPending(task, url)) return false;
+  if (local && saved.comparison?.method === "patch" && saved.metric?.content_comparison?.snapshot_hash !== local.hash) return false;
+  if (saved.metric?.content_comparison?.reference === "local_snapshot" && saved.metric.content_comparison.snapshot_hash !== local?.hash) return false;
+  if (!requireUsable) return saved.comparison?.method !== "patch" || saved.content_version === 1;
   if (!saved.final_size?.counts || !saved.comparison || saved.comparison.method === "unavailable") return false;
   try {
     const file = lstatSync(detailLocation(task, key));
     return file.isFile() && file.size > 0 && file.size <= 2_000_000
       && (saved.comparison.method === "final" ? !task.delivery?.git_push?.sha
-        : saved.comparison.method === "patch" || saved.metric?.head === task.delivery?.final_mr?.head);
+        : (saved.comparison.method === "patch" && !!saved.metric?.content_comparison) || saved.metric?.head === task.delivery?.final_mr?.head);
   } catch { return false; }
 }
 function matchesFinalSize(size?: FinalSizeSample, final?: Delivery["final_mr"]): boolean {
@@ -177,6 +184,8 @@ export async function awaitTaskDeliveryAnalytics(task: Task): Promise<void> {
 async function collectFinalMr(summary: CollectionTask, cwd: string, head: string, attribution: string) {
   const delivery = summary.delivery!, initial = delivery.initial_mr, final = delivery.final_mr!;
   const key = comparisonKey(delivery)!;
+  await awaitLocalCodeSnapshot(summary, final.url);
+  const local = readLocalCodeSnapshot(summary, final.url);
   const saved = read(summary);
   const sameComparison = saved?.comparison_key === key;
   const savedMetric = sameComparison && saved.metric?.base === final.base && saved.metric?.head === head ? saved.metric : undefined;
@@ -200,15 +209,37 @@ async function collectFinalMr(summary: CollectionTask, cwd: string, head: string
   }
   let metric: DeliveryCodeMetric | undefined;
   let error: string | undefined;
-  if (comparison.method === "ancestry" || comparison.method === "final" || comparison.reference === "platform_push") {
+  if (comparison.method === "ancestry" || comparison.method === "final") {
     const boundary = comparison.reference === "platform_push" && comparison.method === "ancestry" ? comparison.initial_head : undefined;
     try { metric = await collectDeliveryCode(summary, cwd, head, boundary); }
     catch (e) {
-      if (matchesFinalSize(saved?.final_size, final)) metric = savedMetric;
+      if (matchesFinalSize(saved?.final_size, final) && !savedMetric?.content_comparison) metric = savedMetric;
       error = e instanceof Error ? e.message : "无法回溯最终代码的来源";
     }
   } else error = comparison.reason ?? "提交历史不同，已按两份 MR 的代码内容比较，无法按提交归因";
 
+  if (!metric) {
+    try {
+      if (!local && comparison.method === "ancestry") throw new Error(error ?? "缺少本地快照");
+      const reference = local ? "local_snapshot" : comparison.reference === "platform_push" ? "platform_push" : "initial_mr";
+      const prior = local ? { head: local.head, base: local.base }
+        : { head: comparison.initial_head ?? initial?.head, base: initial?.base ?? await frozenTaskBaseline(cwd) };
+      if (!prior.head || !prior.base || !final.base || (!local && comparison.method !== "patch" && comparison.method !== "ancestry")) throw new Error(error ?? "缺少本地快照或可核实的初版版本");
+      if (local) {
+        const result = await compareFinalMr(cwd, { initial: prior, final, patches: local.patches });
+        comparison = { ...result.summary, reference: "local_snapshot" };
+        writeAnalysisFile(detailLocation(summary, key), { ...result.detail, reference: "local_snapshot" });
+      }
+      metric = await contentMetric({ cwd, id: summary.id, base: final.base, head, initial: { head: prior.head, base: prior.base }, snapshot: local,
+        reference, intervals: [...(saved?.intervals ?? []), currentInterval(summary, head)].filter(validInterval) });
+      error = undefined;
+    } catch (e) { error = e instanceof Error ? e.message : "缺少内容比较证据"; }
+  }
+
+  if (!metric && savedMetric?.content_comparison && (savedMetric.content_comparison.reference !== "local_snapshot" || local?.hash === savedMetric.content_comparison.snapshot_hash)) {
+    metric = savedMetric;
+    error = undefined;
+  }
   let counts = metric ? metricSize(metric) : matchesFinalSize(saved?.final_size, final) ? saved?.final_size?.counts : undefined;
   // A matching old blame snapshot measured final changed lines even if it did
   // not distinguish a merge through a side branch. Reuse its total only.
@@ -216,7 +247,7 @@ async function collectFinalMr(summary: CollectionTask, cwd: string, head: string
   if (!counts && final.base) {
     try { counts = await finalMrSize(cwd, final.base, head); } catch { /* 缺少 Git 对象不猜行数。 */ }
   }
-  save(summary, { version: 1, head, metric, attribution, error, comparison, comparison_key: key, intervals: saved?.intervals,
+  save(summary, { version: 1, content_version: 1, head, metric, attribution, error, comparison, comparison_key: key, intervals: saved?.intervals,
     final_size: { url: final.url, head, base: final.base, counts } });
 }
 
@@ -340,7 +371,7 @@ export function buildDeliveryAnalysis(tasks: TaskSummary[], modules: Array<{ id:
       const final = task.delivery?.final_mr, key = comparisonKey(task.delivery);
       const comparison = final ? (stored?.comparison_key === key ? stored?.comparison : undefined)
         ?? { method: "unavailable" as const, initial_head: task.delivery?.initial_mr?.head, final_head: final.head,
-          reason: final.state === "merged" && !final.head ? "代码平台尚未返回最终 MR 的源版本，待版本可读后可刷新数据" : !task.delivery?.initial_mr && !task.delivery?.mr_url ? "尚无最终 MR 的代码改动记录" : "尚无这两份 MR 当前版本的比较证据" } : undefined;
+          reason: task.workspace_reclaimed_at && !readLocalCodeSnapshot(task, final.url) ? "工作区已回收，缺少本地快照或可读取的历史版本证据" : final.state === "merged" && !final.head ? "代码平台尚未返回最终 MR 的源版本，待版本可读后可刷新数据" : !task.delivery?.initial_mr && !task.delivery?.mr_url ? "尚无最终 MR 的代码改动记录" : "尚无这两份 MR 当前版本的比较证据" } : undefined;
       // 已完成记录可能保留待对账文案；统计合入事实不依赖该文案是否清理。
       const merged = task.status === "completed" && (final ? final.state === "merged" : ["merged", "已合入", "已合入（内核终态待对账）"].includes(task.delivery?.mr_state ?? ""));
       // merged_sha identifies the target commit (different after squash/rebase).
@@ -348,7 +379,7 @@ export function buildDeliveryAnalysis(tasks: TaskSummary[], modules: Array<{ id:
       const exactFinalMetric = final && stored?.comparison_key === key && stored?.metric?.head === head && stored?.metric?.base === final.base ? stored?.metric : undefined;
       const finalSizeMatches = matchesFinalSize(stored?.final_size, final);
       const publishedHead = final ? final.head : task.delivery?.git_push?.sha;
-      const metric = (!final || finalSizeMatches && exactFinalMetric && (comparison?.method === "ancestry" || comparison?.method === "final" || comparison?.reference === "platform_push"))
+      const metric = (!final || finalSizeMatches && exactFinalMetric && (comparison?.method === "ancestry" || comparison?.method === "final" || comparison?.reference === "platform_push" || exactFinalMetric.content_comparison))
         && head && stored?.metric?.head === head && (stored.metric.published_head ?? stored.metric.head) === publishedHead
         && stored.metric.initial_implementation ? structuredClone(stored.metric) : undefined;
       if (metric) {

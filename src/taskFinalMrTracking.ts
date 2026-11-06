@@ -1,3 +1,4 @@
+import { captureLocalCodeSnapshot } from "./finalMrLocalSnapshot.ts";
 import { spawnSync } from "node:child_process";
 import { interruptWarmupReceipt } from "./auxiliarySessions.ts";
 import { interruptDeveloperAssistant } from "./developerAssistant.ts";
@@ -31,6 +32,7 @@ export function applyFinalMrLink(task: TaskState, mr: DeliveryMr): FinalDelivery
     } catch { /* 只有原 MR 链接也能关联，代码分析会标出缺少的版本。 */ }
   }
   const final = finalMrRecord(mr);
+  captureLocalCodeSnapshot(task.summary, task.cwd, final.url);
   const waiting = task.summary.waiting && task.humanGate.get(task.summary.waiting.waiting_id);
   if (waiting?.status === "waiting") task.humanGate.supersede(waiting.waiting_id,
     { stateVersion: waiting.state_version, notes: "已关联最终 MR" });

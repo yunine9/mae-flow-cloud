@@ -489,7 +489,7 @@ test("另一个 MR 改写提交并更新目标基线：真实比较两份补丁�
   const improvement = new DeliveryImprovements(() => ({ dataDir: f.dir, model: { json: {} } }), async input => {
     analyzed++;
     if (!input.task.delivery?.final_mr) return "原 MR 分析";
-    assert.equal(input.row?.metric, undefined);
+    assert.equal(input.row?.metric?.content_comparison?.reference, "initial_mr");
     assert.match(input.instructions, /mr-comparison.json/);
     const files = JSON.parse(readFileSync(join(input.root, "mr-comparison.json"), "utf8")).files;
     assert.match(files[0].change_patch, /newer/);
@@ -506,9 +506,9 @@ test("另一个 MR 改写提交并更新目标基线：真实比较两份补丁�
   observeDeliveryCode(f.summary, f.cwd, head);
   await awaitDeliveryAnalytics();
   const row = buildDeliveryAnalysis([f.summary]).rows[0], c = row.mr_comparison!;
-  assert.equal(row.mr_url, finalUrl); assert.equal(row.merged, true); assert.equal(row.metric, undefined);
+  assert.equal(row.mr_url, finalUrl); assert.equal(row.merged, true); assert.deepEqual(row.metric?.retained, { first: 2, pipeline: 0, review: 1, other: 0 });
   assert.equal(c.method, "patch", c.reason);
-  assert.equal(row.final_code_lines, 3); assert.equal(row.final_deleted_lines, 0);
+  assert.equal(row.final_code_lines, 3); assert.equal(row.final_deleted_lines, 2);
   assert.deepEqual(c.files, [{ path: "feature.cpp", changed: true, retained: 2, removed: 2, added: 1 }]);
   const detail = readFinalMrComparison(f.summary)!;
   improvement.start({ summary: f.summary, cwd: f.cwd }); await improvement.flush();
@@ -692,7 +692,7 @@ test("平台推了分支但尚未建 MR：精确对照推送版本，区分后�
   observeDeliveryCode(f.summary, f.cwd, rewritten, true); await awaitDeliveryAnalytics();
   row = buildDeliveryAnalysis([f.summary]).rows[0]; detail = readFinalMrComparison(f.summary)!;
   assert.equal(row.mr_comparison?.method, "patch"); assert.equal(row.mr_comparison?.reference, "platform_push");
-  assert.equal(detail.reference, "platform_push"); assert.equal(row.final_code_lines, 1); assert.equal(row.metric, undefined);
+  assert.equal(detail.reference, "platform_push"); assert.equal(row.final_code_lines, 1); assert.deepEqual(row.metric?.retained, { first: 0, pipeline: 0, review: 1, other: 0 });
   assert.match(detail.files[0].change_patch, /rewritten\(\)/); assert.match(detail.files[0].change_patch, /first\(\)/);
   f.write("feature.cpp", "rewritten();\npipeline();\n"); f.commit("修复 CodeCheck");
   f.write("feature.cpp", "rewritten();\npipeline();\nlocal();\n"); const reviewed = f.commit("本地调整");
@@ -700,8 +700,8 @@ test("平台推了分支但尚未建 MR：精确对照推送版本，区分后�
   observeDeliveryCode(f.summary, f.cwd, reviewed); await awaitDeliveryAnalytics();
   row = buildDeliveryAnalysis([f.summary]).rows[0];
   assert.equal(row.mr_comparison?.method, "patch");
-  assert.equal(row.metric?.initial_implementation?.basis, "commit_message");
-  assert.deepEqual(row.metric?.retained, { first: 1, pipeline: 1, review: 1, other: 0 }, row.unavailable);
+  assert.equal(row.metric?.initial_implementation?.basis, "content_comparison");
+  assert.deepEqual(row.metric?.retained, { first: 0, pipeline: 1, review: 2, other: 0 }, row.unavailable);
   const prior = readFinalMrComparison(f.summary)!;
   rmSync(join(f.cwd, ".mae-flow.json"));
   observeDeliveryCode(f.summary, f.cwd, reviewed, true); await awaitDeliveryAnalytics();
@@ -735,4 +735,61 @@ test("最终 MR 直接合入平台已推送版本，按真实推送划分首轮�
   row = buildDeliveryAnalysis([f.summary]).rows[0];
   assert.deepEqual(row.metric?.retained, { first: 1, pipeline: 1, review: 0, other: 0 }, row.unavailable);
   assert.equal(row.metric?.initial_implementation?.basis, "repair_record");
+});
+
+test("关联本地快照含未提交及未跟踪源码；工作区回收后仍能按内容计算三类及删除", async t => {
+  const { captureLocalCodeSnapshot, awaitLocalCodeSnapshot, readLocalCodeSnapshot } = await import("../src/finalMrLocalSnapshot.ts");
+  const f = fixture(t);
+  f.write("feature.cpp", "keep();\nold();\nrepeat();\nrepeat();\n");
+  const first = f.commit("平台实现"); f.publish(first);
+  f.write("feature.cpp", "staged();\n"); f.git("add", "feature.cpp");
+  f.write("feature.cpp", "keep();\nlocal();\nrepeat();\nrepeat();\n");
+  f.write("untracked.ts", "export const local = 1;\n");
+  f.write("ignore.md", "ignored");
+  f.write("binary.bin", "\0binary");
+  const before = f.git("status", "--porcelain=v1");
+  const refs = f.git("show-ref"), index = f.git("diff", "--cached");
+  const errors: string[] = [];
+  captureLocalCodeSnapshot(f.summary, f.cwd, finalUrl, s => errors.push(s));
+  await awaitLocalCodeSnapshot(f.summary, finalUrl);
+  assert.deepEqual(errors, []);
+  const snapshot = readLocalCodeSnapshot(f.summary, finalUrl)!;
+  assert.ok(snapshot.includes_untracked); assert.equal(snapshot.head, first); assert.equal(snapshot.base, f.base);
+  assert.deepEqual(Object.keys(snapshot.patches).sort(), ["feature.cpp", "untracked.ts"]);
+  assert.equal(f.git("status", "--porcelain=v1"), before);
+  assert.equal(f.git("show-ref"), refs); assert.equal(f.git("diff", "--cached"), index);
+  const { statSync } = await import("node:fs");
+  const stored = readdirSync(join(f.dir, ".delivery-analysis")).find(p => p.endsWith(".local.json"))!;
+  assert.equal(statSync(join(f.dir, ".delivery-analysis", stored)).mode & 0o777, 0o600);
+  f.git("reset", "--hard", f.base); // 仅测试仓；模拟在独立历史实现最终版。
+  f.write("feature.cpp", "keep();\nnew();\nrepeat();\n");
+  f.write("untracked.ts", "export const local = 1;\n");
+  const localHead = f.commit("本地完成");
+  f.summary.delivery!.loop = { kind: "ci", round: 1, state: "repairing", last_sha: localHead };
+  f.write("feature.cpp", "keep();\nnew();\nrepeat();\nci();\n");
+  const head = f.commit("处理反馈");
+  const finalRepo = join(f.dir, "final-objects");
+  execFileSync("git", ["clone", "--quiet", f.cwd, finalRepo]);
+  setFinalMr(f, first, head, f.base);
+  rmSync(f.cwd, { recursive: true }); f.summary.workspace_reclaimed_at = new Date().toISOString();
+  observeDeliveryCode(f.summary, finalRepo, head, true); await awaitDeliveryAnalytics();
+  const row = buildDeliveryAnalysis([f.summary]).rows[0];
+  assert.equal(row.final_code_lines, 5);
+  assert.deepEqual(row.metric?.retained, { first: 3, pipeline: 1, review: 1, other: 0 });
+  assert.equal(row.metric?.deleted, 2);
+  assert.equal(row.metric?.content_comparison?.reference, "local_snapshot");
+  assert.equal(readFinalMrComparison(f.summary)?.reference, "local_snapshot");
+  assert.equal(aggregateDelivery([row]).firstPercent, 60);
+});
+
+test("快照失败不抛异常，缺少快照与 Git 对象时不编造数字", async t => {
+  const { captureLocalCodeSnapshot, awaitLocalCodeSnapshot, readLocalCodeSnapshot } = await import("../src/finalMrLocalSnapshot.ts");
+  const f = fixture(t), errors: string[] = [];
+  captureLocalCodeSnapshot(f.summary, f.workspace, finalUrl, s => errors.push(s));
+  await awaitLocalCodeSnapshot(f.summary, finalUrl);
+  assert.equal(errors.length, 1); assert.equal(readLocalCodeSnapshot(f.summary, finalUrl), undefined);
+  setFinalMr(f, "a".repeat(40), "b".repeat(40), "c".repeat(40));
+  observeDeliveryCode(f.summary, f.cwd, "b".repeat(40), true); await awaitDeliveryAnalytics();
+  const row = buildDeliveryAnalysis([f.summary]).rows[0];
+  assert.equal(row.metric, undefined); assert.equal(row.final_code_lines, undefined); assert.ok(row.unavailable);
 });

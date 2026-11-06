@@ -45,7 +45,7 @@ async function verifyFinalMrDelivery(t: TestContext, start: "initial-mr" | "push
   git(upstream, "switch", "-c", "initial");
   const initial = commit("service.ts", "export const retries = 1;", "first draft");
   if (start !== "no-code") git(root, "clone", "--no-local", upstream, local);
-  if (start === "pushed-branch")
+  if (start !== "no-code")
     writeFileSync(join(local, ".mae-flow.json"), JSON.stringify({ step_heads: { branch_create: firstBase } }));
   git(upstream, "switch", "main");
   const mainTip = commit("unrelated.ts", "export const mainOnly = 1;", "separate requirement");
@@ -137,9 +137,12 @@ async function verifyFinalMrDelivery(t: TestContext, start: "initial-mr" | "push
     assert.equal(row.mr_comparison?.reference, "platform_push");
     assert.equal(row.mr_comparison?.initial_head, initial);
     assert.equal(row.metric?.retained.review, 1);
+  } else if (initialPublished) {
+    assert.deepEqual(row.metric?.retained, { first: 0, pipeline: 0, review: 1, other: 0 });
+    assert.equal(row.metric?.content_comparison?.reference, "local_snapshot");
   } else assert.equal(row.metric, undefined, "单笔外部提交缺少来源证据，不猜测三类占比");
   assert.equal(row.final_code_lines, 1, "最终 MR 修改一行服务代码，目标分支的其他文件不计");
-  assert.equal(row.final_deleted_lines, 1);
+  assert.equal(row.final_deleted_lines, initialPublished ? 2 : 1);
   assert.deepEqual(comparison.files.map((f:{path:string}) => f.path), ["service.ts"]);
   if (start !== "no-code") {
     assert.match(comparison.files[0]!.change_patch, /retries = 1/);

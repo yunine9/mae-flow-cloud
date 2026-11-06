@@ -7,7 +7,7 @@ import { analyticsCodePath, analyticsGit, deliveryDiffPaths } from "./deliveryAn
 import { redactAnalysisText, restrictedAnalysisPathSegment } from "./analysisText.ts";
 import type { MrComparison, MrComparisonDetail } from "./deliveryAnalyticsTypes.ts";
 
-export interface ComparisonVersions { initial: { head?: string; base?: string }; final: { head?: string; base?: string } }
+export interface ComparisonVersions { patches?: Record<string, string>; initial: { head?: string; base?: string }; final: { head?: string; base?: string } }
 const sha = /^(?:[\da-f]{40}|[\da-f]{64})$/;
 const maxFiles = 300, maxLines = 100_000, maxPatchChars = 8_000, maxAllPatchChars = 160_000;
 
@@ -100,11 +100,11 @@ export async function compareFinalMr(cwd: string, versions: ComparisonVersions):
     if (Date.now() - started > 60_000) throw new Error("比较超过一分钟，未返回不完整的统计");
     return analyticsGit(cwd, args);
   };
-  for (const [base, head] of [[initial.base, before], [final.base, after]]) {
-    await run(["merge-base", "--is-ancestor", base, head]);
-  }
+  if (!versions.patches) await run(["merge-base", "--is-ancestor", initial.base, before]);
+  await run(["merge-base", "--is-ancestor", final.base, after]);
   let method: "ancestry" | "patch" = "ancestry";
-  if (before !== after) {
+  if (versions.patches) method = "patch";
+  else if (before !== after) {
     // A single merge-base can be ambiguous in criss-cross histories; ancestry of
     // the pinned initial commit is unambiguous when it is the only merge base.
     const bases = await run(["merge-base", "--all", before, after]).catch(() => "");
@@ -117,15 +117,15 @@ export async function compareFinalMr(cwd: string, versions: ComparisonVersions):
       return entry && analyticsCodePath(entry[1]) && !entry[1].split(/[\\/]/).some(s => restrictedAnalysisPathSegment.test(s)) ? [entry[1]] : [];
     }));
   };
-  const originalPaths = await changedPaths(initial.base, before), finalPaths = await changedPaths(final.base, after);
+  const originalPaths = versions.patches ? new Set(Object.keys(versions.patches)) : await changedPaths(initial.base, before), finalPaths = await changedPaths(final.base, after);
   const paths = [...new Set([...originalPaths, ...finalPaths])].sort();
   if (paths.length > maxFiles) throw new Error("比较涉及超过 300 个代码文件，无法提供完整统计");
-  const sameBase = initial.base === final.base;
+  const sameBase = !versions.patches && initial.base === final.base;
   const files: NonNullable<MrComparison["files"]> = [], detail: MrComparisonDetail = { comparison_basis: sameBase ? "head" : "patch", files: [], truncated: false };
   let retained = 0, removed = 0, added = 0, lines = 0, remaining = maxAllPatchChars;
   for (const path of paths) {
     const patch = (base: string, head: string) => run(["--literal-pathspecs", "diff", "--unified=2", "--no-color", "--no-renames", "--no-ext-diff", "--no-textconv", base, head, "--", path]);
-    const first = originalPaths.has(path) ? await patch(initial.base, before) : "";
+    const first = versions.patches?.[path] ?? (originalPaths.has(path) ? await patch(initial.base, before) : "");
     const last = finalPaths.has(path) ? await patch(final.base, after) : "";
     const signed = (diff: string) => {
       const counts = new Map<string, number>();
