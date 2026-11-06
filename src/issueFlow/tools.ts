@@ -88,6 +88,7 @@ import {
   pushFromIssueWorkspace,
   remoteBranchState,
   syncBaselineBeforePush,
+  type ExternalAbsorbOutcome,
   type GitCredential,
 } from "./issueGit.ts";
 import { ledgerPushes } from "./ledgerFacts.ts";
@@ -204,6 +205,26 @@ function ok(text: string) {
 
 function fail(text: string): never {
   throw new Error(text);
+}
+
+/** 三类非严格后代形态的人话事实(ADR-0074,推送与分支同步共用一份——
+ * 两种入口撞的是同一批"远端对不上账"现场,给 Agent 的事实必须一致):
+ * 按形态现拼,不预先全量求值。 */
+function absorbBlockedFinding(
+  absorb: Extract<ExternalAbsorbOutcome, { kind: "blocked" }>,
+  lastReceiptSha: string | undefined,
+): string {
+  if (absorb.form === "rewritten") {
+    return `远端修复分支头 ${absorb.remoteTip} 的历史与本会话最后一笔`
+      + `推送收据(${lastReceiptSha?.slice(0, 12)})对不上,远端历史`
+      + "疑似被改写(如本地改写历史后强推)";
+  }
+  if (absorb.form === "unbacked") {
+    return `远端修复分支已存在(头 ${absorb.remoteTip}),但本会话从未`
+      + "推送过该分支,平台没有收据背书这个头";
+  }
+  return `远端修复分支头 ${absorb.remoteTip} 落后于本会话最后一笔推送`
+    + `收据(${lastReceiptSha?.slice(0, 12)}),远端疑似被回滚`;
 }
 
 /** 缺网管环境时的平台闸(拉日志/换库现场补配,2026-08-28):举卡后
@@ -912,10 +933,12 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
   // ---- 推送(自问题修改阶段起;机械单号门禁全程同在) ----
 
   // issue-14 推送反复失败收口(2026-09-10):执行器会并行跑同一消息里
-  // 的多个工具调用(生产实测同毫秒双 push_branch)。在途互斥把推送
-  // 串行化,并发第二个直接打回;多仓节奏=逐仓推送,节奏教给回执
-  // (push.busy)与工具说明。
-  let pushInFlight = false;
+  // 的多个工具调用(生产实测同毫秒双 push_branch)。在途互斥把改工作区
+  // 的分支传输串行化,并发第二个直接打回;多仓节奏=逐仓串行,节奏教给
+  // 回执(push.busy/sync.busy)与工具说明。sync_branch(ADR-0074)与
+  // push_branch 共用同一把锁——两者都在工作区做 fetch/merge,各持一把
+  // 等于没有互斥。
+  let branchTransferInFlight = false;
   const runPush = async (params: any) => {
     gateStage("push_branch");
     const state = ctx.state;
@@ -998,16 +1021,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
           files: absorb.files.join("\n"),
         }));
       } else if (absorb.kind === "blocked") {
-        // 三类非严格后代形态各有各的事实,按形态现拼(不预先全量求值)。
-        const finding = absorb.form === "rewritten"
-          ? `远端修复分支头 ${absorb.remoteTip} 的历史与本会话最后一笔`
-            + `推送收据(${lastReceiptSha!.slice(0, 12)})对不上,远端历史`
-            + "疑似被改写(如本地改写历史后强推)"
-          : absorb.form === "unbacked"
-          ? `远端修复分支已存在(头 ${absorb.remoteTip}),但本会话从未`
-            + "推送过该分支,平台没有收据背书这个头"
-          : `远端修复分支头 ${absorb.remoteTip} 落后于本会话最后一笔推送`
-            + `收据(${lastReceiptSha!.slice(0, 12)}),远端疑似被回滚`;
+        const finding = absorbBlockedFinding(absorb, lastReceiptSha);
         recordTransition(state, {
           source: "platform",
           note: `推送前外部提交检查未通过,已拒绝推送:${finding};`
@@ -1161,12 +1175,143 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       })),
     }),
     async execute(_toolCallId: string, params: any) {
-      if (pushInFlight) fail(promptCopy("receipts", "push.busy"));
-      pushInFlight = true;
+      if (branchTransferInFlight) fail(promptCopy("receipts", "push.busy"));
+      branchTransferInFlight = true;
       try {
         return await runPush(params);
       } finally {
-        pushInFlight = false;
+        branchTransferInFlight = false;
+      }
+    },
+  }));
+
+  // ---- 分支同步(ADR-0074 票 2):Agent 可执行的显式同步入口 ----
+  // 容器里没有拉取动作,pull_repo 克隆即冻结——"先拉最新代码再修"这类
+  // 指引要可执行,就得有这个工具。薄封装 absorbExternalCommits(票 1 的
+  // 判定核心,推送链路与回合开始探针共用),四种回执:已最新/合并完成
+  // (带吸收事实)/冲突清单(现场已还原)/异常喊人;dirty/unavailable/
+  // failed 三个环境形态也各有回执,不把说不清的现场丢给 Agent。
+
+  const runSync = async (params: any) => {
+    gateStage("sync_branch");
+    const state = ctx.state;
+    if (!state.ticket && !state.imported_mr) {
+      fail(promptCopy("receipts", "sync.no_ticket"));
+    }
+    const repo = locateRepo(params.repo);
+    if (!existsSync(join(repo.dir, ".git"))) {
+      fail("代码克隆不存在,无法同步(先 pull_repo)");
+    }
+    const branch = String(params.branch ?? "").trim()
+      || await currentBranch(repo.dir);
+    if (!branch) fail("没有可同步的分支(缺 branch 参数且当前不在分支上)");
+    const expected = resolveFixBranch(state);
+    if (branch !== expected) {
+      fail(promptCopy("receipts", "push.branch_mismatch",
+        { expected, branch }));
+    }
+    const ticket = state.ticket ?? `MR !${state.imported_mr!.iid}`;
+    // 吸收判定的锚点:本会话在该仓该分支的最后一笔推送收据(与推送链路
+    // 同一份收据投影,两边判定不漂移)。
+    const receipts = ledgerPushes(state.transitions ?? [])
+      .filter((entry) => entry.repo === repo.url && entry.branch === branch);
+    const lastReceiptSha = receipts.at(-1)?.sha;
+    const absorb = await absorbExternalCommits({
+      dataDir: ctx.dataRoot,
+      repoDir: repo.dir,
+      repoUrl: repo.url,
+      branch,
+      ticket,
+      receiptSha: lastReceiptSha,
+      credential: ctx.gitCredential?.(),
+    });
+    if (absorb.kind === "current") {
+      return ok(promptCopy("receipts", "sync.current", { branch }));
+    }
+    if (absorb.kind === "synced") {
+      const from = lastReceiptSha!;
+      // 吸收记账与推送链路同一份文案(逐笔条目喂外部头观测投影,归属
+      // 统计据此记平台外)——两处漂移会让归属账漏算。
+      recordTransition(state, {
+        source: "platform",
+        note: `外部提交合并:${repo.url} ${branch} 并入远端外部提交 `
+          + `${absorb.commits.length} 条(${from.slice(0, 12)} → `
+          + `${absorb.remoteTip.slice(0, 12)})`,
+      });
+      for (const sha of absorb.commits) {
+        recordTransition(state, {
+          source: "platform",
+          note: `外部提交合并:${repo.url} ${branch} 并入平台外提交 `
+            + `${sha.slice(0, 12)}`,
+        });
+      }
+      ctx.persist();
+      // 宿主合并把用户手改以宿主身份写进工作区,交回容器前修属主;
+      // 非隔离部署零开销(与基线同步同一纪律)。
+      ctx.repairOwnership?.(repo.dir);
+      return ok(promptCopy("receipts", "sync.merged", {
+        branch,
+        count: absorb.commits.length,
+        from: from.slice(0, 12),
+        to: absorb.remoteTip.slice(0, 12),
+      }));
+    }
+    if (absorb.kind === "conflict") {
+      fail(promptCopy("receipts", "sync.conflict", {
+        branch, ticket,
+        count: absorb.files.length,
+        files: absorb.files.join("\n"),
+      }));
+    }
+    if (absorb.kind === "blocked") {
+      const finding = absorbBlockedFinding(absorb, lastReceiptSha);
+      recordTransition(state, {
+        source: "platform",
+        note: `分支同步的外部提交检查未通过,已拒绝同步:${finding};`
+          + "需人工核对,平台绝不自动处理",
+      });
+      ctx.persist();
+      fail(promptCopy("receipts", "sync.blocked", { finding }));
+    }
+    if (absorb.kind === "dirty") {
+      fail(promptCopy("receipts", "sync.dirty", {
+        ticket, count: absorb.files.length, files: absorb.files.join("\n"),
+      }));
+    }
+    if (absorb.kind === "unavailable") {
+      fail(promptCopy("receipts", "sync.unavailable", { reason: absorb.reason }));
+    }
+    fail(promptCopy("receipts", "sync.failed", { reason: absorb.reason }));
+  };
+  tools.push(defineTool({
+    name: "sync_branch",
+    label: "Sync Branch (Host)",
+    description:
+      "把远端修复分支的最新提交同步进工作区(容器里没有拉取动作,同步"
+      + "一律走本工具):远端没动回执无需同步;有用户手改推回的新提交"
+      + "(本会话推送收据的后代)机械合并进工作区并回执结果;撞真实冲突"
+      + "时现场已还原,按回执列出的冲突文件自己完成合并再提交——外部"
+      + "提交是用户手改,不许回滚、不许 ours/theirs 一选了事;远端历史"
+      + "与本会话推送收据对不上(被改写/回滚/来历不明的新提交)时拒绝"
+      + "并喊人:停止操作、绝不带 force,把情况转告用户。本工具只同步"
+      + "不推送,交付仍走 push_branch。",
+    parameters: Type.Object({
+      branch: Type.Optional(Type.String({
+        description: "要同步的分支;缺省取代码仓当前分支",
+      })),
+      repo: Type.Optional(Type.String({
+        description:
+          "目标代码仓地址;缺省首个登记仓。必须是会话登记过的仓"
+          + "(多仓分析时其余关联仓也能同步,分支命名规则不变)",
+      })),
+    }),
+    async execute(_toolCallId: string, params: any) {
+      if (branchTransferInFlight) fail(promptCopy("receipts", "sync.busy"));
+      branchTransferInFlight = true;
+      try {
+        return await runSync(params);
+      } finally {
+        branchTransferInFlight = false;
       }
     },
   }));

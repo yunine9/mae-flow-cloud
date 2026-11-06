@@ -173,6 +173,7 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
       { name: "dts_get_ticket" },
       { name: "pull_repo", note: "补仓" },
       { name: "remove_repo", note: "用户指派移除无关仓" },
+      { name: "sync_branch", note: "远端有用户手改时按需同步" },
       { name: "report_ut", note: "记录 UT 结果" },
       { name: "complete_stage" },
     ],
@@ -184,6 +185,7 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
     exitAction: "complete_stage",
     tools: [
       { name: "push_branch" },
+      { name: "sync_branch", note: "按需同步远端修复分支" },
       { name: "create_mr" },
       { name: "complete_stage", note: "申报 MR 清单" },
       { name: "request_env" },
