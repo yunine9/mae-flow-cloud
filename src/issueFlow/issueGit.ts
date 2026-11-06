@@ -379,6 +379,24 @@ export interface PushReceipt {
   forced?: boolean;
 }
 
+/** force 收据门的机械拒绝(ADR-0074):force 覆盖前,远端 tip 必须是
+ * 平台历史推送收据中的一笔;查不到远端状态同样拒绝(宁误拦不误放——
+ * force 是唯一能盖掉用户手改的路径,没有远端拒收兜底)。错误只带
+ * 事实,人话回执由工具层组装(ADR-0016);人工核对后由调用方以显式
+ * 放行参数(forceOverrideExternal)重试,租赁核对在放行后保留。 */
+export class ForceReceiptGateError extends Error {
+  constructor(
+    /** external=远端 tip 不在收据内;unreachable=远端状态查不到。 */
+    readonly reason: "external" | "unreachable",
+    /** 拒绝时探到的远端 tip(unreachable 时为空串)。 */
+    readonly remoteTip: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ForceReceiptGateError";
+  }
+}
+
 /** 宿主唯一一次传输:从工作区经 safeGit 只读视图读对象,在临时 bare
  * 仓里 push 到显式远端,再 ls-remote 复核 SHA。分支名单由调用方
  * (单号门禁)先行校验,这里只管传输与复核的可靠性。
@@ -386,7 +404,12 @@ export interface PushReceipt {
  * force(同单重跑强制覆盖,2026-09-11 增补):不用裸 --force,而是先
  * ls-remote 探远端同名分支 tip,再 --force-with-lease=ref:tip 推——
  * 探测到推送之间远端又动了(他人/另一会话推送),租赁核对失败拒推,
- * 不会盲盖。远端还没有同名分支时无从覆盖,按普通推送走。 */
+ * 不会盲盖。远端还没有同名分支时无从覆盖,按普通推送走。
+ * force 收据门(ADR-0074 票4):租赁防不了会话之外就已发生的手推——
+ * 探到的 tip 本身可能就是用户改好的代码。所以同一探针再加一道机械
+ * 校验:tip 必须在调用方传入的推送收据投影(ledgerPushes,同仓同分支)
+ * 内,不在即抛 ForceReceiptGateError(人工核对后以 forceOverrideExternal
+ * 显式放行,放行只跳过收据门,租赁核对保留,双保险不回退)。 */
 export async function pushFromIssueWorkspace(options: {
   dataDir: string;
   repoDir: string;
@@ -394,6 +417,12 @@ export async function pushFromIssueWorkspace(options: {
   branch: string;
   credential?: GitCredential;
   force?: boolean;
+  /** force 收据门的凭据(ADR-0074):本会话在本仓本分支的推送收据投影
+   * (ledgerPushes,ADR-0064 去重)。force=true 时远端 tip 必须是其中
+   * 一笔;缺席/为空 = 无收据,远端有同名分支即拒绝。 */
+  forceReceiptShas?: string[];
+  /** 显式放行(人工核对后):跳过收据门完成覆盖;租赁核对保留。 */
+  forceOverrideExternal?: boolean;
   log?: (message: string) => void;
 }): Promise<PushReceipt> {
   if (!existsSync(join(options.repoDir, ".git"))) {
@@ -434,19 +463,46 @@ export async function pushFromIssueWorkspace(options: {
       ...sandbox.args, `--git-dir=${staging}`, "cat-file", "-e", `${sha}^{commit}`,
     ], { env: { ...sandbox.env, ...objectEnv }, timeoutMs: 30_000 });
     if (objectCheck.code !== 0) throw new Error("待推送 HEAD 不是可读取的提交对象");
-    const probeRemoteTip = async (): Promise<string | undefined> => {
+    const probeRemoteTip = async (): Promise<
+      { state: "absent" } | { state: "tip"; tip: string }
+      | { state: "unreachable"; detail: string }
+    > => {
       const probed = await runGit([
         ...sandbox.args, `--git-dir=${staging}`,
         "ls-remote", "--heads", remoteUrl, ref,
       ], { env: sandbox.env, timeoutMs: 60_000 });
-      const tip = probed.code === 0 ? probed.stdout.trim().split(/\s+/)[0] : "";
-      return /^[0-9a-f]{40}$/i.test(tip) ? tip : undefined;
+      if (probed.code !== 0) {
+        return { state: "unreachable",
+          detail: (probed.stderr || probed.stdout).trim()
+            .split(/\r?\n/)[0] ?? "" };
+      }
+      const tip = probed.stdout.trim().split(/\s+/)[0] ?? "";
+      return /^[0-9a-f]{40}$/i.test(tip)
+        ? { state: "tip", tip }
+        : { state: "absent" };
     };
     let forceLease: string[] = [];
     if (options.force === true) {
-      const remoteTip = await probeRemoteTip();
-      if (remoteTip) {
-        forceLease = [`--force-with-lease=${ref}:${remoteTip}`];
+      const probed = await probeRemoteTip();
+      if (probed.state === "tip") {
+        // 租赁核对照旧锚定探到的 tip(防探测到推送之间远端又动)。
+        forceLease = [`--force-with-lease=${ref}:${probed.tip}`];
+        // 收据门(ADR-0074):tip 必须有平台推送收据背书——lease 防不了
+        // 会话之外就已发生的手推。放行参数只跳过这道门,租赁保留。
+        if (options.forceOverrideExternal !== true
+            && !options.forceReceiptShas?.some((sha) =>
+              probed.tip.startsWith(sha.toLowerCase()))) {
+          throw new ForceReceiptGateError("external", probed.tip,
+            `远端分支 ${options.branch} 当前提交 ${probed.tip.slice(0, 12)} `
+              + "不在本会话推送收据内,拒绝强制覆盖");
+        }
+      } else if (probed.state === "unreachable"
+          && options.forceOverrideExternal !== true) {
+        // 查不到远端状态就无从核对收据,也没有租赁锚点;force 是唯一
+        // 没有远端拒收兜底的路径,宁误拦不误放(同 #240 删除门禁口径)。
+        throw new ForceReceiptGateError("unreachable", "",
+          `远端状态查不到(${probed.detail.slice(0, 200)}),`
+            + "无法核对强制覆盖的收据门");
       }
       // 远端还没有同名分支:无从覆盖,按普通推送走(不带租赁参数)。
     }
@@ -470,9 +526,9 @@ export async function pushFromIssueWorkspace(options: {
         ? " 强制覆盖被拒:远端分支状态与推送时不一致,或受平台分支保护"
           + "限制——先与用户核对远端分支状态再决定,不要盲目重试。"
         : " 远端同名分支已存在且非快进(新命名下正常流程不会撞名,"
-          + "这通常是平台侧罕见异动)——与用户核对后带 force=true 重推"
-          + "即可覆盖(该分支已有 MR 时覆盖后原 MR 随之更新,不要重复"
-          + "创建)。";
+          + "这通常是平台侧罕见异动,远端可能有用户手改推回的外部提交)"
+          + "——调 sync_branch 把远端最新提交并入工作区后再重推,"
+          + "不要盲目重试。";
       throw new Error(authFailureHint("推送代码", options.credential, raw)
         ?? `宿主推送失败: ${raw.slice(0, 500)}${staleBranch}`);
     }
