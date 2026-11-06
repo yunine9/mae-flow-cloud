@@ -89,10 +89,14 @@ import {
   pushFromIssueWorkspace,
   remoteBranchState,
   syncBaselineBeforePush,
-  type ExternalAbsorbOutcome,
   type GitCredential,
 } from "./issueGit.ts";
 import { ledgerPushes } from "./ledgerFacts.ts";
+import {
+  absorbBlockedFinding,
+  createBranchTransferMutex,
+  type BranchTransferMutex,
+} from "./turnStartAbsorb.ts";
 import { createMergeRequest } from "../mrClient.ts";
 import { resolveModuleMrParticipants } from "../moduleMrParticipants.ts";
 import { mrParticipantsMessage } from "../mrParticipants.ts";
@@ -197,6 +201,10 @@ export interface IssueToolContext {
    *  进 vault、覆盖允许、清环境卡、解锢、开平台回合);返回回执文本
    *  ——只含事实,密码永不进模型可见面。缺席(裸构造)由工具如实打回。 */
   selectEnvironmentByIp?: (ip: string) => string;
+  /** 分支传输在途互斥(ADR-0074 票 3):push_branch/sync_branch 与回合
+   *  开始探针共用一把(服务侧 LiveIssue 级单例经此传入);缺席时工具
+   *  工厂自建一把(裸构造/直调兼容)。 */
+  branchTransfer?: BranchTransferMutex;
   log?: (message: string) => void;
 }
 
@@ -206,26 +214,6 @@ function ok(text: string) {
 
 function fail(text: string): never {
   throw new Error(text);
-}
-
-/** 三类非严格后代形态的人话事实(ADR-0074,推送与分支同步共用一份——
- * 两种入口撞的是同一批"远端对不上账"现场,给 Agent 的事实必须一致):
- * 按形态现拼,不预先全量求值。 */
-function absorbBlockedFinding(
-  absorb: Extract<ExternalAbsorbOutcome, { kind: "blocked" }>,
-  lastReceiptSha: string | undefined,
-): string {
-  if (absorb.form === "rewritten") {
-    return `远端修复分支头 ${absorb.remoteTip} 的历史与本会话最后一笔`
-      + `推送收据(${lastReceiptSha?.slice(0, 12)})对不上,远端历史`
-      + "疑似被改写(如本地改写历史后强推)";
-  }
-  if (absorb.form === "unbacked") {
-    return `远端修复分支已存在(头 ${absorb.remoteTip}),但本会话从未`
-      + "推送过该分支,平台没有收据背书这个头";
-  }
-  return `远端修复分支头 ${absorb.remoteTip} 落后于本会话最后一笔推送`
-    + `收据(${lastReceiptSha?.slice(0, 12)}),远端疑似被回滚`;
 }
 
 /** 缺网管环境时的平台闸(拉日志/换库现场补配,2026-08-28):举卡后
@@ -938,8 +926,10 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
   // 的分支传输串行化,并发第二个直接打回;多仓节奏=逐仓串行,节奏教给
   // 回执(push.busy/sync.busy)与工具说明。sync_branch(ADR-0074)与
   // push_branch 共用同一把锁——两者都在工作区做 fetch/merge,各持一把
-  // 等于没有互斥。
-  let branchTransferInFlight = false;
+  // 等于没有互斥;回合开始探针(ADR-0074 票 3)也取同一把(服务侧经
+  // ctx 传入 LiveIssue 级单例),忙时跳过吸收不阻塞回合;缺席(裸构造
+  // /直调)自建一把,工具语义不变。
+  const branchTransfer = ctx.branchTransfer ?? createBranchTransferMutex();
   const runPush = async (params: any) => {
     gateStage("push_branch");
     const state = ctx.state;
@@ -1224,12 +1214,12 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       })),
     }),
     async execute(_toolCallId: string, params: any) {
-      if (branchTransferInFlight) fail(promptCopy("receipts", "push.busy"));
-      branchTransferInFlight = true;
+      if (branchTransfer.inFlight()) fail(promptCopy("receipts", "push.busy"));
+      branchTransfer.acquire();
       try {
         return await runPush(params);
       } finally {
-        branchTransferInFlight = false;
+        branchTransfer.release();
       }
     },
   }));
@@ -1355,12 +1345,12 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       })),
     }),
     async execute(_toolCallId: string, params: any) {
-      if (branchTransferInFlight) fail(promptCopy("receipts", "sync.busy"));
-      branchTransferInFlight = true;
+      if (branchTransfer.inFlight()) fail(promptCopy("receipts", "sync.busy"));
+      branchTransfer.acquire();
       try {
         return await runSync(params);
       } finally {
-        branchTransferInFlight = false;
+        branchTransfer.release();
       }
     },
   }));

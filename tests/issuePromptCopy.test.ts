@@ -89,3 +89,58 @@ test("本地验证按改动风险选择,如实报告并保留当前提交流水�
   assert.doesNotMatch(delivery, /先写能复现问题的单测再改码转绿/,
     "简单修改无需为了启动验证专门编译,也不强制增加复现单测");
 });
+
+test("红灯材料的外部头提醒:声明平台已自动并好最新代码,不再给不可执行的拉取指引", () => {
+  const notice = promptCopy("notices", "red.deliver.external_head", {
+    sha: "abc123def456",
+  });
+  assert.match(notice, /平台已在回合开工时自动把远端最新代码合并进工作区/,
+    "主线口径:平台自动并好,不再是让 AI 自己拉的空头指引");
+  assert.match(notice, /不许回滚/, "外部提交纪律要在场");
+  assert.match(notice, /sync_branch/, "冲突例外:指路 sync_branch 收尾");
+  assert.match(notice, /abc123def456/);
+  assert.doesNotMatch(notice, /先拉取分支最新代码/,
+    "容器里没有拉取动作,这条指令执行不了(ADR-0074 的出发点)");
+});
+
+test("回合开始吸收的通知词(notices.absorb.*):各形态一段,纪律与指路齐全", () => {
+  const merged = promptCopy("notices", "absorb.merged", {
+    branch: "master_dev_D1_20261106090000", count: 2,
+    from: "aaa111bbb111", to: "ccc333ddd333",
+  });
+  assert.match(merged, /并入 2 条外部提交/);
+  assert.match(merged, /不许回滚/);
+  assert.match(merged, /aaa111bbb111 → ccc333ddd333/);
+  assert.match(merged, /重读相关文件/, "提醒旧上下文可能过时");
+
+  const conflict = promptCopy("notices", "absorb.conflict", {
+    branch: "master_dev_D1_20261106090000", count: 1, files: "a.txt",
+  });
+  assert.match(conflict, /已还原现场/, "现场还原要声明(不留半合并工作区)");
+  assert.match(conflict, /照常进行/, "冲突不阻塞回合");
+  assert.match(conflict, /不许回滚、不许用 ours\/theirs/);
+  assert.match(conflict, /sync_branch/);
+  assert.match(conflict, /a\.txt/);
+
+  const blocked = promptCopy("notices", "absorb.blocked", {
+    finding: "远端修复分支头 ccc333ddd333 的历史对不上,疑似被改写",
+  });
+  assert.match(blocked, /吸收已暂停/);
+  assert.match(blocked, /照常进行/);
+  assert.match(blocked, /绝不自动处理、绝不强制覆盖/);
+  assert.match(blocked, /转告用户/);
+
+  const dirty = promptCopy("notices", "absorb.dirty", {
+    count: 1, files: "b.txt",
+  });
+  assert.match(dirty, /未提交/);
+  assert.match(dirty, /sync_branch/, "指路先收尾再同步");
+  assert.match(dirty, /b\.txt/);
+
+  const failed = promptCopy("notices", "absorb.failed", {
+    reason: "merge 失败但没有冲突文件",
+  });
+  assert.match(failed, /已还原/);
+  assert.match(failed, /照常进行/);
+  assert.match(failed, /sync_branch/);
+});

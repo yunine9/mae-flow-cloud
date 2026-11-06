@@ -735,7 +735,8 @@ export type ExternalAbsorbOutcome =
 /** 判定并吸收修复分支远端的外部提交(ADR-0074,推送链路与回合开始
  * 探针共用的窄函数):判据只用推送收据加祖先关系,不看作者是谁。
  *
- * 远端头 = 收据 → 无事;收据的严格后代 → fetch 后 merge 进工作区
+ * 远端头 = 收据 → 无事(短码直比,零 fetch——常态回合只有探针开销);
+ * 收据的严格后代 → fetch 后 merge 进工作区
  * (一律 merge 不 rebase:平台未推送提交 SHA 不变,AI 归因 notes 不断
  * 链);收据的祖先(被回滚)或与收据不相交(历史被改写)→ fail-closed;
  * 无收据而远端有提交 → 本地头不含它即 fail-closed(本地头含它 = 导入
@@ -791,6 +792,10 @@ export async function absorbExternalCommits(options: {
     const tip = probed.stdout.trim().split(/\s+/)[0] ?? "";
     if (!/^[0-9a-f]{40}$/i.test(tip)) return { kind: "current" };
     const tip12 = tip.slice(0, 12);
+    // 远端头就是最后一笔收据 → 无事。纯短码比对,不用取回对象——常态
+    // 回合(用户没在回合之间推代码)到这里就收工,零 fetch/merge(ADR-0074
+    // 探针经济:探针本身是常态下唯一的开销)。
+    if (receipt && tip12 === receipt.slice(0, 12)) return { kind: "current" };
     // 远端对象进不了本地判不了祖先关系,先 fetch(只动远端跟踪引用,
     // 不碰工作区)。
     const fetched = await git("fetch", "--quiet", "--no-tags",
@@ -821,7 +826,6 @@ export async function absorbExternalCommits(options: {
       if (contained === false) return { kind: "blocked", form: "unbacked", remoteTip: tip12 };
       return { kind: "unavailable", reason: "无法比对远端头与本地历史" };
     }
-    if (tip12 === receipt.slice(0, 12)) return { kind: "current" };
     const descended = await isAncestor(receipt, tip);
     if (descended === true) {
       // 严格后代:本地已含(Agent 自己并过)就无事,否则吸收。
