@@ -85,6 +85,7 @@ import {
   absorbExternalCommits,
   currentBranch,
   dirtyWorktree,
+  ForceReceiptGateError,
   pushFromIssueWorkspace,
   remoteBranchState,
   syncBaselineBeforePush,
@@ -958,9 +959,17 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     const ticket = state.ticket ?? `MR !${state.imported_mr!.iid}`;
     // 强制覆盖意图(ADR-0063 修订):新命名下正常流程不会再撞远端同名
     // 分支,force 保留防平台侧罕见异动。覆盖前先现查远端同名分支当前
-    // 位置(issueGit 侧),对不上即拒推——不盲盖。
+    // 位置并核对推送收据(issueGit 侧的收据门,ADR-0074),对不上即
+    // 拒推——不盲盖。已建 MR 的会话维持机械禁 force(放行参数也放不了
+    // 行);显式放行(override_external)只在人工核对远端后有意义。
     const force = params.force === true;
     if (force && state.imported_mr) fail("已有 MR 修复不允许强制覆盖源分支，请保留其他人的提交");
+    const overrideExternal = params.override_external === true;
+    if (overrideExternal && !force) {
+      fail("override_external 只在 force=true 的强制覆盖里有意义,单独传"
+        + "不构成任何操作;若目的是拿到远端最新代码,正常推送即可"
+        + "(远端有手改时平台会自动并入)");
+    }
     // 脏工作区熔断做实(2026-08-28 真实环境事故;ADR-0071):已跟踪
     // 文件有未提交改动即拒推——push 推已提交历史,带脏改动推只会推出
     // 旧 HEAD(MR 没 diff),基线合并也要求干净的树。未跟踪的过程产物
@@ -972,18 +981,21 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         ticket, count: dirty.length, files: dirty.join("\n"),
       }));
     }
+    // 推送收据投影(ADR-0064 去重,同仓同分支口径):非 force 路径取
+    // 末笔作吸收锚点;force 路径整组传给收据门(ADR-0074)。
+    const receipts = ledgerPushes(state.transitions ?? [])
+      .filter((entry) => entry.repo === repo.url && entry.branch === branch);
     // 推送前外部提交吸收(ADR-0074):用户把手改拉到本地推回远端是协作
     // 的正常形态——远端修复分支头前进(本会话最后一笔推送收据的严格
     // 后代)即先 fetch+merge 进工作区再推;撞冲突还原现场交回本回合;
     // 三类非严格后代形态(历史被改写/无收据而远端有提交/远端被回滚)
     // 一律拒绝喊人,绝不自动处理、绝不 force。探针/取回失败 fail-open
     // 照推留痕(非强制推送推不动分叉的远端,门在远端拒收)。
-    // force=true 是调用方显式下达的覆盖指令(同单重跑兜底),吸收判定
-    // 不代为改判——force 自己的门(推送收据核对)是另一张票的机制。
+    // force=true 是调用方显式下达的覆盖指令,吸收判定不代为改判;force
+    // 自己的门(收据核对 + 租赁核对,同一次探针)在 pushFromIssueWorkspace
+    // 内,拒绝时在下面的推送环节给出收据回执。
     let absorbedNote = "";
     if (!force) {
-      const receipts = ledgerPushes(state.transitions ?? [])
-        .filter((entry) => entry.repo === repo.url && entry.branch === branch);
       const lastReceiptSha = receipts.at(-1)?.sha;
       const absorb = await absorbExternalCommits({
         dataDir: ctx.dataRoot,
@@ -1110,15 +1122,43 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     }
     const codecheck = await ctx.beforePush?.(repo);
     ctx.assertActive?.();
-    const receipt = await pushFromIssueWorkspace({
-      dataDir: ctx.dataRoot,
-      repoDir: repo.dir,
-      repoUrl: repo.url,
-      branch,
-      credential: ctx.gitCredential?.(),
-      log: ctx.log,
-      ...(force ? { force: true } : {}),
-    });
+    const pushOnce = async () => {
+      try {
+        return await pushFromIssueWorkspace({
+          dataDir: ctx.dataRoot,
+          repoDir: repo.dir,
+          repoUrl: repo.url,
+          branch,
+          credential: ctx.gitCredential?.(),
+          log: ctx.log,
+          ...(force ? { force: true } : {}),
+          ...(force
+            ? { forceReceiptShas: receipts.map((entry) => entry.sha) }
+            : {}),
+          ...(force && overrideExternal ? { forceOverrideExternal: true } : {}),
+        });
+      } catch (error) {
+        // force 收据门的机械拒绝(ADR-0074):错误只带事实,人话回执与
+        // 留痕在工具层组装(ADR-0016)。
+        if (error instanceof ForceReceiptGateError) {
+          const finding = error.reason === "external"
+            ? `远端分支当前提交 ${error.remoteTip.slice(0, 12)} 不在本会话`
+              + "推送收据内(平台不知道的外部提交)"
+            : "远端状态查不到,无法核对推送收据";
+          recordTransition(state, {
+            source: "platform",
+            note: `强制覆盖被收据门拒绝:${finding};需人工核对后显式放行`,
+          });
+          ctx.persist();
+          fail(promptCopy("receipts",
+            error.reason === "external"
+              ? "push.force_external" : "push.force_unreachable",
+            { tip: error.remoteTip.slice(0, 12) || "-" }));
+        }
+        throw error;
+      }
+    };
+    const receipt = await pushOnce();
     // 按仓记账(一仓一分支):重推同仓覆盖旧账,不同仓各记各的。
     const pushes = state.pushes ??= [];
     const record = {
@@ -1157,8 +1197,10 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       + "收据对不上(被改写/回滚/来历不明的新提交)时推送被拒并要求"
       + "人工核对:停止重试、绝不带 force,把情况转告用户。"
       + "force=true 强制覆盖远端同名分支:新命名下正常流程不会撞名,"
-      + "只防平台侧罕见异动——覆盖前先现查远端同名分支当前位置,对不上"
-      + "即拒推,不盲盖。",
+      + "只防平台侧罕见异动。覆盖前过收据门:远端当前提交必须是本会话"
+      + "推送过的(远端有用户手改推回的外部提交、或远端状态查不到,都"
+      + "会被机械拒绝),人工核对远端分支确认可以覆盖后,带 override_external"
+      + "=true 重推才放行。",
     parameters: Type.Object({
       branch: Type.Optional(Type.String({
         description: "要推送的分支;缺省取代码仓当前分支",
@@ -1171,7 +1213,14 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       force: Type.Optional(Type.Boolean({
         description:
           "强制推送:覆盖远端同名分支(新命名下正常流程不会撞名,"
-          + "只防平台侧罕见异动;覆盖前先现查远端旧位置,对不上即拒推)",
+          + "只防平台侧罕见异动)。远端当前提交不是本会话推送过的、或"
+          + "远端状态查不到时会被收据门拒绝;人工核对后加 override_external 放行",
+      })),
+      override_external: Type.Optional(Type.Boolean({
+        description:
+          "强制覆盖的显式放行:仅在 force=true 被收据门拒绝、且用户已"
+          + "人工核对远端分支确认没有需要保留的手改后,与 force=true "
+          + "一起传;单独传不构成任何操作",
       })),
     }),
     async execute(_toolCallId: string, params: any) {
