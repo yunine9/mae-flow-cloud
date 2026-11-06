@@ -27,6 +27,12 @@ const HEAD_DISCARDED_NOTE = "旧提交";
 export const EXTERNAL_HEAD_COMMIT =
   /^分支头已被平台外提交 ([0-9a-f]{7,40}) 取代/;
 
+/** 外部提交合并的逐笔吸收账(ADR-0074):文案是「外部提交合并:<仓>
+ * <分支> 并入平台外提交 <短码>」。吸收的范围小结(「并入远端外部
+ * 提交 N 条(… → …)」)不带逐笔短码,对不上这条正则。 */
+export const ABSORBED_EXTERNAL_COMMIT =
+  /^外部提交合并:\S+ \S+ 并入平台外提交 ([0-9a-f]{7,40})$/;
+
 /** 回退轮次(fixedRollback 的「第 N 轮:原因」)。 */
 export const ROLLBACK_NOTE = /^第 \d+ 轮:(.*)$/s;
 
@@ -85,13 +91,16 @@ export function countVerifyFailures(
   ).length;
 }
 
-/** 外部头观测明细(分支头被平台外推送取代的每一次发现:短码+时刻)。 */
+/** 外部头观测明细:分支头被平台外推送取代的每一次发现(检查目标
+ * 跟随)+ 外部提交合并逐笔吸收的用户提交(ADR-0074)——归属统计
+ * 据此把两类提交都记平台外,不落进平台推送区间被误算成平台工作量。 */
 export function externalHeadObservations(
   transitions: ReadonlyArray<{ note: string; at: string }>,
 ): Array<{ sha: string; at: string }> {
   const records: Array<{ sha: string; at: string }> = [];
   for (const transition of transitions) {
-    const match = EXTERNAL_HEAD_COMMIT.exec(transition.note);
+    const match = EXTERNAL_HEAD_COMMIT.exec(transition.note)
+      ?? ABSORBED_EXTERNAL_COMMIT.exec(transition.note);
     if (match) records.push({ sha: match[1]!, at: transition.at });
   }
   return records;

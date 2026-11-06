@@ -82,6 +82,7 @@ import {
   writeReviewNotesSnapshot,
 } from "./reviews.ts";
 import {
+  absorbExternalCommits,
   currentBranch,
   dirtyWorktree,
   pushFromIssueWorkspace,
@@ -89,6 +90,7 @@ import {
   syncBaselineBeforePush,
   type GitCredential,
 } from "./issueGit.ts";
+import { ledgerPushes } from "./ledgerFacts.ts";
 import { createMergeRequest } from "../mrClient.ts";
 import { resolveModuleMrParticipants } from "../moduleMrParticipants.ts";
 import { mrParticipantsMessage } from "../mrParticipants.ts";
@@ -947,6 +949,87 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         ticket, count: dirty.length, files: dirty.join("\n"),
       }));
     }
+    // 推送前外部提交吸收(ADR-0074):用户把手改拉到本地推回远端是协作
+    // 的正常形态——远端修复分支头前进(本会话最后一笔推送收据的严格
+    // 后代)即先 fetch+merge 进工作区再推;撞冲突还原现场交回本回合;
+    // 三类非严格后代形态(历史被改写/无收据而远端有提交/远端被回滚)
+    // 一律拒绝喊人,绝不自动处理、绝不 force。探针/取回失败 fail-open
+    // 照推留痕(非强制推送推不动分叉的远端,门在远端拒收)。
+    // force=true 是调用方显式下达的覆盖指令(同单重跑兜底),吸收判定
+    // 不代为改判——force 自己的门(推送收据核对)是另一张票的机制。
+    let absorbedNote = "";
+    if (!force) {
+      const receipts = ledgerPushes(state.transitions ?? [])
+        .filter((entry) => entry.repo === repo.url && entry.branch === branch);
+      const lastReceiptSha = receipts.at(-1)?.sha;
+      const absorb = await absorbExternalCommits({
+        dataDir: ctx.dataRoot,
+        repoDir: repo.dir,
+        repoUrl: repo.url,
+        branch,
+        ticket,
+        receiptSha: lastReceiptSha,
+        credential: ctx.gitCredential?.(),
+      });
+      if (absorb.kind === "synced") {
+        const from = lastReceiptSha!;
+        recordTransition(state, {
+          source: "platform",
+          note: `外部提交合并:${repo.url} ${branch} 并入远端外部提交 `
+            + `${absorb.commits.length} 条(${from.slice(0, 12)} → `
+            + `${absorb.remoteTip.slice(0, 12)})`,
+        });
+        for (const sha of absorb.commits) {
+          recordTransition(state, {
+            source: "platform",
+            note: `外部提交合并:${repo.url} ${branch} 并入平台外提交 `
+              + `${sha.slice(0, 12)}`,
+          });
+        }
+        ctx.persist();
+        // 宿主合并把用户手改以宿主身份写进工作区,交回容器前修属主;
+        // 非隔离部署零开销(与基线同步同一纪律)。
+        ctx.repairOwnership?.(repo.dir);
+        absorbedNote = `;已并入远端外部提交 ${absorb.commits.length} 条`;
+      } else if (absorb.kind === "conflict") {
+        fail(promptCopy("receipts", "push.absorb_conflict", {
+          branch, ticket,
+          count: absorb.files.length,
+          files: absorb.files.join("\n"),
+        }));
+      } else if (absorb.kind === "blocked") {
+        // 三类非严格后代形态各有各的事实,按形态现拼(不预先全量求值)。
+        const finding = absorb.form === "rewritten"
+          ? `远端修复分支头 ${absorb.remoteTip} 的历史与本会话最后一笔`
+            + `推送收据(${lastReceiptSha!.slice(0, 12)})对不上,远端历史`
+            + "疑似被改写(如本地改写历史后强推)"
+          : absorb.form === "unbacked"
+          ? `远端修复分支已存在(头 ${absorb.remoteTip}),但本会话从未`
+            + "推送过该分支,平台没有收据背书这个头"
+          : `远端修复分支头 ${absorb.remoteTip} 落后于本会话最后一笔推送`
+            + `收据(${lastReceiptSha!.slice(0, 12)}),远端疑似被回滚`;
+        recordTransition(state, {
+          source: "platform",
+          note: `推送前外部提交检查未通过,已拒绝推送:${finding};`
+            + "需人工核对,平台绝不自动处理",
+        });
+        ctx.persist();
+        fail(promptCopy("receipts", "push.absorb_blocked", { finding }));
+      } else if (absorb.kind === "dirty") {
+        fail(promptCopy("receipts", "push.dirty", {
+          ticket, count: absorb.files.length, files: absorb.files.join("\n"),
+        }));
+      } else if (absorb.kind === "failed") {
+        fail(promptCopy("receipts", "push.absorb_failed", { reason: absorb.reason }));
+      } else if (absorb.kind === "unavailable") {
+        recordTransition(state, {
+          source: "platform",
+          note: `推送前外部提交吸收跳过(远端探针/取回失败): ${absorb.reason};`
+            + "按原分支继续推送",
+        });
+        ctx.persist();
+      }
+    }
     // 推送前基线同步(ADR-0071):基线有新提交先并进修复分支再推,MR
     // 始终基于新鲜的基线;撞冲突当场交回 Agent 解决后重推。取不到基线
     // 按 fail-open 照推留痕,传输故障不卡交付。
@@ -1042,7 +1125,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     ctx.onBranchPushed?.(repo.url);
     return ok(`已推送 ${receipt.branch} @ ${receipt.sha.slice(0, 12)}`
       + `(仓 ${repo.url})${receipt.forced ? "(强制覆盖远端同名分支)" : ""}`
-      + `${syncedNote}`
+      + `${syncedNote}${absorbedNote}`
       + (codecheck ? `\n${codecheck}` : ""));
   };
   tools.push(defineTool({
@@ -1053,9 +1136,12 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       + "走本工具)。平台机械校验:会话已绑定单号、分支名为会话修复分支"
       + "(<基线>_<工号>_<单号>_<时间戳>,平台生成并全程固定,以拉仓回执"
       + "为准);多仓交付逐仓串行推送,推送后返回 SHA。"
-      + "推送前宿主自动同步基线:基线有新提交先合并进修复分支再推,"
-      + "撞冲突时本次推送被拒、回执列冲突文件——按回执解决冲突并 commit "
-      + "后重推即可,不要绕开。"
+      + "推送前宿主自动做两件并账:远端修复分支有用户手改推回的新提交"
+      + "(本会话推送收据的后代)先合并进工作区再推;基线有新提交先合并"
+      + "进修复分支再推。撞冲突时本次推送被拒、回执列冲突文件——按回执"
+      + "解决冲突并 commit 后重推即可,不要绕开。远端历史与本会话推送"
+      + "收据对不上(被改写/回滚/来历不明的新提交)时推送被拒并要求"
+      + "人工核对:停止重试、绝不带 force,把情况转告用户。"
       + "force=true 强制覆盖远端同名分支:新命名下正常流程不会撞名,"
       + "只防平台侧罕见异动——覆盖前先现查远端同名分支当前位置,对不上"
       + "即拒推,不盲盖。",

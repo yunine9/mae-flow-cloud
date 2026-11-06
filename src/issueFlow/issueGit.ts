@@ -651,6 +651,172 @@ export async function syncBaselineBeforePush(options: {
   }
 }
 
+/** 修复分支外部提交吸收(ADR-0074)的结果:调用方按结果分叉。
+ * - current:远端没有要吸收的东西(分支缺席/头没动/本地已含);
+ * - synced:远端头是最后一笔推送收据的严格后代,已 fetch+merge 进
+ *   工作区,commits=被吸收的外部提交(逐笔,喂外部头观测投影);
+ * - conflict:干净合并撞冲突,现场已 merge --abort 还原(不留半合并
+ *   工作区),files=冲突文件;
+ * - dirty:工作区有已跟踪未提交改动,不做机械合并(交 Agent 处理后
+ *   自行同步);
+ * - blocked:三类非严格后代形态(rewritten=历史被改写/unbacked=无收据
+ *   而远端有提交/rolled_back=远端被回滚)——一律拒绝喊人,绝不自动
+ *   处理、绝不 force;
+ * - unavailable:探针/取回失败(网络抖动等),fail-open 不拦调用方
+ *   流程(推送链路的门在远端拒收);
+ * - failed:merge 失败且无冲突文件,现场已 abort 还原。 */
+export type ExternalAbsorbOutcome =
+  | { kind: "current" }
+  | { kind: "synced"; remoteTip: string; commits: string[] }
+  | { kind: "conflict"; files: string[] }
+  | { kind: "dirty"; files: string[] }
+  | { kind: "blocked";
+      form: "rewritten" | "unbacked" | "rolled_back";
+      remoteTip: string }
+  | { kind: "unavailable"; reason: string }
+  | { kind: "failed"; reason: string };
+
+/** 判定并吸收修复分支远端的外部提交(ADR-0074,推送链路与回合开始
+ * 探针共用的窄函数):判据只用推送收据加祖先关系,不看作者是谁。
+ *
+ * 远端头 = 收据 → 无事;收据的严格后代 → fetch 后 merge 进工作区
+ * (一律 merge 不 rebase:平台未推送提交 SHA 不变,AI 归因 notes 不断
+ * 链);收据的祖先(被回滚)或与收据不相交(历史被改写)→ fail-closed;
+ * 无收据而远端有提交 → 本地头不含它即 fail-closed(本地头含它 = 导入
+ * MR 等形态的首次推送,远端头本是本地起点,照常放行)。fetch/merge 与
+ * 其他宿主 git 写同一套边界(代理 gitdir + 一次性凭据沙箱);合并身份
+ * 与基线同步同款(-c 注入宿主用户名/邮箱),提交信息同格式(类型 fix)。
+ * 冲突只试干净合并,撞上即 abort 还原现场——解冲突要判断,交调用方
+ * 的对话现场。 */
+export async function absorbExternalCommits(options: {
+  dataDir: string;
+  repoDir: string;
+  repoUrl: string;
+  branch: string;
+  ticket: string;
+  /** 本会话最后一笔推送收据(按仓、分支取自收据投影;缺席=该分支
+   * 平台从未推过)。 */
+  receiptSha?: string;
+  credential?: GitCredential;
+}): Promise<ExternalAbsorbOutcome> {
+  if (!existsSync(join(options.repoDir, ".git"))) {
+    return { kind: "failed", reason: `代码克隆不存在: ${options.repoDir}` };
+  }
+  const remoteUrl = validateRepoUrl(options.repoUrl);
+  const sandbox = prepareSandbox(options.dataDir, options.credential,
+    options.repoDir);
+  let view: ReturnType<typeof createSafeGitView> | undefined;
+  const receipt = options.receiptSha?.trim().toLowerCase();
+  const name = options.credential?.username ?? "mae-flow-cloud";
+  const email = options.credential?.email
+    ?? `${name.replace(/[^a-zA-Z0-9_.+-]/g, "-")}@localhost`;
+  try {
+    view = createSafeGitView(options.repoDir);
+    const baseRef = `refs/remotes/origin/${options.branch}`;
+    const git = (...args: string[]) => runGit(
+      [...sandbox.args, "-c", `user.name=${name}`, "-c", `user.email=${email}`,
+        ...args], {
+        cwd: options.repoDir,
+        env: view!.environment(sandbox.env),
+        timeoutMs: args[0] === "fetch" || args[0] === "merge"
+          ? GIT_TRANSFER_TIMEOUT_MS : 30_000,
+      });
+    // 单引用探针:远端同名分支头。探针失败 fail-open(网络抖动不该
+    // 停工,同 ADR-0071 的取回基线失败口径)。
+    const probed = await runGit([
+      ...sandbox.args, "ls-remote", "--heads", remoteUrl,
+      `refs/heads/${options.branch}`,
+    ], { env: sandbox.env, timeoutMs: 60_000 });
+    if (probed.code !== 0) {
+      const detail = (probed.stderr || probed.stdout).trim()
+        .split(/\r?\n/)[0] ?? "";
+      return { kind: "unavailable", reason: `探针失败: ${detail.slice(0, 300)}` };
+    }
+    const tip = probed.stdout.trim().split(/\s+/)[0] ?? "";
+    if (!/^[0-9a-f]{40}$/i.test(tip)) return { kind: "current" };
+    const tip12 = tip.slice(0, 12);
+    // 远端对象进不了本地判不了祖先关系,先 fetch(只动远端跟踪引用,
+    // 不碰工作区)。
+    const fetched = await git("fetch", "--quiet", "--no-tags",
+      "--no-recurse-submodules", remoteUrl, `+refs/heads/${options.branch}:${baseRef}`);
+    if (fetched.code !== 0) {
+      const detail = (fetched.stderr || fetched.stdout).trim()
+        .split(/\r?\n/)[0] ?? "";
+      return { kind: "unavailable", reason: `fetch ${options.branch} 失败: `
+        + `${detail.slice(0, 300)}` };
+    }
+    const isAncestor = async (older: string, newer: string): Promise<
+      boolean | "unknown"
+    > => {
+      const outcome = await git("merge-base", "--is-ancestor", older, newer);
+      if (outcome.code === 0) return true;
+      if (outcome.code === 1) return false;
+      return "unknown";
+    };
+    const head = (await git("rev-parse", "--verify", "HEAD")).stdout.trim();
+    if (!/^[0-9a-f]{40}$/i.test(head)) {
+      return { kind: "failed", reason: "读取工作区 HEAD 失败" };
+    }
+    if (!receipt) {
+      // 该分支平台从未推过:远端头是本地起点(导入 MR 等形态)照常
+      // 放行;本地头不含它 = 平台不知道的外部提交,fail-closed。
+      const contained = await isAncestor(tip, head);
+      if (contained === true) return { kind: "current" };
+      if (contained === false) return { kind: "blocked", form: "unbacked", remoteTip: tip12 };
+      return { kind: "unavailable", reason: "无法比对远端头与本地历史" };
+    }
+    if (tip12 === receipt.slice(0, 12)) return { kind: "current" };
+    const descended = await isAncestor(receipt, tip);
+    if (descended === true) {
+      // 严格后代:本地已含(Agent 自己并过)就无事,否则吸收。
+      const contained = await isAncestor(tip, head);
+      if (contained === true) return { kind: "current" };
+      if (contained === "unknown") {
+        return { kind: "unavailable", reason: "无法比对远端头与本地历史" };
+      }
+      // 机械合并要求干净的树(同 ADR-0071 脏工作区口径);推送链路
+      // 的脏熔断在先,这里是回合开始探针等复用方的自家守门。
+      const dirty = (await dirtyWorktree(options.repoDir))
+        .filter((line) => !line.startsWith("??"));
+      if (dirty.length) return { kind: "dirty", files: dirty };
+      const listed = await git("rev-list", `${receipt}..${tip}`);
+      const commits = listed.code === 0
+        ? listed.stdout.trim().split("\n").filter(
+            (line) => /^[0-9a-f]{40}$/i.test(line))
+        : [];
+      const message = `[${options.ticket}][fix] 并入远端外部提交 ${tip12}`;
+      const merged = await git("merge", "-m", message, baseRef);
+      if (merged.code === 0) {
+        return { kind: "synced", remoteTip: tip12, commits };
+      }
+      const conflicted = String((await git(
+        "diff", "--no-ext-diff", "--no-textconv",
+        "--name-only", "--diff-filter=U")).stdout || "")
+        .trim().split("\n").filter(Boolean);
+      // 只试干净合并:冲突与否都还原现场,不留半合并工作区。
+      await git("merge", "--abort");
+      if (!conflicted.length) {
+        return { kind: "failed", reason: `merge 失败但没有冲突文件: `
+          + `${(merged.stderr || merged.stdout).trim().slice(0, 300)}` };
+      }
+      return { kind: "conflict", files: conflicted };
+    }
+    if (descended === false) {
+      const rolledBack = await isAncestor(tip, receipt);
+      if (rolledBack === true) {
+        return { kind: "blocked", form: "rolled_back", remoteTip: tip12 };
+      }
+      if (rolledBack === false) {
+        return { kind: "blocked", form: "rewritten", remoteTip: tip12 };
+      }
+    }
+    return { kind: "unavailable", reason: "无法比对远端头与推送收据" };
+  } finally {
+    view?.cleanup();
+    sandbox.cleanup();
+  }
+}
+
 /** 远端探针的可区分形态(#240 删除门禁):reachable=false = 网络/凭据
  * 问题,远端状态不可判定;reachable=true 且 tip 缺席 = 远端确认没有
  * 同名分支。删除门禁不容忍"查不到"(宁误拦不误放),必须分得清
